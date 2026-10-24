@@ -24,8 +24,8 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSColorSpace, NSCursor,
     NSDragOperation, NSDraggingDestination, NSDraggingInfo, NSEvent, NSEventPhase,
     NSGraphicsContext, NSImage, NSPasteboardType, NSScreen, NSTextInputClient, NSTrackingArea,
-    NSTrackingAreaOptions, NSView, NSWindow, NSWindowButton, NSWindowDelegate,
-    NSWindowOrderingMode, NSWindowStyleMask, NSWindowTitleVisibility,
+    NSTrackingAreaOptions, NSView, NSWindow, NSWindowButton, NSWindowCollectionBehavior,
+    NSWindowDelegate, NSWindowOrderingMode, NSWindowStyleMask, NSWindowTitleVisibility,
 };
 // 已弃用但在现行 macOS 仍有效，且读取拖入路径列表最简。
 #[allow(deprecated)]
@@ -49,6 +49,8 @@ use tiny_skia::Pixmap;
 use super::{AppHandler, NewWindow, WindowConfig};
 use crate::event::{Key, KeyEvent, MouseButton, PointerEvent, PointerKind, Preedit, WindowOp};
 use crate::geometry::{Color, Point, Rect, Size};
+#[cfg(gpu_backend)]
+use crate::platform::ActiveRenderer;
 use crate::platform::{to_skia_color, Renderer};
 #[cfg(gpu_backend)]
 use crate::render::gpu::{
@@ -390,6 +392,8 @@ struct ViewState {
     /// 滚轮增量的亚像素残差（见 `on_wheel`）：触控板慢速滑动单次增量常不足 1 个框架单位，
     /// 直接取整会整格丢掉，残差留到下次事件补齐（同 `app/fling.rs` 的 `pan_residual`）。
     wheel_residual: f32,
+    /// 横向滚动的亚像素残差，同上。
+    wheel_residual_x: f32,
     /// 动画帧的一次性定时器（仅动画期间存在；空闲为 None → 零唤醒）。每帧续约前先废止旧的。
     frame_timer: Option<Retained<NSTimer>>,
     /// 本帧**开始绘制**的时刻。帧截止从这里起算而不是从帧画完起算——理由见
@@ -642,7 +646,12 @@ define_class!(
                     utf16_to_char_index(&text, selected.location + selected.length),
                 )
             });
-            let pe = Preedit { text, caret, sel };
+            let pe = Preedit {
+                text,
+                caret,
+                sel,
+                spans: Vec::new(),
+            };
             ime_debug(&pe, selected, replacement, u16_len);
             self.ivars().borrow_mut().preedit = pe.clone();
             self.dispatch_preedit(&pe);
@@ -969,6 +978,7 @@ impl ContentView {
             preedit: Preedit::default(),
             capturing: false,
             wheel_residual: 0.0,
+            wheel_residual_x: 0.0,
             frame_timer: None,
             frame_start: std::time::Instant::now(),
             partial_invalidate: None,
@@ -1325,6 +1335,7 @@ impl ContentView {
         let layer = {
             let mut st = self.ivars().borrow_mut();
             st.gpu = None;
+            st.handler.set_active_renderer(ActiveRenderer::Software);
             st.metal_layer.take()
         };
         if let Some(layer) = layer {
@@ -1633,7 +1644,7 @@ impl ContentView {
         });
     }
 
-    /// 滚轮 / 触控板两指滑动 → Wheel 事件。框架约定一刻度 ±120（正=上滚）。
+    /// 滚轮 / 触控板两指滑动 → Wheel / HWheel 事件。框架约定一刻度 ±120（正=上滚 / 左滚）。
     ///
     /// # 惯性由系统给，本后端**刻意不实现** `start_fling` / `cancel_fling`
     ///
@@ -1662,33 +1673,48 @@ impl ContentView {
         // 旧残差把新手势的第一格吃掉。鼠标滚轮的 phase 恒为 None，走不到这里。
         let phase = ev.phase();
         if phase.contains(NSEventPhase::Began) || phase.contains(NSEventPhase::MayBegin) {
-            self.ivars().borrow_mut().wheel_residual = 0.0;
+            let mut st = self.ivars().borrow_mut();
+            st.wheel_residual = 0.0;
+            st.wheel_residual_x = 0.0;
         }
-        let dy = ev.scrollingDeltaY();
         // 触控板（精确增量，单位=点）：按点位细粒度滚；鼠标滚轮（行增量）：约 3 行/刻度。
-        let raw = if ev.hasPreciseScrollingDeltas() {
-            dy as f32 * 3.0
+        let k = if ev.hasPreciseScrollingDeltas() {
+            3.0
         } else {
-            dy as f32 * 40.0
+            40.0
         };
         // 亚像素累积后再取整：触控板慢速滑动单次增量常 <1，直接 `as i32` 截成 0 就把整个
         // 事件丢了，表现为"轻推没反应、猛推才动"，动量尾段也会提前断掉。
-        let delta = {
+        let (dy, dx) = {
             let mut st = self.ivars().borrow_mut();
-            let total = raw + st.wheel_residual;
-            let whole = total.trunc();
-            st.wheel_residual = total - whole;
-            whole as i32
+            let take = |raw: f32, residual: &mut f32| {
+                let total = raw + *residual;
+                let whole = total.trunc();
+                *residual = total - whole;
+                whole as i32
+            };
+            let dy = take(ev.scrollingDeltaY() as f32 * k, &mut st.wheel_residual);
+            let dx = take(ev.scrollingDeltaX() as f32 * k, &mut st.wheel_residual_x);
+            (dy, dx)
         };
-        if delta == 0 {
-            return;
-        }
+        // 横向：deltaX 正 = 内容右移 = 向左滚，与 `HWheel` 正=向左同号，不用变号。
+        // 系统已把 Shift+鼠标滚轮转成 deltaX，这里不必再看修饰键。斜着滑的一次事件两个
+        // 分量都有，各发一个，交给各自方向的滚动容器。
         let pos = self.loc_phys(ev);
-        self.dispatch_pointer(PointerEvent::single(
-            PointerKind::Wheel(delta),
-            pos,
-            MouseButton::Left,
-        ));
+        if dy != 0 {
+            self.dispatch_pointer(PointerEvent::single(
+                PointerKind::Wheel(dy),
+                pos,
+                MouseButton::Left,
+            ));
+        }
+        if dx != 0 {
+            self.dispatch_pointer(PointerEvent::single(
+                PointerKind::HWheel(dx),
+                pos,
+                MouseButton::Left,
+            ));
+        }
     }
 
     /// 键盘按下：特殊键直发；普通文本交输入法（IME 提交后经 `insertText:` 回到 Key::Char），
@@ -2052,10 +2078,56 @@ impl ContentView {
             crate::event::CursorShape::Text => NSCursor::IBeamCursor(),
             crate::event::CursorShape::SizeWE => NSCursor::resizeLeftRightCursor(),
             crate::event::CursorShape::SizeNS => NSCursor::resizeUpDownCursor(),
+            crate::event::CursorShape::SizeAll => move_cursor(),
             crate::event::CursorShape::Arrow => NSCursor::arrowCursor(),
         };
         cursor.set();
     }
+}
+
+/// 四向移动光标（CSS `cursor: move`）。
+///
+/// AppKit 没有公开的四向箭头（`frameResizeCursorFromPosition:inDirections:` 要 macOS 15+，
+/// 私有的 `_moveCursor` 实测会抛「无法识别的选择器」），而系统自己画这个光标用的资源就在
+/// HIServices 里：`cursors/move/cursor.pdf` + `info.plist`（热点 `hotx` / `hoty`）。Chromium 与
+/// WebKit 的 `cursor: move` 也是这么取的。读不到（目录结构变了）时退回张开的手——AppKit
+/// 里「可拖动」的惯用形状。首次用到时构造，之后复用。
+fn move_cursor() -> Retained<NSCursor> {
+    thread_local! {
+        static MOVE: Option<Retained<NSCursor>> = load_hiservices_cursor("move");
+    }
+    MOVE.with(|c| c.clone())
+        .unwrap_or_else(NSCursor::openHandCursor)
+}
+
+fn load_hiservices_cursor(name: &str) -> Option<Retained<NSCursor>> {
+    const DIR: &str = "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/\
+Frameworks/HIServices.framework/Versions/A/Resources/cursors";
+    let pdf = NSString::from_str(&format!("{DIR}/{name}/cursor.pdf"));
+    let plist = NSString::from_str(&format!("{DIR}/{name}/info.plist"));
+    let image = NSImage::initWithContentsOfFile(NSImage::alloc(), &pdf)?;
+    // 热点按 plist 给（点为单位，左上原点）；缺项时取图像中心。
+    let size = image.size();
+    let info: Option<Retained<AnyObject>> =
+        unsafe { msg_send![objc2::class!(NSDictionary), dictionaryWithContentsOfFile: &*plist] };
+    let read = |key: &str, default: f64| -> f64 {
+        let Some(info) = info.as_deref() else {
+            return default;
+        };
+        let key = NSString::from_str(key);
+        let v: Option<Retained<AnyObject>> = unsafe { msg_send![info, objectForKey: &*key] };
+        v.map(|v| unsafe { msg_send![&*v, doubleValue] })
+            .unwrap_or(default)
+    };
+    let hot = NSPoint::new(
+        read("hotx", size.width / 2.0),
+        read("hoty", size.height / 2.0),
+    );
+    Some(NSCursor::initWithImage_hotSpot(
+        NSCursor::alloc(),
+        &image,
+        hot,
+    ))
 }
 
 /// macOS keyCode → 框架特殊键。返回 None 表示走文本/快捷键路径。
@@ -2245,6 +2317,7 @@ fn attach_gpu(view: &ContentView, window: &NSWindow, renderer: Renderer) {
         let mut st = view.ivars().borrow_mut();
         st.gpu = Some(win_gpu);
         st.metal_layer = Some(layer.clone());
+        st.handler.set_active_renderer(ActiveRenderer::Metal);
     }
     // Metal 层挂成 **AppKit 那张 backing layer 的子层**，而不是用 `makeBackingLayer` 直接
     // 顶替 backing layer 本身（`MTKView` 那种写法）。
@@ -2430,7 +2503,7 @@ fn create_window(
         // window——随 owner 移动 / 最小化、始终在其上方。模态另记进阻断表，owner 的
         // 视图据此拒收输入。
         Some(o) => {
-            if cfg.centered {
+            if cfg.centered && cfg.position.is_none() {
                 let of = o.frame();
                 let wf = window.frame();
                 window.setFrameOrigin(NSPoint {
@@ -2447,10 +2520,30 @@ fn create_window(
             }
         }
         None => {
-            if cfg.centered {
+            if cfg.centered && cfg.position.is_none() {
                 window.center();
             }
         }
+    }
+
+    // 指定位置（`WindowConfig::position`）：接口口径是「主屏左上为原点、y 向下」的点，与
+    // win32 / X11 同向；AppKit 的屏幕坐标原点在主屏**左下**、y 向上，按主屏高度翻一下。
+    // 主屏 = `screens` 的第一项（菜单栏所在那块），不是 `mainScreen`（那是键盘焦点所在屏）。
+    if let Some((x, y)) = cfg.position {
+        if let Some(primary) = NSScreen::screens(mtm).firstObject() {
+            window.setFrameTopLeftPoint(NSPoint {
+                x: x as f64,
+                y: primary.frame().size.height - y as f64,
+            });
+        }
+    }
+    // 不进任务栏（`WindowConfig::skip_taskbar`）：macOS 没有窗口级的任务栏按钮（Dock 图标
+    // 是应用级的），同一意图在这里最近的对应是退出「窗口」菜单与 ⌘` 窗口轮换。
+    if cfg.skip_taskbar {
+        window.setExcludedFromWindowsMenu(true);
+        window.setCollectionBehavior(
+            window.collectionBehavior() | NSWindowCollectionBehavior::IgnoresCycle,
+        );
     }
 
     // 动画帧驱动改为自调度的一次性定时器（见 ContentView::schedule_next_frame）：跟随显示器
@@ -2514,6 +2607,7 @@ pub(crate) fn run_windowed(
     }
     // 单实例首实例：起 accept 线程接收二次实例 argv（收到后经 libdispatch 派回主线程
     // 切页 + 激活窗口）。窗口指针存活至进程退出，对照 MacWake 持视图指针的做法。
+    let single_installed = single.is_some();
     if let Some(si) = single {
         crate::single_instance::install_listener(
             &si.app_id,
@@ -2525,6 +2619,9 @@ pub(crate) fn run_windowed(
         // 装晚了就直接丢掉（表现为「第一次点链接没反应，第二次才行」）。
         super::url_scheme::install();
     }
+    // 关联文件的打开事件（Finder 双击 / 打开方式 / 拖到 Dock）同样走 on_second，没开单实例
+    // 时没有接收方，也就不装——装了 delegate 却丢掉文件，不如让 AppKit 照常提示打不开。
+    let _app_delegate = single_installed.then(|| super::open_files::install(mtm, &app));
 
     // 主窗登记：托盘与全局热键的"唤出窗口"指的是它。装热键**之前**设好——热键一旦
     // 注册就可能立刻被按下。
@@ -2549,6 +2646,7 @@ pub(crate) fn run_windowed(
     super::activate_app(&app);
     app.run();
     drop(_tray);
+    drop(_app_delegate);
 
     // 事件循环结束后释放 GPU 共享设备链，对照 win32 消息循环之后的 `release_shared_device`。
     //
@@ -2656,5 +2754,24 @@ mod ime_tests {
         // 正常值不受影响，尤其不能被"兜底"顺手改成末尾。
         assert_eq!(utf16_to_char_index(s, 0), 0, "报 0 就是 0，不替它猜");
         assert_eq!(utf16_to_char_index(s, 3), 3);
+    }
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    /// 四向光标取自 HIServices 的系统资源：资源在、热点按 plist（当前系统为 12,12）。
+    /// 退回张开的手虽不致命，但那正是用户实测报的「四向箭头是一只大手」。
+    #[test]
+    fn move_cursor_loads_from_hiservices() {
+        let c = super::load_hiservices_cursor("move").expect("应能读到系统的 move 光标资源");
+        let hot = c.hotSpot();
+        assert!(
+            hot.x > 0.0 && hot.y > 0.0,
+            "热点应取自 plist，而非 (0,0)：{hot:?}"
+        );
+        assert!(
+            super::load_hiservices_cursor("不存在的光标").is_none(),
+            "缺资源时返回 None 走兜底"
+        );
     }
 }

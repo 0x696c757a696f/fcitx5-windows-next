@@ -19,6 +19,7 @@ use crate::spec::Align;
 use crate::style::Style;
 use crate::text::TextEngine;
 use crate::theme::Intent;
+use crate::ui::TextContent;
 
 const PAD_X: i32 = 12;
 const CHEVRON_W: i32 = 18;
@@ -120,9 +121,12 @@ fn paint_field_chrome(
         pal.text_disabled
     };
     canvas.fill_round_rect(x, y, w, h, corner, &Paint::fill(bg));
-    // 边框色补间：hover/focus 高亮淡变；首帧靠 primed 落定。
-    let target_border = if focused || hover {
+    // 边框色补间：首帧靠 primed 落定。聚焦取强调色；悬停只把边框压深一档——
+    // 强调色表示"焦点在这"，不表示"指针在这"。
+    let target_border = if focused {
         dd.border_focus(pal)
+    } else if hover {
+        dd.border_hover(pal)
     } else {
         dd.border(pal)
     };
@@ -143,14 +147,17 @@ fn paint_field_chrome(
     canvas.stroke_round_rect(x, y, w, h, corner, bw, &Paint::fill(border));
 
     // 右侧下拉箭头 ▼（一条折线：两段独立线会在尖底裂开，高 DPI 可见）。
-    let cx = bounds.x as f32 + bounds.w as f32 - PAD_X as f32 - CHEVRON_W as f32 / 2.0;
-    let cy = bounds.y as f32 + bounds.h as f32 / 2.0;
-    let p = Paint::fill(chevron);
-    canvas.draw_polyline(
-        &[(cx - 4.0, cy - 2.0), (cx, cy + 3.0), (cx + 4.0, cy - 2.0)],
-        1.6,
-        &p,
-    );
+    // 窄到连箭头区（右留白 + 箭头宽）都放不下就不画：箭头贴右沿定位，硬画会从左沿伸出去。
+    if bounds.w >= PAD_X + CHEVRON_W {
+        let cx = bounds.x as f32 + bounds.w as f32 - PAD_X as f32 - CHEVRON_W as f32 / 2.0;
+        let cy = bounds.y as f32 + bounds.h as f32 / 2.0;
+        let p = Paint::fill(chevron);
+        canvas.draw_polyline(
+            &[(cx - 4.0, cy - 2.0), (cx, cy + 3.0), (cx + 4.0, cy - 2.0)],
+            1.6,
+            &p,
+        );
+    }
 
     text_color
 }
@@ -181,9 +188,45 @@ impl<T: Clone + 'static> Options<T> {
     }
 }
 
-/// 选项存储：纯文本（原有 `Vec<String>` 入口）或富内容（`DropdownItem`）。
+/// 纯文本选项表：构建期给定的文案（[`TextContent`]，`t!` 换语言即跟随），或绑定的
+/// `Signal<Vec<String>>`（`new_reactive` / `Element::dropdown_signal`）。
+///
+/// 不复用 [`Options<T>`]：静态表与信号表的元素类型不同——静态表要装 `t!`，信号表是
+/// 既有公开签名 `Signal<Vec<String>>`，不能跟着改。
+enum PlainOptions {
+    Static(Vec<TextContent>),
+    Bound(Signal<Vec<String>>),
+}
+
+impl PlainOptions {
+    /// 当前全部选项文字（按当前语言现取）。
+    fn labels(&self) -> Vec<String> {
+        match self {
+            PlainOptions::Static(v) => v.iter().map(|t| t.resolve().into_owned()).collect(),
+            PlainOptions::Bound(sig) => sig.get(),
+        }
+    }
+
+    /// 第 `sel` 项（越界钳到末项）的当前文字；空表为空串。
+    fn label_at(&self, sel: usize) -> String {
+        match self {
+            PlainOptions::Static(v) => v
+                .get(sel.min(v.len().saturating_sub(1)))
+                .map(|t| t.resolve().into_owned())
+                .unwrap_or_default(),
+            PlainOptions::Bound(sig) => sig.with(|list| {
+                list.get(sel.min(list.len().saturating_sub(1)))
+                    .cloned()
+                    .unwrap_or_default()
+            }),
+        }
+    }
+}
+
+/// 选项存储：纯文本（`Vec<impl Into<TextContent>>` / `Signal<Vec<String>>` 入口）或富内容
+/// （`DropdownItem`）。
 enum OptionSource {
-    Plain(Options<String>),
+    Plain(PlainOptions),
     Rich(Options<DropdownItem>),
 }
 
@@ -194,16 +237,21 @@ pub struct Dropdown {
     /// 边框色补间（hover/focus 高亮淡变）；首帧靠 `primed` 落定。
     border_anim: Cell<Transition<Color>>,
     primed: Cell<bool>,
+    /// 触发器文字单行截断（高度按单行写死，放不下截成 `text…`，不折行画出 bounds）。
+    fit: super::text_fit::SingleLine,
 }
 
 impl Dropdown {
-    pub fn new(options: Vec<String>, selected: Signal<usize>) -> Self {
-        Self::from_source(OptionSource::Plain(Options::Static(options)), selected)
+    /// 静态选项。收 `impl Into<TextContent>`：传 [`t!`](crate::t) 时收起态文字、测量宽度
+    /// 与展开的列表都按当前语言现取，换语言自动跟随。
+    pub fn new(options: Vec<impl Into<TextContent>>, selected: Signal<usize>) -> Self {
+        let opts = options.into_iter().map(Into::into).collect();
+        Self::from_source(OptionSource::Plain(PlainOptions::Static(opts)), selected)
     }
 
     /// 响应式选项：选项列表绑定外部 `Signal<Vec<String>>`，变更即重新测量/渲染。
     pub fn new_reactive(options: Signal<Vec<String>>, selected: Signal<usize>) -> Self {
-        Self::from_source(OptionSource::Plain(Options::Bound(options)), selected)
+        Self::from_source(OptionSource::Plain(PlainOptions::Bound(options)), selected)
     }
 
     /// 富内容选项（副标题/徽章/尾随图标）。
@@ -223,15 +271,13 @@ impl Dropdown {
             hover: false,
             border_anim: Cell::new(Transition::new(Color::rgba(0, 0, 0, 0))),
             primed: Cell::new(false),
+            fit: Default::default(),
         }
     }
 
     fn current(&self) -> String {
         match &self.options {
-            OptionSource::Plain(opts) => opts.with(|list| {
-                let i = self.selected.get().min(list.len().saturating_sub(1));
-                list.get(i).cloned().unwrap_or_default()
-            }),
+            OptionSource::Plain(opts) => opts.label_at(self.selected.get()),
             OptionSource::Rich(items) => items.with(|list| {
                 let i = self.selected.get().min(list.len().saturating_sub(1));
                 list.get(i).map(|it| it.label.clone()).unwrap_or_default()
@@ -256,7 +302,8 @@ impl Dropdown {
         let cur = self.selected.get();
         let items: Vec<MenuItem> = match &self.options {
             OptionSource::Plain(opts) => {
-                let list = opts.get();
+                // 展开时现取：列表是这次展开现建的，换语言后下一次展开即是新译文。
+                let list = opts.labels();
                 if list.is_empty() {
                     return;
                 }
@@ -297,31 +344,48 @@ impl Dropdown {
 }
 
 impl Widget for Dropdown {
+    fn frame_corner(&self, _bounds: Rect) -> Option<f32> {
+        let th = crate::theme::current();
+        Some(th.dropdown.corner(&th.metrics))
+    }
+    fn frame_shows_focus(&self) -> bool {
+        true
+    }
     fn measure(&self, _avail: Size, style: &Style, text: &mut dyn TextEngine) -> Size {
         let mut w = 0;
         match &self.options {
-            OptionSource::Plain(opts) => opts.with(|list| {
-                for o in list {
-                    w = w.max(text.measure(o, &crate::text::TextStyle::of(style), None).w);
+            OptionSource::Plain(opts) => {
+                for o in opts.labels() {
+                    w = w.max(text.measure(&o, &crate::text::TextStyle::of(style), None).w);
                 }
-            }),
+            }
             OptionSource::Rich(items) => items.with(|list| {
                 for it in list {
                     let mut iw = text
                         .measure(&it.label, &crate::text::TextStyle::of(style), None)
                         .w;
                     if let Some((btext, _)) = &it.badge {
-                        iw += text
-                            .measure(btext, &crate::text::TextStyle::new(12.0), None)
-                            .w
-                            + 2 * BADGE_PAD_X
-                            + BADGE_GAP;
+                        iw +=
+                            text.measure(
+                                btext,
+                                &crate::text::TextStyle::new(
+                                    crate::theme::current().metrics.font_xs,
+                                ),
+                                None,
+                            )
+                            .w + 2 * BADGE_PAD_X
+                                + BADGE_GAP;
                     }
                     w = w.max(iw);
                 }
             }),
         }
-        Size::new(w + 2 * PAD_X + CHEVRON_W, (style.font_size as i32) + 16)
+        Size::new(
+            w + 2 * PAD_X + CHEVRON_W,
+            crate::theme::current()
+                .metrics
+                .control_height(style.font_size()),
+        )
     }
 
     fn paint(
@@ -351,11 +415,21 @@ impl Widget for Dropdown {
             .as_ref()
             .map(|(text, _)| {
                 canvas
-                    .measure_text(text, &crate::text::TextStyle::new(12.0))
+                    .measure_text(
+                        text,
+                        &crate::text::TextStyle::new(crate::theme::current().metrics.font_xs),
+                    )
                     .w
                     + 2 * BADGE_PAD_X
             })
             .unwrap_or(0);
+        // 触发器窄到放不下徽章（连同两侧留白、chevron 与间距）就不画：徽章贴右沿定位，
+        // 硬画会从 bounds 左侧伸出去。文字区随之拿回整宽。
+        let (badge, badge_w) = if bounds.w < 2 * PAD_X + CHEVRON_W + badge_w + BADGE_GAP {
+            (None, 0)
+        } else {
+            (badge, badge_w)
+        };
         if let Some((text, intent)) = &badge {
             let (fill, fg) = intent.badge_colors(pal);
             let br = Rect::new(
@@ -377,7 +451,7 @@ impl Widget for Dropdown {
                 br,
                 fg,
                 Align::Center,
-                &crate::text::TextStyle::new(12.0),
+                &crate::text::TextStyle::new(crate::theme::current().metrics.font_xs),
             );
         }
 
@@ -390,7 +464,8 @@ impl Widget for Dropdown {
             bounds.h,
         );
         let cur = self.current();
-        canvas.draw_text(
+        self.fit.draw_text(
+            canvas,
             &cur,
             tr,
             text_color,
@@ -540,7 +615,8 @@ impl CheckMenuItem {
 /// 收起态默认恒显示 `title`；用 [`set_summary`](Self::set_summary) 可改为按已开项
 /// 生成文案。摘要会改变控件宽度，故用摘要时建议在 `Element` 上显式 `.width(..)` 固定。
 pub struct CheckMenu {
-    title: String,
+    /// 标题。存 [`TextContent`]，measure/paint 时现取——传 `t!` 进来换语言即跟随。
+    title: TextContent,
     items: Rc<Vec<CheckMenuItem>>,
     /// 收起态文案生成器：入参是**已开启**的开关项标签（按声明顺序）。
     summary: Option<SummaryFn>,
@@ -550,10 +626,12 @@ pub struct CheckMenu {
     /// 边框色补间（与 Dropdown 同源，见 [`paint_field_chrome`]）。
     border_anim: Cell<Transition<Color>>,
     primed: Cell<bool>,
+    /// 触发器文字单行截断（高度按单行写死，放不下截成 `text…`，不折行画出 bounds）。
+    fit: super::text_fit::SingleLine,
 }
 
 impl CheckMenu {
-    pub fn new(title: impl Into<String>, items: Vec<CheckMenuItem>) -> Self {
+    pub fn new(title: impl Into<TextContent>, items: Vec<CheckMenuItem>) -> Self {
         Self {
             title: title.into(),
             items: Rc::new(items),
@@ -562,6 +640,7 @@ impl CheckMenu {
             hover: false,
             border_anim: Cell::new(Transition::new(Color::rgba(0, 0, 0, 0))),
             primed: Cell::new(false),
+            fit: Default::default(),
         }
     }
 
@@ -580,7 +659,7 @@ impl CheckMenu {
     /// 收起态显示文本：无 summary 恒为标题，有则按当前已开项生成。
     fn display_text(&self) -> String {
         let Some(f) = &self.summary else {
-            return self.title.clone();
+            return self.title.resolve().into_owned();
         };
         let on: Vec<&str> = self
             .items
@@ -650,14 +729,26 @@ impl CheckMenu {
 }
 
 impl Widget for CheckMenu {
+    fn frame_corner(&self, _bounds: Rect) -> Option<f32> {
+        let th = crate::theme::current();
+        Some(th.dropdown.corner(&th.metrics))
+    }
+    fn frame_shows_focus(&self) -> bool {
+        true
+    }
     fn measure(&self, _avail: Size, style: &Style, text: &mut dyn TextEngine) -> Size {
         // 取标题与当前摘要中较宽者：摘要为空时回落到标题，宽度不至于塌缩。
         let ts = crate::text::TextStyle::of(style);
         let w = text
-            .measure(&self.title, &ts, None)
+            .measure(&self.title.resolve(), &ts, None)
             .w
             .max(text.measure(&self.display_text(), &ts, None).w);
-        Size::new(w + 2 * PAD_X + CHEVRON_W, (style.font_size as i32) + 16)
+        Size::new(
+            w + 2 * PAD_X + CHEVRON_W,
+            crate::theme::current()
+                .metrics
+                .control_height(style.font_size()),
+        )
     }
 
     fn paint(
@@ -684,7 +775,8 @@ impl Widget for CheckMenu {
             bounds.w - 2 * PAD_X - CHEVRON_W,
             bounds.h,
         );
-        canvas.draw_text(
+        self.fit.draw_text(
+            canvas,
             &self.display_text(),
             tr,
             text_color,
@@ -875,5 +967,92 @@ mod tests {
         // 空列表：宽度仅为左右内边距 + 箭头区（无选项文本贡献）。
         let w = dd.measure(Size::ZERO, &style, &mut te).w;
         assert_eq!(w, 2 * PAD_X + CHEVRON_W);
+    }
+}
+
+/// 触发器高度按单行写死：长选项文字截成单行，不折行画出 bounds。
+#[cfg(test)]
+mod overflow_tests {
+    use crate::signal::signal;
+    use crate::ui::text_fit::ink::*;
+    use crate::ui::Element;
+
+    fn triggers() -> Vec<(&'static str, Element)> {
+        vec![
+            (
+                "Dropdown",
+                Element::dropdown(vec![LONG_LATIN], signal(0usize)).font_size(13.0),
+            ),
+            (
+                "CheckMenu",
+                Element::check_menu(LONG_LATIN, vec![]).font_size(13.0),
+            ),
+        ]
+    }
+
+    #[test]
+    fn long_trigger_text_stays_inside_bounds_explicit_width() {
+        // 触发器高 = 字号 + 16。
+        assert_wraps_taller(LONG_LATIN, 13.0, 120, 13 + 16);
+        for (what, el) in triggers() {
+            let el =
+                Element::col().children([el.width(120), Element::col().height(80).width_match()]);
+            let (pm, b) = paint_first_child(el, 200, 150);
+            assert_eq!(b.w, 120);
+            assert_no_ink_outside(&pm, b, &format!("{what} 显式宽"));
+        }
+    }
+
+    #[test]
+    fn long_trigger_text_stays_inside_bounds_wrap_width() {
+        // 触发器高 = 字号 + 16。
+        assert_wraps_taller(LONG_LATIN, 13.0, 120, 13 + 16);
+        for (what, el) in triggers() {
+            let el = Element::col()
+                .width_match()
+                .children([el, Element::col().height(80).width_match()]);
+            let (pm, b) = paint_first_child(el, 120, 150);
+            assert!(b.w <= 120, "{what}：Wrap 宽应受父宽约束：{b:?}");
+            assert_no_ink_outside(&pm, b, &format!("{what} Wrap 宽"));
+        }
+    }
+
+    /// 触发器窄到放不下箭头区：箭头不画，不得从 bounds 左侧伸出（含刚好放得下的边界）。
+    #[test]
+    fn narrow_trigger_chevron_stays_inside_bounds() {
+        for w in 4..=super::PAD_X + super::CHEVRON_W + 4 {
+            for (what, el) in triggers() {
+                let el = Element::col().children([
+                    Element::col().height(10).width_match(),
+                    Element::row().children([Element::col().width(60), el.width(w)]),
+                ]);
+                let (pm, b) = paint_at(el, 200, 100, &[1, 1]);
+                assert_eq!(b.w, w);
+                assert_no_ink_outside(&pm, b, &format!("{what} 宽 {w} 的箭头"));
+            }
+        }
+    }
+
+    /// 带徽章的选项、触发器窄到放不下徽章：徽章不画，不得从 bounds 左侧伸出。
+    #[test]
+    fn narrow_trigger_drops_badge_inside_bounds() {
+        use crate::theme::Intent;
+        use crate::ui::select::DropdownItem;
+        // 徽章文字比整个触发器还宽：不隐藏的话，贴右沿定位的徽章必然伸出左沿。
+        const BADGE: &str = "Recommended plan";
+        assert_single_line_wider_than(BADGE, 12.0, 70);
+        let items = vec![DropdownItem::new("Free").badge(BADGE, Intent::Neutral)];
+        let el = Element::col().children([
+            Element::col().height(10).width_match(),
+            Element::row().children([
+                Element::col().width(60),
+                Element::dropdown_items(items, signal(0usize))
+                    .font_size(13.0)
+                    .width(70),
+            ]),
+        ]);
+        let (pm, b) = paint_at(el, 200, 100, &[1, 1]);
+        assert_eq!(b.w, 70);
+        assert_no_ink_outside(&pm, b, "窄触发器的徽章");
     }
 }

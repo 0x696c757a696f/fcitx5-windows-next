@@ -36,10 +36,26 @@ use crate::text::{PlatformTextEngine, TextEngine};
 use crate::theme::Theme;
 use crate::ui::Element;
 
+#[cfg(test)]
+mod checkbox_motion_tests;
+#[cfg(test)]
+mod combo_tests;
 mod damage;
 mod fling;
 mod focus;
+#[cfg(test)]
+mod key_damage_tests;
+#[cfg(test)]
+mod keyed_list_tests;
+#[cfg(test)]
+mod layout_anim_tests;
+#[cfg(test)]
+mod marks_tests;
 mod menu;
+#[cfg(test)]
+mod presence_tests;
+#[cfg(test)]
+mod switch_tests;
 mod toast;
 mod tooltip;
 
@@ -140,10 +156,14 @@ impl Window {
                 title_src: None,
                 content: crate::event::WindowContent::new(|| NoContent),
                 close_handler: None,
+                activate_handler: None,
                 intervals: Vec::new(),
                 shortcut: None,
                 single: None,
                 icon: None,
+                position: None,
+                skip_taskbar: false,
+                window_outline: Default::default(),
             },
         }
     }
@@ -226,6 +246,27 @@ impl Window {
         self
     }
 
+    /// 本窗口的**激活态**（是否在前台）变化时调用，参数为新的激活态。语义与
+    /// [`App::on_window_activated`] 完全一致（只在真正变化时触发、窗口初始按「已激活」计），
+    /// 只是作用在这个子窗上。
+    ///
+    /// ```no_run
+    /// # use windui::prelude::*;
+    /// # let mut app = App::new("t", 100, 100);
+    /// # let _ = app;
+    /// Window::new("设置", 420, 320)
+    ///     .on_window_activated(|ctx, active| {
+    ///         if active {
+    ///             ctx.toast_ok("回到设置窗");
+    ///         }
+    ///     })
+    ///     .content(|| Element::col().fill());
+    /// ```
+    pub fn on_window_activated(mut self, f: impl FnMut(&mut EventCtx, bool) + 'static) -> Self {
+        self.req.activate_handler = Some(Box::new(f));
+        self
+    }
+
     /// 本窗口的周期回调，语义同 [`App::on_interval`]，但**随本窗口关闭一并停止**。
     ///
     /// 子窗里的实时刷新用它，而不是在主窗挂一个定时器写 `Signal`——后者在子窗关掉之后
@@ -276,6 +317,29 @@ impl Window {
     /// 窗口居中显示：设了 [`owned`](Self::owned) 就居中在发起窗口上，否则居中在屏幕上。
     pub fn centered(mut self, on: bool) -> Self {
         self.req.centered = on;
+        self
+    }
+
+    /// 把窗口外框左上角放在屏幕坐标 `(x, y)`，优先于 [`centered`](Self::centered)。
+    ///
+    /// 用于「跟着用户刚点的位置弹出来」这类窗口。坐标是**平台原生屏幕坐标**，各平台口径
+    /// 见 [`App::position`]。
+    pub fn position(mut self, x: i32, y: i32) -> Self {
+        self.req.position = Some((x, y));
+        self
+    }
+
+    /// 不在任务栏占按钮（默认 false），用于浮窗、贴图、悬浮工具条这类不该和正经窗口
+    /// 并列的窗口。各平台落地见 [`App::skip_taskbar`]；子窗不能接管最小化，故设了它就
+    /// 不提供最小化。
+    pub fn skip_taskbar(mut self, on: bool) -> Self {
+        self.req.skip_taskbar = on;
+        self
+    }
+
+    /// 无边框窗口自画外框的取色策略，同 [`App::window_outline`]。
+    pub fn window_outline(mut self, o: crate::platform::WindowOutline) -> Self {
+        self.req.window_outline = o;
         self
     }
 
@@ -401,6 +465,8 @@ type ShowHandler = Box<dyn FnMut(&mut EventCtx)>;
 type ShortcutHandler = crate::event::WindowShortcutHandler;
 /// 系统外观偏好变化的回调（见 [`App::on_system_theme_changed`]）。参数为「是否暗色」。
 type SystemThemeHandler = Box<dyn FnMut(&mut EventCtx, bool)>;
+/// 窗口激活态变化的回调（见 [`App::on_window_activated`]）。参数为「是否激活（前台）」。
+type ActivateHandler = Box<dyn FnMut(&mut EventCtx, bool)>;
 
 /// 运行期主题句柄：克隆到控件回调中，`set` 即可热切换主题（下一帧生效）。
 /// 控件 paint 期读 `theme::current()` 自动跟随；用 `Brush::Role`/`bg_role` 等
@@ -447,7 +513,7 @@ impl ThemeHandle {
     ///
     /// ```ignore
     /// th.update(|t| t.palette.accent = Color::hex(0x2E9E5B));   // 换强调色
-    /// th.update(|t| t.metrics.font_size += 1.0);                // 全局调大字号
+    /// th.update(|t| t.metrics.font_md += 1.0);                  // 全局调大正文字号
     /// ```
     pub fn update(&self, f: impl FnOnce(&mut Theme)) {
         let mut t: Theme = (**self.inner.borrow()).clone();
@@ -578,6 +644,11 @@ fn build_new_window(
         owned: req.owned || req.modal,
         modal: req.modal,
         icon: req.icon,
+        // 这两项必须显式搬：下面的 `..WindowConfig::default()` 会把漏掉的字段静默填成
+        // 默认值，症状是「设了却不生效」。
+        position: req.position,
+        skip_taskbar: req.skip_taskbar,
+        window_outline: req.window_outline,
         // 渲染后端由平台按主窗那次的选择填（子窗不该比主窗更慢或更快）。
         // 其余字段（托盘/热键/截图/单实例）对子窗一律无意义，保持默认。
         ..WindowConfig::default()
@@ -624,7 +695,99 @@ fn build_new_window(
     // 标题来源交给这个子窗自己的宿主：此后它每帧现算、变了才推给系统，与主窗同一条路
     // （见 `AppHandler::take_window_title`）。子窗各有一份宿主，故各跟各的。
     host.title_src = req.title_src;
+    host.activate_handler = req.activate_handler;
     NewWindow::Create(Box::new(cfg), Box::new(host) as Box<dyn AppHandler>)
+}
+
+/// 客户端装饰标题栏的高度（逻辑像素）：按钮行 32 + 底边分隔线 1。
+pub(crate) const DECORATION_HEIGHT: i32 = 33;
+
+/// 造客户端装饰标题栏（见 `AppHandler::decoration`）：一个只有「标题 + 窗口按钮」的小宿主。
+///
+/// 全部现成控件拼成，视觉走主题角色（底 `Surface`、字 `Text`，失活转 `TextMuted`，底边
+/// `Divider`）；窗口按钮自带悬停 / 按下与关闭键的红底。与窗口共用 `theme_src`，所以运行期
+/// 换主题时标题栏跟着变。整条可拖（`window_drag`），按钮可聚焦、不算拖动区。
+fn build_decoration(
+    theme_src: &ThemeHandle,
+    hotkey_ops: &HotkeyOpQueue,
+    title: &str,
+    maximizable: bool,
+) -> crate::platform::Decoration {
+    use crate::style::Role;
+    use crate::ui::WindowButtonKind as K;
+    let mut scope = crate::signal::SignalScope::new();
+    let (root, title_sig, fg) = scope.collect(|| {
+        let title_sig = crate::signal::signal(title.to_string());
+        let fg = crate::signal::signal(Role::Text);
+        let button = |k| Element::window_button(k).fg_role_signal(fg);
+        let mut buttons = Element::row().child(button(K::Minimize));
+        if maximizable {
+            buttons = buttons.child(button(K::Maximize));
+        }
+        buttons = buttons.child(button(K::Close));
+        let bar = Element::stack()
+            .width_match()
+            .height(DECORATION_HEIGHT - 1)
+            // 标题居中（GNOME 的惯例），按钮靠右。
+            .child(
+                Element::label_signal(title_sig)
+                    .fg_role_signal(fg)
+                    .align(crate::spec::Align::Center),
+            )
+            .child(
+                Element::row()
+                    .width_match()
+                    .height_match()
+                    .child(Element::row().weight(1.0))
+                    .child(buttons),
+            );
+        let root = Element::col()
+            .width_match()
+            .height(DECORATION_HEIGHT)
+            .bg_role(Role::Surface)
+            .window_drag()
+            .child(bar)
+            .child(Element::divider());
+        (root, title_sig, fg)
+    });
+    let cfg = WindowConfig {
+        height: DECORATION_HEIGHT,
+        ..WindowConfig::default()
+    };
+    let bg = theme_src.current().palette.surface;
+    let mut host = UiHost::new(
+        root,
+        &cfg,
+        theme_src.clone(),
+        bg,
+        false,
+        hotkey_ops.clone(),
+        Vec::new(),
+        None,
+        None,
+        None,
+        None,
+        false,
+    );
+    host.scope = Some(scope);
+    host.decoration = true;
+    crate::platform::Decoration {
+        handler: Box::new(host),
+        height: DECORATION_HEIGHT,
+        // 平台层在事件期外调这两个回调：用不触发通知的写法（普通 `set` 会让所有窗口整窗
+        // 重画），重画由平台层对标题栏自己安排（整条重画，含重新布局）。
+        set_title: Box::new(move |t| {
+            if title_sig.with(|s| s != t) {
+                title_sig.set_quiet(t.to_string());
+            }
+        }),
+        set_active: Box::new(move |a| {
+            let role = if a { Role::Text } else { Role::TextMuted };
+            if fg.get() != role {
+                fg.set_quiet(role);
+            }
+        }),
+    }
 }
 
 /// **不属于任何窗口**的那几样应用级设施，装在线程局部里活到进程结束。
@@ -934,7 +1097,8 @@ fn merge_screenshot_cfg(mut win: WindowConfig, app: &WindowConfig) -> WindowConf
     // 覆盖」——否则应用那份默认的 `Auto` 会静默压过窗口自己写的选择，而截图比对正是
     // 为了区分软硬渲染才带上 `--renderer` 的。
     win.renderer = app.renderer;
-    win.animations = app.animations;
+    win.motion = app.motion;
+    win.reduced_motion = app.reduced_motion;
     // `--size` 压过窗口自己的尺寸，并一并放开下限——语义与非常驻路径上那条完全一致
     // （见 `screenshot_args`）。判据是"应用那份尺寸非零"：常驻应用的 `App::resident`
     // 给的是 0×0，只有 `--size` 会把它写成正数。
@@ -960,6 +1124,8 @@ pub struct App {
     close_handler: Option<CloseHandler>,
     /// 窗口从隐藏态被唤起时的回调（见 [`App::on_show`]）。
     show_handler: Option<ShowHandler>,
+    /// 窗口激活态变化的回调（见 [`App::on_window_activated`]）。
+    activate_handler: Option<ActivateHandler>,
     /// 窗口级快捷键回调（见 [`App::on_shortcut`]）。
     shortcut: Option<ShortcutHandler>,
     /// 常驻应用的截图目标窗口（见 [`App::screenshot_window`]）。
@@ -991,7 +1157,7 @@ impl App {
                 title: title.into(),
                 width,
                 height,
-                bg: Color::hex(0xF3F3F3),
+                bg: Color::hex(0xF8FAFC),
                 centered: false,
                 resizable: true,
                 screenshot: None,
@@ -1007,7 +1173,9 @@ impl App {
                 resident: false,
                 frameless: false,
                 system_menu: true,
-                animations: None,
+                motion: None,
+                reduced_motion: crate::anim::MotionLevel::Reduced,
+                screenshot_anim_at: None,
                 renderer: Renderer::default(),
                 min_width: 0,
                 min_height: 0,
@@ -1018,6 +1186,11 @@ impl App {
                 owned: false,
                 modal: false,
                 icon: None,
+                position: None,
+                skip_taskbar: false,
+                window_outline: Default::default(),
+                ime_interrupt: Default::default(),
+                ime_inline: false,
             },
             render: None,
             content: None,
@@ -1028,6 +1201,7 @@ impl App {
             single: None,
             close_handler: None,
             show_handler: None,
+            activate_handler: None,
             shortcut: None,
             screenshot_window: None,
             start_window: None,
@@ -1138,16 +1312,124 @@ impl App {
         self
     }
 
-    /// 强制动画全局开关。默认（不调用）随系统"显示动画"设置；`true`/`false` 强制开/关。
-    /// 关闭时所有补间瞬时收敛到终态（运行期也可改用 `anim::set_enabled`）。
-    pub fn animations(mut self, on: bool) -> Self {
-        self.cfg.animations = Some(on);
+    /// 输入法组合中按下鼠标时未上屏的串怎么处理，见 [`ImeInterrupt`](crate::platform::ImeInterrupt)。
+    /// 默认 `Commit`：先上屏到原位置再处理点击。应用级设置，子窗沿用。
+    pub fn ime_interrupt(mut self, p: crate::platform::ImeInterrupt) -> Self {
+        self.cfg.ime_interrupt = p;
+        self
+    }
+
+    /// 输入法组合串（拼音等未上屏的字）由框架画在文本框里，而不是系统的浮层。默认 `false`。
+    ///
+    /// 只影响 Windows：macOS / Linux 本来就是内联绘制。开启后组合串跟随控件的字体、颜色与
+    /// 主题（深色主题下不再是白底浮层），候选窗仍由输入法自己画。个别输入法不理会「不要画
+    /// 组合窗」的请求，会出现两份组合串——遇到这种输入法就保持关闭。应用级设置，子窗沿用。
+    ///
+    /// 开启后，经 TSF 的输入法配置的下划线线型、粗细与颜色会经 [`Preedit::spans`](crate::event::Preedit::spans)
+    /// 交给控件照着画；读不到时退回默认画法。读 TSF 需要 COM：应用自己没在 UI 线程上初始化
+    /// COM 的话，本库会把它初始化为单线程套间（STA，UI 线程的常规选择）。
+    pub fn ime_inline(mut self, on: bool) -> Self {
+        self.cfg.ime_inline = on;
+        self
+    }
+
+    /// 强制动画全局开关：`true` = [`MotionLevel::Full`]、`false` = [`MotionLevel::Off`]，
+    /// 无视系统设置。不调用时随系统（见 [`reduced_motion`](Self::reduced_motion)）。
+    /// 关闭时所有补间瞬时收敛到终态、光标也不再闪（运行期也可改用 `anim::set_motion_level`）。
+    ///
+    /// [`MotionLevel::Full`]: crate::anim::MotionLevel::Full
+    /// [`MotionLevel::Off`]: crate::anim::MotionLevel::Off
+    pub fn animations(self, on: bool) -> Self {
+        self.motion(if on {
+            crate::anim::MotionLevel::Full
+        } else {
+            crate::anim::MotionLevel::Off
+        })
+    }
+
+    /// 强制动效档位，无视系统设置。
+    pub fn motion(mut self, level: crate::anim::MotionLevel) -> Self {
+        self.cfg.motion = Some(level);
+        self
+    }
+
+    /// 系统要求减弱动效时（Windows「显示动画」关、macOS「减弱动态效果」开、GNOME
+    /// `enable-animations` 关）落到哪一档。默认 [`MotionLevel::Reduced`]：位移类过渡
+    /// 瞬时到位，颜色与透明度渐变保留；想在这种情况下彻底静止就传 [`MotionLevel::Off`]，
+    /// 想无视这项系统设置就传 [`MotionLevel::Full`]。
+    ///
+    /// 各平台"要求减弱"的来源不同，含义也略有出入：macOS 的「减弱动态效果」是纯无障碍
+    /// 选项；Windows 的「显示动画」还会被「调整为最佳性能」一并关掉——这类用户要的往往是
+    /// 安静而不只是不晃，面向他们的应用可以传 `Off`。
+    ///
+    /// 被 [`motion`](Self::motion) / [`animations`](Self::animations) 的强制档位覆盖。
+    ///
+    /// [`MotionLevel::Reduced`]: crate::anim::MotionLevel::Reduced
+    /// [`MotionLevel::Off`]: crate::anim::MotionLevel::Off
+    /// [`MotionLevel::Full`]: crate::anim::MotionLevel::Full
+    pub fn reduced_motion(mut self, level: crate::anim::MotionLevel) -> Self {
+        self.cfg.reduced_motion = level;
         self
     }
 
     /// 窗口居中显示。
     pub fn centered(mut self) -> Self {
         self.cfg.centered = true;
+        self
+    }
+
+    /// 把主窗外框左上角放在屏幕坐标 `(x, y)`，优先于 [`centered`](Self::centered)。
+    ///
+    /// 单位与原点跟着平台走——坐标多来自全局钩子、系统光标位置这类平台来源，原样传进来
+    /// 即可，不再二次换算：
+    ///
+    /// - **Windows**：物理像素，原点在主屏左上；副屏在主屏左侧 / 上方时可为负。
+    /// - **X11**：物理像素，原点在虚拟桌面（根窗口）左上，恒非负。
+    /// - **macOS**：点，原点在主屏左上、y 向下（框架换算 AppKit 的左下原点）。带标题栏的
+    ///   窗口会被系统挪到菜单栏以下。
+    /// - **Wayland**：协议不允许应用定位顶层窗口，忽略。
+    ///
+    /// 框架不做钳制——落在哪块屏、允许溢出多少只有应用知道。
+    pub fn position(mut self, x: i32, y: i32) -> Self {
+        self.cfg.position = Some((x, y));
+        self
+    }
+
+    /// 不在任务栏占按钮（默认 false）。用于托盘常驻应用的浮窗、覆盖层、悬浮工具条——
+    /// 它们不该和正经窗口并列在任务栏上。
+    ///
+    /// - **Windows**：`WS_EX_TOOLWINDOW`，同时退出 Alt+Tab。带系统标题栏的窗口会换成工具窗
+    ///   的窄标题栏（无图标），故多与 [`frameless`](Self::frameless) 一起用。
+    /// - **X11**：`_NET_WM_STATE_SKIP_TASKBAR`，连同工作区分页器（pager）里也不显示
+    ///   （`SKIP_PAGER`）。
+    /// - **macOS**：没有窗口级的任务栏按钮（Dock 图标是应用级的），改为退出「窗口」菜单
+    ///   与 ⌘\` 窗口轮换，是同一意图在这个平台上的最近对应。
+    /// - **Wayland**：没有对应协议，忽略。
+    ///
+    /// 不进任务栏的窗口最小化之后无处还原，故没设 [`hide_on_minimize`](Self::hide_on_minimize)
+    /// 时不提供最小化：Windows 去掉最小化按钮、X11 报为不可最小化，自绘标题栏的最小化按钮
+    /// 随能力位隐藏。
+    pub fn skip_taskbar(mut self, on: bool) -> Self {
+        self.cfg.skip_taskbar = on;
+        self
+    }
+
+    /// 无边框窗口自画 1px 外框的取色策略（默认 [`WindowOutline::Auto`]）。
+    ///
+    /// 只对平台需要宿主自己画外框的窗口生效：Windows 10 的无边框窗口（默认仿 Windows 11，
+    /// 失活灰、激活取系统强调色）与 Linux 的无边框窗口（默认取主题边框色）。要跟着应用主题走
+    /// 用 [`WindowOutline::Theme`]，要指定颜色用 [`WindowOutline::Color`]，不要这圈线用
+    /// [`WindowOutline::Off`]——比如窗口贴着任务栏、外框压在接缝上看着像两根线。
+    ///
+    /// 常驻应用（`run_resident`）的窗口都由 [`Window`] 建，请在 [`Window::window_outline`] 上设；
+    /// 这里的设置只作用于 `App::run` 的主窗。
+    ///
+    /// [`WindowOutline::Auto`]: crate::platform::WindowOutline::Auto
+    /// [`WindowOutline::Theme`]: crate::platform::WindowOutline::Theme
+    /// [`WindowOutline::Color`]: crate::platform::WindowOutline::Color
+    /// [`WindowOutline::Off`]: crate::platform::WindowOutline::Off
+    pub fn window_outline(mut self, o: crate::platform::WindowOutline) -> Self {
+        self.cfg.window_outline = o;
         self
     }
 
@@ -1164,6 +1446,14 @@ impl App {
     /// 便于排障与验证回退路径。
     pub fn renderer(mut self, r: Renderer) -> Self {
         self.cfg.renderer = r;
+        self
+    }
+
+    /// 像素对齐策略（默认 [`PixelSnap::Edges`](crate::render::PixelSnap)）：非整数缩放下
+    /// 矩形与横竖线的边是否吸到物理像素上（裁剪区不受它管，始终取整）。进程级设置，所有窗口、所有后端共用，
+    /// 当场生效（同 [`crate::render::set_pixel_snap`]）。
+    pub fn pixel_snap(self, mode: crate::render::PixelSnap) -> Self {
+        crate::render::set_pixel_snap(mode);
         self
     }
 
@@ -1347,7 +1637,7 @@ impl App {
     /// 支持：`--screenshot <path>`、`--scale <f>`（高 DPI）、`--size W H`、
     /// `--renderer <auto|software|gpu>`，以及截屏前合成的交互
     /// `--click X Y` / `--rclick X Y` / `--drag X0 Y0 X1 Y1` / `--hover X Y` /
-    /// `--type <text>` / `--key <name>`。
+    /// `--type <text>` / `--key <name>`，以及取过渡中间帧的 `--anim-at <ms>`。
     pub fn screenshot_from_args(self) -> Self {
         let args: Vec<String> = std::env::args().collect();
         self.screenshot_args(&args)
@@ -1405,6 +1695,19 @@ impl App {
                 args.get(i + 2).and_then(|s| s.parse::<i32>().ok()),
             ) {
                 self.cfg.screenshot_hover = Some((x, y));
+            }
+        }
+        // --anim-at N：合成交互之后不等动画收尾，而是截"过渡开始后第 N 毫秒"那一帧。
+        // 真实时钟下中间帧不可复现（取决于机器快慢），钉住时钟才进得了视觉回归。
+        // 只作用于主窗；合成交互开出的子窗照旧截终态。
+        if let Some(i) = args.iter().position(|a| a == "--anim-at") {
+            match args.get(i + 1).and_then(|s| s.parse::<u64>().ok()) {
+                Some(v) => self.cfg.screenshot_anim_at = Some(v),
+                // 解析不出就截终态——与没加这个参数一模一样，不说一声就分不出来。
+                None => eprintln!(
+                    "[windui] --anim-at 需要一个毫秒整数（如 --anim-at 80），已忽略：{:?}",
+                    args.get(i + 1)
+                ),
             }
         }
         // --size W H：覆盖 App::new 的窗口尺寸，**并把 min_size 的下限一并放开**——
@@ -1653,6 +1956,11 @@ impl App {
     /// 仅首实例会被调用 `on_second_instance`（收到另一进程 argv 时，在 UI 线程）；
     /// 二次实例：argv 已转发给首实例，`run()` 直接返回、不建窗口。
     ///
+    /// macOS 上被系统「用本应用打开」的文件（Finder 双击关联文件、打开方式、拖到 Dock 图标）
+    /// 和自定义 URL scheme 一样不进 argv，而是走 Apple Event；开了单实例后它们也按
+    /// `[exe, 路径…]` / `[exe, url]` 交给 `on_second_instance`，冷启动与已在运行时都一样。
+    /// 文件类型仍要在 `Info.plist` 的 `CFBundleDocumentTypes` 里声明。
+    ///
     /// 把窗口带到前台**不需要**你动手：平台层在本回调返回后就会激活主窗口。
     ///
     /// # 为什么这个回调不收 `EventCtx`
@@ -1798,6 +2106,36 @@ impl App {
     /// ```
     pub fn on_show(mut self, f: impl FnMut(&mut EventCtx) + 'static) -> Self {
         self.show_handler = Some(Box::new(f));
+        self
+    }
+
+    /// 窗口的**激活态**（是否在前台）变化时调用，参数为新的激活态：`true` = 刚被激活，
+    /// `false` = 刚失活。
+    ///
+    /// 典型用法是「每次回到窗口就刷新一次」：数据可能在窗口失活期间被别的进程改过
+    /// （设置类程序尤其如此），用户切回来时该看到最新值。与 [`on_show`](Self::on_show) 的区别：
+    /// `on_show` 只在**隐藏→可见**的跃迁上触发；本回调覆盖的是窗口**一直可见**、只是被
+    /// Alt+Tab / 点击别的窗口切走再切回来的情形，两者互不包含。
+    ///
+    /// 只在激活态**真正变化**时触发：平台重复通知同一个状态不会再调一次（与内部的光标静止、
+    /// 浮层收起共用同一份去重）。回调先取出再放回，回调内可以请求窗口操作；它请求的副作用
+    /// （toast / 改信号 / 关窗…）与控件回调一样落地。
+    ///
+    /// ⚠ 窗口刚建出来时按「已激活」计，不会为初始状态触发；需要首次加载请另行处理。
+    ///
+    /// ```no_run
+    /// # use windui::prelude::*;
+    /// App::new("设置", 480, 360)
+    ///     .on_window_activated(|ctx, active| {
+    ///         if active {
+    ///             ctx.toast_ok("欢迎回来，正在刷新");
+    ///         }
+    ///     })
+    ///     .content(Element::col())
+    ///     .run();
+    /// ```
+    pub fn on_window_activated(mut self, f: impl FnMut(&mut EventCtx, bool) + 'static) -> Self {
+        self.activate_handler = Some(Box::new(f));
         self
     }
 
@@ -2098,6 +2436,7 @@ impl App {
             // 而**子窗口**那条构造路径（`build_new_window`）并不支持标题来源，多一个
             // 恒为 `None` 的参数只会让两处都更难读。
             host.title_src = self.title_src;
+            host.activate_handler = self.activate_handler;
             host.hide_on_minimize = self.hide_on_minimize;
             Box::new(host)
         } else {
@@ -2129,6 +2468,7 @@ impl App {
             self.hide_on_close,
         );
         host.title_src = self.title_src;
+        host.activate_handler = self.activate_handler;
         host.hide_on_minimize = self.hide_on_minimize;
         host
     }
@@ -2180,6 +2520,12 @@ impl App {
     /// `ctx.bounds()` 因此是整个客户区、`ctx.mark_dirty()` 相当于整窗失效，
     /// 而 `ctx.capture()` 无效（没有指针事件可捕获，请求会被丢弃）。
     ///
+    /// **只在回调改了东西时才重绘**：写过信号（整窗重绘）、经 ctx 请求了副作用
+    /// （toast、`mark_dirty`、关窗……），或调了运行期句柄（`ThemeHandle` / 语言 /
+    /// `HotkeyHandle` / `TrayHandle`）。什么都没做的 tick 不出帧，看门狗式的轮询因此
+    /// 不破坏空闲零 CPU。经 `ctx.tree_mut()` 直接改树不在此列，须自行
+    /// `ctx.mark_layout_dirty()`。
+    ///
     /// ```no_run
     /// use std::time::Duration;
     /// use windui::prelude::*;
@@ -2202,6 +2548,10 @@ impl App {
 }
 
 /// 把底层渲染闭包适配为 AppHandler（不处理输入）。
+///
+/// 不报脏区（`last_frame_damage` = `None`，即"整窗都画了"），故闭包须每帧画满整个
+/// 目标——Linux 无边框窗口每帧会对整窗边缘做收尾（圆角淡出），没被闭包重画的角上像素
+/// 会一帧帧淡下去。
 struct ClosureHandler {
     f: RenderClosure,
 }
@@ -2221,6 +2571,12 @@ struct UiHost {
     engine: PlatformTextEngine,
     /// 上一帧所用的语言目录（指针比对用，见 `begin_frame`）。
     lang_seen: Option<Rc<crate::i18n::Catalog>>,
+    /// 正显示着输入法合成串的节点。焦点可能在合成中被程序移走，清合成串要清它而不是
+    /// 新焦点（否则旧框里的下划线拼音一直留着）。
+    preedit_node: Option<NodeId>,
+    /// 同理，处于「合成中」的节点（win32 的 `set_ime_composing`）：结束合成时清它，
+    /// 否则合成中焦点被移走，原框一直以为在合成、回到它时光标不画。
+    composing_node: Option<NodeId>,
     hover: Option<NodeId>,
     capture: Option<NodeId>,
     close: bool,
@@ -2272,16 +2628,28 @@ struct UiHost {
     /// 通道本身挂在应用上而非本宿主上：主窗关掉之后，别的窗口要能继续收后台数据。
     /// 这里只留一个序号，回答"这一帧该不该由我来排空"。
     host_id: u64,
+    /// 客户端装饰标题栏的小宿主（`build_decoration`）：不是窗口，不认领通道消费权、不排空
+    /// 通道——它的树只有 33 像素高、平台层也从不取它排的开窗请求，消息落到它身上会画进标题栏
+    /// 或干脆丢掉；它只在悬停时出帧，持有消费权时消息还会卡住。
+    decoration: bool,
     /// 定时器回调列表（与 interval_durs 下标对应）。
     interval_cbs: Vec<AppCallback>,
     /// 定时器间隔列表（平台据此注册 SetTimer/NSTimer）。
     interval_durs: Vec<std::time::Duration>,
     /// 帧耗时浮层开关（环境变量 WINDUI_FPS 非空时开启）。
     show_fps: bool,
+    /// 平台要求宿主自己画的 1px 窗口外框色（见 `AppHandler::set_window_outline`）。
+    window_outline: Option<Color>,
+    /// 外框取色策略（`App::window_outline`）：在平台给的颜色与主题色之间裁决。
+    outline_policy: crate::platform::WindowOutline,
     /// 关闭请求拦截器：返回 true 允许关闭，false 取消。None 时默认允许。
     close_handler: Option<CloseHandler>,
     /// 窗口从隐藏态被唤起时的回调（见 [`App::on_show`]）。
     show_handler: Option<ShowHandler>,
+    /// 窗口激活态变化的回调（见 [`App::on_window_activated`]）。
+    ///
+    /// 不进 `new` 的参数表（已有 12 个位置参数）：与 `title_src` 一样建完再塞。
+    activate_handler: Option<ActivateHandler>,
     /// 窗口级快捷键回调（见 [`App::on_shortcut`]）。
     shortcut: Option<ShortcutHandler>,
     /// 系统外观偏好变化的回调（见 [`App::on_system_theme_changed`]）。
@@ -2419,10 +2787,28 @@ impl UiHost {
     /// 焦点来源按 `Pointer` 记：这些回调不在键盘导航中，不该点亮焦点环。
     /// 完事置 `needs_relayout`——回调可以经 `ctx.tree_mut()` 改结构，交给 render 里的
     /// 结构签名去判本帧走局部还是整窗（与键盘路径同款保守）。
+    ///
+    /// 其间的焦点转移不通知失焦（`in_app_callback`）：定时器把焦点要走不是用户离开。
     fn apply_app_effects(&mut self, res: DispatchResult) {
+        let prev = std::mem::replace(&mut self.focus.in_app_callback, true);
         let (_, damage, _) = self.apply_dispatch_effects(res, FocusSource::Pointer, None);
+        self.focus.in_app_callback = prev;
         self.apply_damage(damage);
         self.damage.needs_relayout = true;
+    }
+
+    /// 跑应用的激活态回调（`App::on_window_activated`），并落地它请求的副作用。
+    /// 取出再放回的理由同 [`Self::run_show_handler`]。
+    fn run_activate_handler(&mut self, active: bool) {
+        let Some(mut f) = self.activate_handler.take() else {
+            return;
+        };
+        let root = self.tree.root;
+        if let Some(root) = root {
+            let res = self.tree.run_detached(root, |ctx| f(ctx, active));
+            self.apply_app_effects(res);
+        }
+        self.activate_handler = Some(f);
     }
 
     /// 跑应用的唤起回调（`App::on_show`），并落地它请求的副作用。
@@ -2484,6 +2870,13 @@ impl UiHost {
         let window_state = crate::event::WindowState::from_config(cfg.resizable);
         crate::event::set_window_state(window_state);
         let mut tree = Tree::new();
+        // 只有无边框且可缩放的窗口，客户区边上才压着一圈缩放边框（见
+        // `scrollbar::WINDOW_EDGE_INSET`）；其余窗口的滚动条直接贴边。这里按建窗配置定一次，
+        // 而 win32 `handle_nchittest` 读的是运行期样式位——将来若能在运行期改可缩放，两处
+        // 要一起改。
+        if !(cfg.frameless && cfg.resizable) {
+            tree.scroll_edge_inset = 0;
+        }
         tree.root = Some(root.build(&mut tree));
         tree.clipboard = Some(Box::new(crate::platform::Clipboard));
         let (interval_durs, interval_cbs): (Vec<_>, Vec<_>) = intervals.into_iter().unzip();
@@ -2491,6 +2884,8 @@ impl UiHost {
             tree,
             engine: PlatformTextEngine::new(),
             lang_seen: None,
+            preedit_node: None,
+            composing_node: None,
             hover: None,
             capture: None,
             close: false,
@@ -2516,11 +2911,15 @@ impl UiHost {
             title_last: cfg.title.clone(),
             swallow_up: false,
             host_id: crate::sync::next_host_id(),
+            decoration: false,
             interval_cbs,
             interval_durs,
             show_fps: std::env::var("WINDUI_FPS").is_ok_and(|v| v != "0" && !v.is_empty()),
+            window_outline: None,
+            outline_policy: cfg.window_outline,
             close_handler,
             show_handler,
+            activate_handler: None,
             shortcut,
             system_theme,
             hide_on_close,
@@ -2550,7 +2949,9 @@ impl UiHost {
     fn sync_clock(&self) -> u64 {
         let now = self.start.elapsed().as_millis() as u64;
         crate::anim::set_clock_ms(now);
-        now
+        // 返回实际生效的时钟：被钉住时（截图取中间帧、测试）是钉住的值，惯性滑动与补间
+        // 才走同一条时间线。没钉住时与 `now` 相同。
+        crate::anim::clock_ms()
     }
 
     /// 无边框窗口的标题栏右键：控件树没人认领这次右键时，补上窗口系统菜单。
@@ -2616,6 +3017,25 @@ impl UiHost {
     /// 逻辑——旧 hover 节点若被新浮层遮住会收到 Leave（清掉残留高亮），指针下的新节点收到
     /// Enter。修正"模态弹出/关闭、切页等在光标静止时改变命中节点导致 hover 卡住"。
     /// 菜单浮层有独立命中逻辑，激活时跳过。
+    /// 菜单收起后按此刻的指针位置（`tooltip.pos`）重判悬停。
+    ///
+    /// 菜单开着时指针事件全归浮层，树上的悬停还停在开菜单之前的节点上——多半就是弹出
+    /// 菜单的那个按钮，不重判它就一直亮着悬停态，直到鼠标再动一下。悬停换了人就重新计时
+    /// 悬停提示（否则 `since_ms` 是很久以前的值，提示在刚收起菜单的地方瞬间弹出）；收起
+    /// 菜单的是一次按下（`kind == Down`）则与普通按下一样抑制提示。动作改了树的话命中
+    /// 用的是旧布局，结构签名一变 `relayout_if_needed` 会再重判一次。
+    fn resync_hover_after_menu(&mut self, kind: Option<PointerKind>) {
+        let old = self.hover;
+        self.resync_hover_after_relayout();
+        if self.hover != old {
+            self.tooltip.since_ms = self.start.elapsed().as_millis() as u64;
+        }
+        if kind == Some(PointerKind::Down) {
+            self.tooltip.suppressed = true;
+        }
+        self.damage.needs_full = true;
+    }
+
     fn resync_hover_after_relayout(&mut self) {
         if self.menu.is_open() {
             return;
@@ -2653,6 +3073,7 @@ impl UiHost {
             close,
             close_forced,
             focus,
+            release,
             consumed,
             menu,
             open_url,
@@ -2661,6 +3082,8 @@ impl UiHost {
             dialog,
             open_windows,
         } = res;
+        // 本次分发造成的用户失焦，推迟到本函数末尾才通知（见那里）。
+        let mut blurred = None;
         // 开窗请求排队：平台在事件分发完全返回后 `take_new_windows` 取走并建窗。
         self.pending_windows.extend(open_windows);
         if let Some(f) = focus {
@@ -2689,6 +3112,7 @@ impl UiHost {
                     self.damage.needs_full = true;
                 }
             }
+            blurred = Some((old, Some(f)));
         } else if let Some(pos) = blur_at {
             // 点在当前焦点控件之外 → 清空焦点（网页 blur 语义：焦点归属由宿主每次按下
             // 重新裁决，而不是"没人认领就维持原样"）。菜单栏例外，见
@@ -2703,6 +3127,7 @@ impl UiHost {
                     // 给足；此刻 focused 已置 false，按脏区走会残留一圈，故整窗。
                     self.damage.needs_full = true;
                     repaint = true;
+                    blurred = Some((Some(f), None));
                 }
             }
         }
@@ -2717,6 +3142,12 @@ impl UiHost {
         if let Some(req) = menu {
             if let Some(target) = self.focus.current.or(self.tree.root) {
                 self.open_menu(req, target);
+                // 菜单是画在窗口里的浮层，开了就得重画——不能指望别的事件顺带。
+                // 客户区右键碰巧总有紧随的抬起 / 移动带出一帧，看不出缺这一句；自绘
+                // 标题栏的右键却是平台合成的**单个**按下（见 win32 `nc_right_click`），
+                // 后面再没有客户区事件：菜单已经开了却不上屏，等鼠标一动才冒出来，
+                // 用户看到的就是"第一次右键没反应"。
+                repaint = true;
             }
         }
         // 链接点击等：交平台用默认程序打开。
@@ -2735,6 +3166,25 @@ impl UiHost {
         // 轻提示：居中浮层 + 淡入淡出 + 定时消失。
         if let Some(req) = toast {
             self.show_toast(req);
+        }
+        // 失焦通知放在最后：本次分发自己的副作用（菜单的派发对象取 `focus.current`、
+        // 关窗、toast）先按本次的焦点态落定，失焦回调里再要焦点（校验失败留在原框）
+        // 也不会把刚弹出的菜单错派给别的控件。代价：同一次分发若既转焦点又请求关窗，
+        // `on_close_request` 先于提交执行、看到的是提交前的状态。常见路径碰不到——按钮
+        // 在 Down 转焦点、在 Up 才关窗，提交早在 Down 那次分发里跑完了。
+        // 本次分发里控件交出的焦点（`EventCtx::release_focus`）。在上面的转移之后：焦点
+        // 已转给别人时请求者不再持有焦点，这一步自然什么都不做；在菜单之后：菜单的派发
+        // 对象按交出前的焦点取。被清掉的那个照常收到失焦通知（与点空白清焦点同一口径）。
+        if let Some(f) = self.apply_release(&release) {
+            repaint = true;
+            blurred = match blurred {
+                // 同一次分发里先转来又被交出：通知最初失焦的那个，转来的没来得及"拥有"焦点。
+                Some((old, _)) => Some((old, None)),
+                None => Some((Some(f), None)),
+            };
+        }
+        if let Some((old, new)) = blurred {
+            repaint |= self.notify_blur(old, new, focus_from);
         }
         (repaint, damage, consumed)
     }
@@ -2766,9 +3216,18 @@ impl UiHost {
             self.damage.needs_full = true;
             self.damage.needs_relayout = true;
         }
+        // 菜单的三档字号（正文 / 副标题 / 快捷键）来自 metrics，变了同样要重量宽度。
+        let (m0, m1) = (&self.theme.metrics, &theme.metrics);
+        let family_changed = theme.font_family != self.theme.font_family
+            || (m0.font_md, m0.font_sm, m0.font_xs) != (m1.font_md, m1.font_sm, m1.font_xs);
         self.lang_seen = Some(lang);
         self.theme = theme;
         crate::theme::set_current(self.theme.clone());
+        // 菜单宽度只在打开时量一次；开着菜单换了默认字族（典型是粘滞的「字体」菜单项）
+        // 或字号档位，就按新字体重量。须在 `set_current` 之后：测量读的是线程局部的新主题。
+        if family_changed {
+            self.remeasure_menu();
+        }
         // 清屏色随主题（未经 App::bg 显式固定时）：暗色主题下窗口底色同步转暗。
         if self.bg_follows_theme {
             self.bg = self.theme.palette.bg;
@@ -2786,6 +3245,9 @@ impl UiHost {
     /// `&mut self` 才能落地，同时持有两者过不了借用检查。运行期不会有人往 `pumps` 里
     /// 追加（`App::channel` 只在建窗前可调），故直接装回去是安全的。
     fn drain_channels(&mut self) {
+        if self.decoration {
+            return;
+        }
         let Some(root) = self.tree.root else {
             return;
         };
@@ -2829,9 +3291,25 @@ impl UiHost {
             return false;
         }
         self.tree.layout_root(logical, &mut self.engine);
+        self.note_layout_signature(true);
+        self.damage.needs_relayout = false;
+        true
+    }
+
+    /// 刚布局完：签名与上次比，变了就升整窗并做结构变化后的交互态修正，再记下新签名。
+    ///
+    /// 两条布局路径（重排请求 / 整窗帧补布局）都必须经过这里：只在一条上比较的话，
+    /// 另一条直接覆盖 `last_layout_sig`，那次显隐变化就被它"吞掉"，再也触发不了修正——
+    /// 多窗口下别的窗口写了共享信号、本窗只收到一次整窗失效时就是这样。
+    ///
+    /// `upgrade_full`：签名变了是否升整窗。整窗帧里调用时传 false——本帧已判为整窗、
+    /// 标记已清，再置一次会留到下一帧，让本可局部的那帧白白整窗。
+    fn note_layout_signature(&mut self, upgrade_full: bool) {
         let sig = self.tree.layout_signature();
         if self.damage.sig_valid && sig != self.damage.last_layout_sig {
-            self.damage.needs_full = true;
+            if upgrade_full {
+                self.damage.needs_full = true;
+            }
             // 结构变化（模态弹出/关闭、切页等）的两类交互态修正（对齐 Flutter MouseTracker /
             // Qt 模态弹出补发 leave 的做法）：
             // 1) 被隐藏的控件（如关闭它所在的对话框）重置其 hover/press 与补间，避免下次
@@ -2842,8 +3320,6 @@ impl UiHost {
         }
         self.damage.last_layout_sig = sig;
         self.damage.sig_valid = true;
-        self.damage.needs_relayout = false;
-        true
     }
 
     /// 全窗帧的绘制前准备：补齐布局、上屏响应式 toast、刷新焦点、清除过期 toast。
@@ -2851,8 +3327,7 @@ impl UiHost {
         // 重排块已布局过则跳过，避免重复 layout_root。
         if !laid_out {
             self.tree.layout_root(logical, &mut self.engine);
-            self.damage.last_layout_sig = self.tree.layout_signature();
-            self.damage.sig_valid = true;
+            self.note_layout_signature(false);
         }
         // 全窗路径的这次 layout 也可能有响应式 toast（上面 needs_relayout 未触发时）；
         // 本就走全窗重绘，取走后随本帧 paint 上屏即可。
@@ -2942,6 +3417,26 @@ fn parse_key_spec(spec: &str) -> Option<crate::event::KeyEvent> {
         alt,
         meta,
     })
+}
+
+/// 窗口四边 1px 外框（物理像素 1 px，见 `AppHandler::set_window_outline`）。
+///
+/// 四条边互不重叠（左右两条避开上下两行）：主题边框色半透明时，角上不会叠两层。
+/// 坐标按物理尺寸 / 缩放算，不用取整后的逻辑尺寸——分数缩放下那样会差出半像素，
+/// 右 / 下边线画到窗口外或缩进一像素。
+pub(super) fn paint_window_outline(
+    canvas: &mut dyn crate::render::Canvas,
+    color: Option<Color>,
+    size: Size,
+    s: f32,
+) {
+    let Some(c) = color else { return };
+    let (w, h, t) = (size.w as f32 / s, size.h as f32 / s, 1.0 / s);
+    let p = Paint::fill(c);
+    canvas.fill_rect(0.0, 0.0, w, t, &p);
+    canvas.fill_rect(0.0, h - t, w, t, &p);
+    canvas.fill_rect(0.0, t, t, h - 2.0 * t, &p);
+    canvas.fill_rect(w - t, t, t, h - 2.0 * t, &p);
 }
 
 /// 帧耗时浮层（WINDUI_FPS=1）：左上角显示本帧渲染耗时与估算 fps，用于排查卡顿。
@@ -3045,6 +3540,7 @@ impl AppHandler for UiHost {
         }
         self.last_present = None;
         self.prepare_full_frame(logical, laid_out, now_ms);
+        let outline = self.window_outline_color();
         // canvas 借的是 self.engine，与下面各浮层状态是不相交字段，借用安全。
         let mut canvas = target.make_canvas(&mut self.engine, s);
         self.tree.paint(&mut *canvas);
@@ -3061,6 +3557,7 @@ impl AppHandler for UiHost {
             .paint(&mut *canvas, &self.theme, self.logical_size, now_ms);
         // 菜单画在 toast 之后，确保菜单不被 toast 遮挡。
         self.menu.paint(&mut *canvas, &self.theme);
+        paint_window_outline(&mut *canvas, outline, size, s);
         if self.show_fps {
             paint_fps(&mut *canvas, frame_t0);
         }
@@ -3094,11 +3591,23 @@ impl AppHandler for UiHost {
         // 两次；右键点别处则直接换成那里的菜单。下拉不穿透（见 `MenuRequest::click_through`）。
         let mut closed_by_click_through = false;
         if self.menu.is_open() {
+            // 菜单开着时也记下指针位置：键盘关掉菜单（Escape）时要按它重判悬停。
+            // 菜单开着不画提示，这里改写 `tooltip.pos` 没有定位上的副作用。
+            self.tooltip.pos = ev.pos;
             if self.menu_click_passes_through(ev) {
                 self.close_menu();
+                // 先重判再往下分发：树上的 Move 才重判悬停，而菜单开着期间的 Move 全被
+                // 浮层吃了——不重判的话，这次 Down 落在空白处时弹菜单的按钮一直亮着。
+                self.resync_hover_after_menu(Some(ev.kind));
                 closed_by_click_through = true;
             } else {
-                return self.handle_menu_pointer(ev);
+                let handled = self.handle_menu_pointer(ev);
+                // 点外面 / 点中项把菜单收起了：同上，按此刻位置重判悬停。
+                if !self.menu.is_open() {
+                    self.resync_hover_after_menu(Some(ev.kind));
+                    return true;
+                }
+                return handled;
             }
         }
         // 菜单栏的键盘激活态被任何按下打断（点到栏标题上的那一下照常交给栏控件展开）。
@@ -3149,7 +3658,7 @@ impl AppHandler for UiHost {
             // 视觉、不会主动上报 repaint——若不在此强制请求一次重绘，移出后旧提示
             // 残留不消失、移入后也要等到别的事件凑巧触发重绘才会出现（不稳定）。
             //
-            // ★ 判据必须走 `node_tooltip`（与 `TooltipState::will_show`、与浮层自己的
+            // ★ 判据必须走 `node_tooltip`（与 `TooltipState::is_overlay`、与浮层自己的
             //   `paint` 同源），不能只看节点上的静态 `n.tooltip`：那样会漏掉控件的**动态**
             //   提示（`Widget::tooltip()`），于是带动态提示的控件正好落进上面这段注释描述
             //   的坑里——时而弹得出、时而要等别的事件凑巧重绘，表现为"悬停有时没反应"。
@@ -3161,10 +3670,22 @@ impl AppHandler for UiHost {
             }
         }
         match ev.kind {
-            PointerKind::Down => self.tooltip.suppressed = true,
+            PointerKind::Down => {
+                self.tooltip.suppressed = true;
+                // 撤提示要出一帧：按下的若是不响应按下的节点（截断 Label 之类），
+                // 没人请求重绘，平台就不失效窗口，提示一直留在屏上。
+                if self.tooltip.shown.get() {
+                    res.repaint = true;
+                }
+            }
             PointerKind::Move if self.tooltip.suppressed => {
                 self.tooltip.suppressed = false;
                 self.tooltip.since_ms = now_ms;
+                // 原地移动解除抑制、悬停节点没变：上面"悬停变化"那支不会请求重绘。
+                // 节点自己没有悬停视觉时就不出帧，排"到点那一帧"的 paint 没机会跑。
+                if hover.is_some_and(|h| self.tree.node_tooltip(h).is_some()) {
+                    res.repaint = true;
+                }
             }
             _ => {}
         }
@@ -3211,6 +3732,9 @@ impl AppHandler for UiHost {
             return dismissed;
         }
         self.window_active = active;
+        // 应用的激活态回调：与「设置类程序回到窗口就刷新」同构。放在状态落定之后、只在真的变化时跑。
+        self.enter();
+        self.run_activate_handler(active);
         // 重绘一帧把光标切到（或切回）该有的状态：失活时它停在最后一帧的相位上，
         // 那可能正好是"淡到一半"，不重绘就定格成一根半透明的杠。
         //
@@ -3269,7 +3793,12 @@ impl AppHandler for UiHost {
         // 菜单激活时由浮层独占键盘：↑↓ 选项、←→ 进出子菜单 / 跨菜单、回车/空格执行、
         // Escape 关闭，其余吞掉（避免打到被遮住的控件上）。
         if self.menu.is_open() {
-            return self.handle_menu_key(ev);
+            let handled = self.handle_menu_key(ev);
+            // Escape / 回车执行项把菜单收起了：按菜单开着期间最后的指针位置重判悬停。
+            if !self.menu.is_open() {
+                self.resync_hover_after_menu(None);
+            }
+            return handled;
         }
         // 菜单栏键盘激活态（F10 / 单击 Alt 之后）：←→ 换标题、↓ 展开、Esc 退出。
         if self.menu.is_armed() {
@@ -3302,7 +3831,12 @@ impl AppHandler for UiHost {
             // （`rearm_autofocus`、`resolve_close`）同样要 `&mut self`。
             let mut handled = false;
             if let Some(mut h) = self.shortcut.take() {
-                let mut sc = crate::event::ShortcutCtx::default();
+                let focused = self.tree.focused_node();
+                let mut sc = crate::event::ShortcutCtx {
+                    focused,
+                    focus_text: focused.is_some_and(|f| self.tree.accepts_text(f)),
+                    ..Default::default()
+                };
                 handled = h(&mut sc, ev);
                 self.shortcut = Some(h);
                 if sc.focus_main {
@@ -3391,6 +3925,7 @@ impl AppHandler for UiHost {
         result
     }
 
+
     fn wants_close(&self) -> bool {
         self.close
     }
@@ -3406,6 +3941,10 @@ impl AppHandler for UiHost {
 
     fn capture_active(&self) -> bool {
         self.capture.is_some()
+    }
+
+    fn set_active_renderer(&mut self, r: crate::platform::ActiveRenderer) {
+        self.tree.active_renderer = r;
     }
 
     fn set_scale(&mut self, scale: f32) {
@@ -3444,6 +3983,26 @@ impl AppHandler for UiHost {
                 )
             })
             .collect()
+    }
+
+    /// 无边框窗口外框色，取主题的 `palette.border`。与 [`bg`](Self::bg) 同理当场从主题源取，
+    /// 换主题那一帧就跟上。
+    fn frame_outline(&self) -> Option<Color> {
+        use crate::platform::WindowOutline;
+        match self.outline_policy {
+            WindowOutline::Auto | WindowOutline::Theme => {
+                Some(self.theme_src.current().palette.border)
+            }
+            WindowOutline::Color(c) => Some(c),
+            WindowOutline::Off => None,
+        }
+    }
+
+    fn set_window_outline(&mut self, color: Option<Color>) {
+        if std::mem::replace(&mut self.window_outline, color) != color {
+            // 外框在所有节点的脏区之外：开关一变必须整窗重画。
+            self.damage.needs_full = true;
+        }
     }
 
     /// 当前清屏色。
@@ -3490,8 +4049,27 @@ impl AppHandler for UiHost {
         let Some(cb) = self.interval_cbs.get_mut(idx) else {
             return false;
         };
+        // 空闲零 CPU：只在回调真的改了东西时才出帧。原先无条件返回 true 并置重排，
+        // 挂一个空的 `on_interval` 就按 tick 频率整窗光栅（120ms 一跳即每秒 8 帧整窗）。
+        //
+        // "改了东西"三路：
+        // - 写过信号（括号测得）。括号套在 `run_detached` **外面**——放进它里面会被理解成
+        //   本节点局部脏区（见其文档）；定时器写的多是别处读的共享状态，整窗才保守正确。
+        // - 经 ctx 请求了副作用（toast / 关窗 / mark_dirty……）。
+        // - 要过一帧（`anim` 唤醒计数测得）：主题 / 语言 / 热键 / 托盘等运行期句柄不写信号、
+        //   不经 ctx，只会 `request_repaint`，而平台在帧外不读那一位——意图（热键改绑、
+        //   托盘提示……）都在帧路径上消费，这里不返回 true 就一直搁到下次用户输入。
+        let wakes = crate::anim::wake_count();
+        crate::signal::begin_event();
         let res = self.tree.run_detached(root, |ctx| cb(ctx));
+        let touched = crate::signal::end_event() || crate::anim::wake_count() != wakes;
+        if !touched && !res.has_effects() {
+            return false;
+        }
         self.apply_app_effects(res);
+        if touched {
+            self.damage.needs_full = true;
+        }
         true
     }
 
@@ -3598,13 +4176,23 @@ impl AppHandler for UiHost {
         }
     }
 
-    fn on_pan(&mut self, pos: Point, dy: i32) -> bool {
+    fn on_pan(&mut self, pos: Point, axis: crate::spec::Axis, d: i32) -> bool {
         self.enter();
-        self.pan(pos, dy)
+        self.pan(pos, axis, d)
     }
 
-    fn start_fling(&mut self, pos: Point, vy: f32) -> bool {
-        self.begin_fling(pos, vy)
+    fn start_fling(&mut self, pos: Point, axis: crate::spec::Axis, v: f32) -> bool {
+        self.begin_fling(pos, axis, v)
+    }
+
+    fn can_pan(&self, pos: Point, axis: crate::spec::Axis) -> bool {
+        let s = self.scale;
+        let p = Point::new(
+            (pos.x as f32 / s).round() as i32,
+            (pos.y as f32 / s).round() as i32,
+        );
+        self.tree.scroll_target(p, axis, true).is_some()
+            || self.tree.scroll_target(p, axis, false).is_some()
     }
 
     fn cancel_fling(&mut self) -> bool {
@@ -3623,18 +4211,58 @@ impl AppHandler for UiHost {
         ))
     }
 
+    fn ime_area(&self) -> Option<(i32, i32, i32, i32)> {
+        let focus = self.focus.current?;
+        // 与 `ime_caret` 同一口径：焦点控件报了光标才算文本焦点。
+        self.tree.caret_of(focus)?;
+        let r = self.tree.abs_bounds(focus).scaled(self.scale);
+        Some((r.x, r.y, r.w, r.h))
+    }
+
+    fn ime_font_family(&self) -> Option<String> {
+        let n = self.tree.get(self.focus.current?)?;
+        // 读主题源而非 `self.theme` 快照：`ThemeHandle::update` 之后、下一帧 `begin_frame`
+        // 之前，快照还是旧的，那段时间里的合成消息会拿到旧字族。
+        n.style
+            .font_family
+            .clone()
+            .or_else(|| self.theme_src.current().font_family.clone())
+    }
+
     fn set_ime_composing(&mut self, composing: bool) -> bool {
-        let Some(focus) = self.focus.current else {
-            return false;
-        };
-        self.tree.set_composing(focus, composing)
+        let focus = self.focus.current;
+        let mut changed = false;
+        // 合成态挂在别的节点上（合成中焦点被移走）：先从那里撤掉。
+        if let Some(old) = self.composing_node.filter(|&n| Some(n) != focus) {
+            changed |= self.tree.set_composing(old, false);
+            self.composing_node = None;
+        }
+        if let Some(focus) = focus {
+            if self.tree.set_composing(focus, composing) {
+                changed = true;
+                self.composing_node = composing.then_some(focus);
+            }
+        }
+        changed
     }
 
     fn set_ime_preedit(&mut self, pe: &crate::event::Preedit) -> bool {
-        let Some(focus) = self.focus.current else {
-            return false;
-        };
-        if !self.tree.set_preedit(focus, pe) {
+        let focus = self.focus.current;
+        let mut changed = false;
+        // 合成串挂在别的节点上（合成中焦点被移走）：先从那里撤掉。
+        if let Some(old) = self.preedit_node.filter(|&n| Some(n) != focus) {
+            changed |= self
+                .tree
+                .set_preedit(old, &crate::event::Preedit::default());
+            self.preedit_node = None;
+        }
+        if let Some(focus) = focus {
+            if self.tree.set_preedit(focus, pe) {
+                changed = true;
+                self.preedit_node = pe.is_active().then_some(focus);
+            }
+        }
+        if !changed {
             return false;
         }
         // 合成串会改变文本宽度并可能触发换行——这是**非局部**变更：文本框内文字重排、
@@ -3647,6 +4275,27 @@ impl AppHandler for UiHost {
     fn ime_selection(&self) -> Option<(usize, usize)> {
         let focus = self.focus.current?;
         self.tree.selection_of(focus)
+    }
+
+    fn decoration(&self, title: &str, maximizable: bool) -> Option<crate::platform::Decoration> {
+        Some(build_decoration(
+            &self.theme_src,
+            &self.hotkey_ops,
+            title,
+            maximizable,
+        ))
+    }
+
+    fn ime_field(&self) -> Option<crate::event::ImeField> {
+        let focus = self.focus.current?;
+        // 焦点控件接受输入法才算文本焦点（默认即报了光标，见 `Widget::accepts_ime`）。
+        if !self.tree.accepts_ime(focus) {
+            return None;
+        }
+        Some(crate::event::ImeField {
+            id: focus.as_u64(),
+            hints: self.tree.ime_hints_of(focus)?,
+        })
     }
 
     fn ime_text(&self) -> String {
@@ -3771,6 +4420,491 @@ mod tests {
         );
     }
 
+
+    /// 标题栏宿主不是窗口：渲染它不认领通道消费权（否则消费权持有者关窗后可能落到它身上，
+    /// 消息画进标题栏、开窗请求无人取走、只在悬停时才排空）。之后出帧的内容宿主照常认领。
+    #[test]
+    fn decoration_host_never_claims_the_channel_owner() {
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use tiny_skia::Pixmap;
+
+        crate::sync::reset_pumps();
+        let theme_src = ThemeHandle::new(Rc::new(Theme::default()));
+        let ops: HotkeyOpQueue = Rc::new(RefCell::new(Vec::new()));
+        let mut d = build_decoration(&theme_src, &ops, "标题", true);
+        d.handler.set_scale(1.0);
+        let mut pm = Pixmap::new(200, DECORATION_HEIGHT as u32).unwrap();
+        d.handler.render(
+            &mut PixmapTarget { pixmap: &mut pm },
+            Size::new(200, DECORATION_HEIGHT),
+        );
+        let probe = crate::sync::next_host_id();
+        assert!(
+            crate::sync::claim_channel_owner(probe),
+            "标题栏出过帧之后消费权仍无人持有"
+        );
+        crate::sync::release_channel_owner(probe);
+
+        let app = App::new("t", 100, 100).content(Element::col());
+        let mut content = app.into_handler_for_test();
+        content.set_scale(1.0);
+        let mut pm = Pixmap::new(100, 100).unwrap();
+        content.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(100, 100));
+        assert!(
+            !crate::sync::claim_channel_owner(probe),
+            "内容宿主出帧后认领了消费权"
+        );
+        drop(content);
+        crate::sync::reset_pumps();
+    }
+
+    /// 客户端装饰标题栏：按钮发对应窗口操作、空白处是拖动区，视觉跟主题与激活态走。
+    /// 经真实宿主（指针分发、渲染）验证，而不是只看构造出来的元素树。
+    #[test]
+    fn decoration_titlebar_buttons_drag_area_theme_and_activation() {
+        use crate::event::{MouseButton, PointerEvent, PointerKind, WindowOp};
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use tiny_skia::Pixmap;
+
+        const W: i32 = 400;
+        let theme_src = ThemeHandle::new(Rc::new(Theme::default()));
+        let ops: HotkeyOpQueue = Rc::new(RefCell::new(Vec::new()));
+        let mut d = build_decoration(&theme_src, &ops, "标题", true);
+        let h = d.handler.as_mut();
+        h.set_scale(1.0);
+        let mut pm = Pixmap::new(W as u32, DECORATION_HEIGHT as u32).unwrap();
+        let frame = |h: &mut dyn AppHandler, pm: &mut Pixmap| {
+            h.render(
+                &mut PixmapTarget { pixmap: pm },
+                Size::new(W, DECORATION_HEIGHT),
+            );
+        };
+        frame(h, &mut pm);
+        let y = 16;
+        // 按钮从右往左：关闭、最大化、最小化，各 46 宽。
+        let (close, max, min) = (W - 23, W - 46 - 23, W - 92 - 23);
+        assert!(h.window_drag_at(Point::new(60, y)) && !h.interactive_at(Point::new(60, y)));
+        assert!(
+            h.window_drag_at(Point::new(W / 2, y)) && !h.interactive_at(Point::new(W / 2, y)),
+            "标题文字上也是拖动区"
+        );
+        for x in [close, max, min] {
+            assert!(h.interactive_at(Point::new(x, y)), "按钮 x={x} 不是拖动区");
+        }
+        let click = |h: &mut dyn AppHandler, x: i32| {
+            for kind in [PointerKind::Down, PointerKind::Up] {
+                h.on_pointer(PointerEvent::single(
+                    kind,
+                    Point::new(x, y),
+                    MouseButton::Left,
+                ));
+            }
+        };
+        click(h, min);
+        assert_eq!(h.take_window_op(), Some(WindowOp::Minimize));
+        click(h, max);
+        assert_eq!(h.take_window_op(), Some(WindowOp::ToggleMaximize));
+        assert!(!h.wants_close());
+        click(h, close);
+        assert!(h.wants_close(), "关闭键 = 请求关闭（由平台层转给窗口）");
+
+        // 底色是主题的 surface；运行期换暗色主题，标题栏跟着变。
+        let px = |pm: &Pixmap| {
+            let p = pm.pixel(5, 5).unwrap(); // 左上角：标题居中、按钮靠右，这里只有底色
+            (p.red(), p.green(), p.blue())
+        };
+        let light = Theme::default().palette.surface;
+        assert_eq!(px(&pm), (light.r, light.g, light.b));
+        // 失活：标题字转淡（墨量变少）。
+        let ink = |pm: &Pixmap| -> u32 {
+            let bg = pm.pixel(5, 5).unwrap();
+            (W / 2 - 40..W / 2 + 40)
+                .flat_map(|x| (4..DECORATION_HEIGHT - 4).map(move |y| (x, y)))
+                .map(|(x, y)| {
+                    let p = pm.pixel(x as u32, y as u32).unwrap();
+                    u32::from(bg.red().abs_diff(p.red()))
+                })
+                .sum()
+        };
+        let active_ink = ink(&pm);
+        assert!(active_ink > 0, "标题画出来了");
+        // 平台层在事件期外调这两个回调：不能置跨窗口脏、不能请求续帧（否则所有窗口整窗重画）。
+        crate::signal::take_cross_window_dirty();
+        crate::anim::reset_request();
+        (d.set_active)(false);
+        (d.set_title)("标题"); // 同值：不写
+        assert!(
+            !crate::signal::take_cross_window_dirty(),
+            "改激活态不置跨窗口脏"
+        );
+        assert!(!crate::anim::animation_requested(), "改激活态不请求续帧");
+        let h = d.handler.as_mut();
+        h.request_full_frame(); // 同下方改标题：重画由平台安排（wayland `deco_active`）
+        frame(h, &mut pm);
+        let inactive_ink = ink(&pm);
+        assert!(
+            inactive_ink < active_ink,
+            "失活后标题转淡：{inactive_ink} < {active_ink}"
+        );
+        theme_src.set(Theme::dark());
+        frame(h, &mut pm);
+        let dark = Theme::dark().palette.surface;
+        assert_eq!(
+            px(&pm),
+            (dark.r, dark.g, dark.b),
+            "换暗色主题后标题栏跟着变"
+        );
+        // 改标题：画面随之变化。
+        let before = pm.data().to_vec();
+        crate::signal::take_cross_window_dirty();
+        crate::anim::reset_request();
+        (d.set_title)("另一个更长的标题");
+        assert!(
+            !crate::signal::take_cross_window_dirty() && !crate::anim::animation_requested(),
+            "改标题同样不发通知"
+        );
+        let h = d.handler.as_mut();
+        // 照平台层的做法先要整窗（见 linux `host::render_frame` 的 fresh 分支、wayland
+        // `deco_title`）：回调不发通知，重画与重排都由平台安排。少了这一步，本帧走哪条路
+        // 取决于上一帧残留的动画脏区——失活时标题转淡的补间若还没走完，就按那块小脏区
+        // 局部重画、不重排，新标题排不上去，像素原样；走完了则整窗重排、断言成立。
+        // 机器快慢决定补间走没走完，于是这条在 macOS 上时红时绿（验证机上 12 次失败 3～8 次）。
+        h.request_full_frame();
+        frame(h, &mut pm);
+        // 只比标题所在的中段：比整帧的话，关闭键还在走的悬停补间也会让画面"变了"，
+        // 标题有没有重画就测不出来（两帧落在同一毫秒时补间不动，断言随之时好时坏）。
+        let title_band = |data: &[u8]| -> Vec<u8> {
+            (4..DECORATION_HEIGHT - 4)
+                .flat_map(|y| {
+                    let row = (y * W) as usize * 4;
+                    // 居中标题两侧各留 W/4；关闭键（右端 46 宽）落在带外。
+                    let (x0, x1) = (W as usize / 4, W as usize * 3 / 4);
+                    data[row + x0 * 4..row + x1 * 4].to_vec()
+                })
+                .collect()
+        };
+        assert_ne!(
+            title_band(&before),
+            title_band(pm.data()),
+            "标题变了，标题区跟着变"
+        );
+    }
+
+    /// 合成中焦点被移走（程序 / Tab）：随后的「清合成串」要清到原来那个框上，
+    /// 而不是新焦点——否则旧框里的合成串一直挂着。
+    #[test]
+    fn clearing_preedit_after_focus_moved_clears_the_old_field() {
+        use crate::app::test_support::key_ev;
+        use crate::event::Preedit;
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use tiny_skia::Pixmap;
+
+        let (a, b) = (
+            crate::signal::signal(String::from("甲")),
+            crate::signal::signal(String::new()),
+        );
+        let app = App::new("t", 300, 200).content(
+            Element::col()
+                .padding(10)
+                .spacing(8)
+                .child(Element::text_input(a, "a"))
+                .child(Element::text_input(b, "b").width(200)),
+        );
+        let mut handler = app.into_handler_for_test();
+        handler.set_scale(1.0);
+        let mut pm = Pixmap::new(300, 200).unwrap();
+        let k = key_ev();
+        let mut frame = |h: &mut UiHost| {
+            h.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(300, 200));
+        };
+        frame(&mut handler);
+        handler.on_key(k(Key::Tab));
+        frame(&mut handler);
+        let x0 = handler.ime_caret().expect("a 有焦点").0;
+        let pe = Preedit {
+            text: "zhong".into(),
+            caret: 5,
+            sel: None,
+            spans: Vec::new(),
+        };
+        assert!(handler.set_ime_preedit(&pe));
+        frame(&mut handler);
+        assert!(handler.ime_caret().unwrap().0 > x0, "合成串把光标推到后面");
+
+        handler.on_key(k(Key::Tab)); // 合成中焦点移到 b
+        frame(&mut handler);
+        assert!(
+            handler.set_ime_preedit(&Preedit::default()),
+            "清掉了 a 上的合成串"
+        );
+        let back = crate::event::KeyEvent {
+            shift: true,
+            ..k(Key::Tab)
+        };
+        handler.on_key(back);
+        frame(&mut handler);
+        assert_eq!(handler.ime_caret().unwrap().0, x0, "回到 a：合成串已不在");
+    }
+
+    /// win32 的「合成中」标志同理：合成中焦点被移走，随后的 `set_ime_composing(false)` 要落在
+    /// 原来那个框上，否则回到它时光标一直不画（`TextInput` 在合成中藏起自绘光标）。
+    #[test]
+    fn ending_composition_after_focus_moved_restores_the_old_fields_caret() {
+        use crate::app::test_support::key_ev;
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use tiny_skia::Pixmap;
+
+        let (a, b) = (
+            crate::signal::signal(String::from("甲")),
+            crate::signal::signal(String::new()),
+        );
+        let app = App::new("t", 300, 200).content(
+            Element::col()
+                .padding(10)
+                .spacing(8)
+                .child(Element::text_input(a, "a"))
+                .child(Element::text_input(b, "b").width(200)),
+        );
+        let mut handler = app.into_handler_for_test();
+        handler.set_scale(1.0);
+        let mut pm = Pixmap::new(300, 200).unwrap();
+        let k = key_ev();
+        // 光标条所在那一列有没有墨（与底色明显不同的像素）。
+        let caret_drawn = |h: &mut UiHost, pm: &mut Pixmap| -> bool {
+            h.render(&mut PixmapTarget { pixmap: pm }, Size::new(300, 200));
+            let (x, y, ht) = h.ime_caret().expect("有文本焦点");
+            let bg = pm.pixel((x + 6) as u32, (y + ht / 2) as u32).unwrap();
+            (y..y + ht).any(|yy| {
+                let p = pm.pixel(x as u32, yy as u32).unwrap();
+                (i32::from(p.red()) - i32::from(bg.red())).abs() > 60
+            })
+        };
+        handler.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(300, 200));
+        handler.on_key(k(Key::Tab));
+        assert!(caret_drawn(&mut handler, &mut pm), "a 聚焦：光标照常画");
+        assert!(handler.set_ime_composing(true));
+        assert!(!caret_drawn(&mut handler, &mut pm), "合成中：自绘光标藏起");
+
+        handler.on_key(k(Key::Tab)); // 合成中焦点移到 b
+        handler.set_ime_composing(false);
+        let back = crate::event::KeyEvent {
+            shift: true,
+            ..k(Key::Tab)
+        };
+        handler.on_key(back);
+        assert!(
+            caret_drawn(&mut handler, &mut pm),
+            "回到 a：合成态已清，光标恢复"
+        );
+    }
+
+    /// `ime_area` 给焦点文本控件的矩形（物理像素，供 win32 填 `rcArea`），口径与 `ime_caret`
+    /// 一致：焦点在按钮上为 `None`。125% 下按物理像素换算，光标落在矩形内。
+    #[test]
+    fn ime_area_is_the_focused_text_inputs_physical_rect() {
+        use crate::app::test_support::key_ev;
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use tiny_skia::Pixmap;
+
+        let text = crate::signal::signal(String::from("甲乙"));
+        let app = App::new("t", 300, 200).content(
+            Element::col()
+                .padding(10)
+                .spacing(8)
+                .child(Element::button("按钮"))
+                .child(Element::text_input(text, "").width(200).height(30)),
+        );
+        let mut h = app.into_handler_for_test();
+        h.set_scale(1.25);
+        let mut pm = Pixmap::new(375, 250).unwrap();
+        let k = key_ev();
+        let mut frame = |h: &mut UiHost| {
+            h.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(375, 250));
+        };
+        frame(&mut h);
+        h.on_key(k(Key::Tab));
+        frame(&mut h);
+        assert_eq!(h.ime_area(), None, "焦点在按钮上：不是文本焦点");
+        h.on_key(k(Key::Tab));
+        frame(&mut h);
+        let (x, y, w, ht) = h.ime_area().expect("文本焦点应给出矩形");
+        assert_eq!(x, 13, "左边距 10 × 1.25 = 12.5，半数往上");
+        // 30 × 1.25 = 37.5：按上下边界各自取整，落 37 还是 38 取决于控件的 y（随平台字体变）。
+        assert!(w == 250 && (37..=38).contains(&ht), "物理尺寸 {w}×{ht}");
+        let (cx, cy, _) = h.ime_caret().expect("同一口径");
+        assert!(
+            cx >= x && cx <= x + w && cy >= y && cy < y + ht,
+            "光标应落在矩形内"
+        );
+    }
+
+    /// 「是不是文本焦点」看 `Widget::accepts_ime`：只读框报光标但不接受（Windows 上据此关掉
+    /// 输入法）；自绘控件没有光标可报、覆盖为接受时照样算文本焦点（逃生口）。
+    #[test]
+    fn ime_field_follows_accepts_ime_not_just_the_caret() {
+        use crate::app::test_support::key_ev;
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use tiny_skia::Pixmap;
+
+        struct Canvasy;
+        impl crate::core::Widget for Canvasy {
+            fn focusable(&self) -> bool {
+                true
+            }
+            fn accepts_ime(&self) -> bool {
+                true
+            }
+        }
+        let ro = crate::signal::signal(String::from("只读"));
+        let app = App::new("t", 300, 200).content(
+            Element::col()
+                .padding(10)
+                .spacing(8)
+                .child(Element::text_input(ro, "").read_only().width(200))
+                .child(Element::leaf().width(100).height(40).widget(Canvasy)),
+        );
+        let mut h = app.into_handler_for_test();
+        h.set_scale(1.0);
+        let mut pm = Pixmap::new(300, 200).unwrap();
+        let k = key_ev();
+        let mut frame = |h: &mut UiHost| {
+            h.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(300, 200));
+        };
+        frame(&mut h);
+        h.on_key(k(Key::Tab));
+        frame(&mut h);
+        assert!(h.ime_caret().is_some(), "前提：只读框照常报光标");
+        assert_eq!(h.ime_field(), None, "只读框不接受输入法");
+        h.on_key(k(Key::Tab));
+        frame(&mut h);
+        assert_eq!(h.ime_caret(), None, "前提：自绘控件没报光标");
+        assert!(
+            h.ime_field().is_some(),
+            "覆盖 accepts_ime 的自绘控件算文本焦点"
+        );
+    }
+
+    /// win32 开始组合（`set_ime_composing(true)`）把输入框视口拉回光标：多行框光标在末行，
+    /// 先把内容滚到顶（光标出了可视区），开始组合后下一帧光标回到框内。不设宽（Wrap 宽）。
+    #[test]
+    fn composing_start_brings_the_caret_back_into_view() {
+        use crate::event::{MouseButton, PointerEvent, PointerKind};
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use tiny_skia::Pixmap;
+
+        let long: String = (1..=40).map(|i| format!("第 {i} 行\n")).collect();
+        let text = crate::signal::signal(long);
+        let app = App::new("t", 300, 200).content(
+            Element::col().padding(10).child(
+                Element::text_input(text, "")
+                    .multiline()
+                    .height(80)
+                    .autofocus(),
+            ),
+        );
+        let mut h = app.into_handler_for_test();
+        h.set_scale(1.0);
+        let mut pm = Pixmap::new(300, 200).unwrap();
+        let mut frame = |h: &mut UiHost| {
+            h.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(300, 200));
+        };
+        frame(&mut h);
+        frame(&mut h);
+        let input = h.focus.current.expect("autofocus 已兑现");
+        let r = h.tree.abs_bounds(input);
+        let inside = |h: &UiHost| {
+            h.tree
+                .caret_of(input)
+                .is_some_and(|(p, ht)| p.y >= r.y && p.y + ht <= r.bottom())
+        };
+        assert!(inside(&h), "前提：光标在末尾且已在可视区内");
+        // 滚轮把内容滚到顶：光标出了可视区。
+        h.on_pointer(PointerEvent::single(
+            PointerKind::Wheel(120 * 50),
+            Point::new(r.x + 20, r.y + 20),
+            MouseButton::Left,
+        ));
+        frame(&mut h);
+        assert!(!inside(&h), "前提：滚到顶后光标不在可视区");
+        h.set_ime_composing(true);
+        frame(&mut h);
+        assert!(inside(&h), "开始组合后视口应回到光标处");
+    }
+
+    /// `ime_field` 经真实焦点路径（Tab 切换）给出：换控件身份必变，多行 / 密码取自控件
+    /// 真实配置。第一个框不设宽（Wrap 宽），见 AGENTS.md §5「宽度不能只测一种」。
+    #[test]
+    fn ime_field_tracks_the_focused_text_input_and_its_content_type() {
+        use crate::app::test_support::key_ev;
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use tiny_skia::Pixmap;
+
+        let (a, b, c, d) = (
+            crate::signal::signal(String::from("甲")),
+            crate::signal::signal(String::new()),
+            crate::signal::signal(String::new()),
+            crate::signal::signal(String::new()),
+        );
+        let app = App::new("t", 300, 300).content(
+            Element::col()
+                .padding(10)
+                .spacing(8)
+                .child(Element::button("按钮"))
+                .child(Element::text_input(a, "普通"))
+                .child(Element::text_input(b, "密码").password().width(200))
+                .child(Element::text_input(c, "多行").multiline().width_match())
+                // 先密码后多行（`password()` 会清多行，反过来的顺序测不到）：密码恒为单行，
+                // 报 multiline 的话输入法会把回车当换行。
+                .child(
+                    Element::text_input(d, "两者")
+                        .password()
+                        .multiline()
+                        .width(200),
+                ),
+        );
+        let mut handler = app.into_handler_for_test();
+        handler.set_scale(1.0);
+        let mut pm = Pixmap::new(300, 300).unwrap();
+        let k = key_ev();
+        let mut frame = |h: &mut UiHost| {
+            h.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(300, 300));
+        };
+        frame(&mut handler);
+        assert_eq!(handler.ime_field(), None, "没有焦点");
+        handler.on_key(k(Key::Tab));
+        frame(&mut handler);
+        assert_eq!(handler.ime_field(), None, "焦点在按钮上：不是文本焦点");
+
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            handler.on_key(k(Key::Tab));
+            frame(&mut handler);
+            let f = handler.ime_field().expect("Tab 之后焦点在文本框上");
+            assert!(handler.ime_caret().is_some(), "与 ime_caret 同一口径");
+            seen.push(f);
+        }
+        let hints: Vec<_> = seen
+            .iter()
+            .map(|f| (f.hints.multiline, f.hints.password))
+            .collect();
+        assert_eq!(
+            hints,
+            vec![(false, false), (false, true), (true, false), (false, true)]
+        );
+        assert!(
+            seen[0].id != seen[1].id && seen[1].id != seen[2].id && seen[0].id != seen[2].id,
+            "每换一个框身份都变：{seen:?}"
+        );
+    }
+
     /// ESC 的处理次序：先收锚定浮层，再关对话框，最后才轮到关窗口。
     ///
     /// 这条排序必须端到端地测。`Tree::close_topmost_overlay` 自己的单测证明不了它——
@@ -3830,6 +4964,24 @@ mod tests {
     /// 常驻模式（`run_resident`）下界面全由这条路建出来，而 `App::on_shortcut` 那一份
     /// 明确不给子窗——这条断言若失守，那种应用的表现是「界面正常，所有 Ctrl+X 全部无声
     /// 失灵」，与菜单栏清焦点那次（`9aade6e`）是同一种查不出起因的故障形状。
+    /// 平台告知宿主的实际后端要能从控件回调里读到（「关于」页显示用）；没告知时答软光栅。
+    #[test]
+    fn event_ctx_reports_active_renderer_from_host() {
+        use crate::platform::{ActiveRenderer, AppHandler};
+        let mut host = App::new("t", 100, 100)
+            .content(Element::col())
+            .into_handler_for_test();
+        let root = host.tree.root.unwrap();
+        let read = |t: &mut Tree| {
+            let mut got = None;
+            crate::testing::run_with_ctx_in(t, root, |ctx| got = Some(ctx.active_renderer()));
+            got.unwrap()
+        };
+        assert_eq!(read(&mut host.tree), ActiveRenderer::Software);
+        host.set_active_renderer(ActiveRenderer::Direct2D);
+        assert_eq!(read(&mut host.tree), ActiveRenderer::Direct2D);
+    }
+
     #[test]
     fn window_shortcut_reaches_a_window_built_from_a_callback() {
         use crate::app::test_support::key_ev;
@@ -3869,6 +5021,45 @@ mod tests {
             !handler.wants_close(),
             "被吃掉的 Escape 不该再落到框架的关窗兜底上——设置页按 Esc 是返回，不是关窗"
         );
+    }
+
+    /// `Window::position` / `skip_taskbar` 必须一路搬进建窗配置。
+    ///
+    /// 子窗请求转配置时其余字段由 `..WindowConfig::default()` 兜底，漏写一行就被静默填成
+    /// 默认值——症状是「设了却不生效」，平台层收到的就是 `None` / `false`，查不出错。
+    #[test]
+    fn window_position_and_skip_taskbar_reach_the_platform_config() {
+        let theme = ThemeHandle::new(Rc::new(Theme::default()));
+        let ops: HotkeyOpQueue = Rc::new(RefCell::new(Vec::new()));
+        let req = Window::new("贴图", 120, 80)
+            .position(-1920, 40)
+            .skip_taskbar(true)
+            .window_outline(crate::platform::WindowOutline::Off)
+            .content(|| Element::col().fill());
+        let NewWindow::Create(cfg, _) = build_new_window(req, &theme, &ops, Color::hex(0xFFFFFF))
+        else {
+            panic!("build_new_window 只会产出 Create");
+        };
+        assert_eq!(
+            cfg.position,
+            Some((-1920, 40)),
+            "副屏在左时坐标为负，原样传下去"
+        );
+        assert!(cfg.skip_taskbar);
+        assert_eq!(
+            cfg.window_outline,
+            crate::platform::WindowOutline::Off,
+            "外框策略经 `..WindowConfig::default()` 时没搬就会被静默填成 Auto"
+        );
+
+        let req = Window::new("设置", 120, 80).content(|| Element::col().fill());
+        let NewWindow::Create(cfg, _) = build_new_window(req, &theme, &ops, Color::hex(0xFFFFFF))
+        else {
+            panic!("build_new_window 只会产出 Create");
+        };
+        assert_eq!(cfg.position, None, "对照：不设就交给系统摆放");
+        assert!(!cfg.skip_taskbar);
+        assert_eq!(cfg.window_outline, crate::platform::WindowOutline::Auto);
     }
 
     /// 单例去重是在**开窗那一刻**按窗口登记表判的——这正是「同一个回调里对同一个键既关
@@ -4187,11 +5378,83 @@ mod tests {
         let mut app = app.into_handler_for_test();
         let root = app.tree.root;
 
-        assert!(app.on_interval_fired(0), "回调跑到即需重绘");
+        assert!(app.on_interval_fired(0), "回调请求了副作用即需重绘");
         assert_eq!(*seen_id.borrow(), root, "App 级回调的 self_id 是根节点");
         assert_eq!(app.toast.items.len(), 1, "ctx.toast 应经宿主上屏");
         assert!(app.wants_close(), "ctx.request_close 应落成宿主关窗意图");
         assert!(!app.on_interval_fired(9), "越界下标不该被当成跑过");
+    }
+
+    /// 空闲零 CPU：什么都没改的定时器回调**不得**出帧。
+    ///
+    /// 回归场景：看门狗类轮询挂一个 120ms 的 `on_interval`，回调大多数 tick 什么都不做，
+    /// 原先每个 tick 仍整窗重排 + 整窗光栅，任务管理器里常驻十几个点的 CPU。
+    #[test]
+    fn idle_interval_callback_requests_no_frame() {
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use tiny_skia::Pixmap;
+        let app = App::new("t", 60, 60)
+            .on_interval(Duration::from_millis(120), |_| {})
+            .content(Element::col().width(60).height(60));
+        let mut app = app.into_handler_for_test();
+        app.set_scale(1.0);
+        let mut pm = Pixmap::new(60, 60).unwrap();
+        app.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(60, 60));
+
+        assert!(!app.on_interval_fired(0), "空回调不该要求重绘");
+        assert!(!app.damage.needs_full, "空回调不该置整窗");
+        assert!(!app.damage.needs_relayout, "空回调不该置重排");
+    }
+
+    /// 定时器里写信号 → 必须出帧且整窗：读这个信号的可能是窗口里任何一处，
+    /// 回调本身不属于任何控件，给不出更精确的脏区。
+    #[test]
+    fn interval_signal_write_requests_full_frame() {
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use tiny_skia::Pixmap;
+        let n = crate::signal::signal(0u32);
+        let app = App::new("t", 60, 60)
+            .on_interval(Duration::from_millis(120), move |_| n.set(n.get() + 1))
+            .content(Element::col().width(60).height(60));
+        let mut app = app.into_handler_for_test();
+        app.set_scale(1.0);
+        let mut pm = Pixmap::new(60, 60).unwrap();
+        app.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(60, 60));
+
+        // 同帧另有一块小脏区（光标闪烁之类）：没有它，无脏区本就整窗，"整窗"断言测不到
+        // 升级那一行。有了它，漏升就会按这块小脏区局部重绘，读信号的别处停在旧值。
+        app.damage.event = Some(crate::geometry::Rect::new(4, 4, 8, 8));
+        assert!(app.on_interval_fired(0), "写了信号必须出帧");
+        assert_eq!(n.get(), 1);
+        app.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(60, 60));
+        assert!(app.damage.last_frame_full, "定时器写信号的那一帧应整窗");
+    }
+
+    /// 运行期句柄（主题 / 语言 / 热键 / 托盘）不写信号、不经 ctx，只会请求一帧。
+    /// 定时器里调它们也必须出帧：平台在帧外不读续帧请求，那些意图都在帧路径上消费。
+    #[test]
+    fn interval_runtime_handle_requests_frame() {
+        let mut app = App::new("t", 60, 60);
+        let th = app.theme_handle();
+        let app = app
+            .on_interval(Duration::from_millis(120), move |_| {
+                th.set(crate::theme::Theme::dark())
+            })
+            .content(Element::col());
+        let mut app = app.into_handler_for_test();
+        assert!(app.on_interval_fired(0), "定时器里换主题应出帧");
+    }
+
+    /// 不写信号、只经 ctx 显式失效（`mark_dirty`）同样算"改了东西"。
+    #[test]
+    fn interval_explicit_mark_dirty_requests_frame() {
+        let app = App::new("t", 60, 60)
+            .on_interval(Duration::from_millis(120), |ctx| ctx.mark_dirty())
+            .content(Element::col());
+        let mut app = app.into_handler_for_test();
+        assert!(app.on_interval_fired(0), "ctx.mark_dirty 应出帧");
     }
 
     /// 通道消息的处理器拿得到 ctx，且**每条消息各一份副作用**：`DispatchResult` 的
@@ -5282,6 +6545,49 @@ mod tests {
         assert!(h.intervals().is_empty(), "主窗没注册定时器");
     }
 
+    /// 子窗自己的激活态回调要真的挂到子窗宿主上，且不与主窗那份串。
+    ///
+    /// 漏接的症状是「设了回调没反应」，编译期抓不到；设置窗被关掉重建成子窗后，
+    /// 「回到窗口就刷新」全靠这一条。
+    #[test]
+    fn child_window_carries_its_own_activate_handler() {
+        use crate::platform::AppHandler;
+        let main_hits = crate::signal::signal(0u32);
+        let child_hits = crate::signal::signal(None::<bool>);
+        let mut h = App::new("main", 200, 200)
+            .on_window_activated(move |_c, _a| main_hits.update(|n| *n += 1))
+            .content(Element::col().fill())
+            .into_handler_for_test();
+        let root = h.tree.root.unwrap();
+        let res = h.tree.run_detached(root, |ctx| {
+            ctx.open_window(
+                Window::new("子窗", 200, 150)
+                    .on_window_activated(move |_c, active| child_hits.set(Some(active)))
+                    .content(|| Element::col().fill()),
+            )
+        });
+        h.apply_app_effects(res);
+        let mut made: Vec<_> = h
+            .take_new_windows(&|_| false)
+            .into_iter()
+            .map(expect_create)
+            .collect();
+        let (_, child) = &mut made[0];
+
+        child.on_window_activated(false);
+        assert_eq!(
+            child_hits.get(),
+            Some(false),
+            "子窗的激活态回调应在子窗宿主上触发"
+        );
+        assert_eq!(main_hits.get(), 0, "不能触发主窗那份");
+        child.on_window_activated(true);
+        assert_eq!(child_hits.get(), Some(true));
+        h.on_window_activated(false);
+        assert_eq!(main_hits.get(), 1, "主窗的回调仍归主窗");
+        assert_eq!(child_hits.get(), Some(true), "也不影响子窗");
+    }
+
     /// 子窗内容构建期创建的信号，随窗口关闭整批回收。
     ///
     /// 没有这条，反复开关设置窗会让那些信号在全局 arena 里一直累积——单窗口时代无所谓
@@ -5423,6 +6729,82 @@ mod tests {
             dmg.bottom() < h - 4,
             "进度条的脏区不应延伸到底部标记处：{dmg:?}"
         );
+    }
+
+    /// 按住拖取色器面板（只有 `Move`）走的是局部帧，且画出来与整窗重画逐像素一致。
+    ///
+    /// 拖动通道只并上面板与触发器两层祖先做失效（`color_picker::drag_dirty`）：面板浮在
+    /// 浮层上、HEX 框与触发器色块都在拖动控件之外，漏盖一处就是"拖着不放它不动"，
+    /// 局部帧画坏浮层就是残影——两者都只有和整窗重画逐像素比才看得出来。窗口取得够大：
+    /// 脏区超过半窗时宿主本就退整窗（`decide_repaint`），小窗口测不到局部路径。
+    #[test]
+    fn color_picker_drag_frame_is_partial_and_matches_full_redraw() {
+        use crate::event::{MouseButton, PointerEvent, PointerKind};
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use tiny_skia::Pixmap;
+        let (w, h) = (800, 600);
+        let value = crate::signal::signal(Color::hex(0x336699));
+        let mut a = App::new("a", w, h)
+            .content(
+                Element::col()
+                    .fill()
+                    .padding(8)
+                    .child(Element::color_picker_opts(
+                        value,
+                        crate::ui::ColorPickerOpts::default().open(crate::signal::signal(true)),
+                    )),
+            )
+            .into_handler_for_test();
+        a.set_scale(1.0);
+        let mut pm = Pixmap::new(w as u32, h as u32).unwrap();
+        a.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(w, h));
+
+        let root = a.tree.root.unwrap();
+        let trigger = a.tree.get(root).unwrap().children[0];
+        let panel = a.tree.get(trigger).unwrap().children[0];
+        let sv = a.tree.get(panel).unwrap().children[0];
+        let b = a.tree.abs_bounds(sv);
+        let at = |x, y| Point::new(x, y);
+        a.on_pointer(PointerEvent::single(
+            PointerKind::Down,
+            at(b.x + 2, b.y + 2),
+            MouseButton::Left,
+        ));
+        a.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(w, h));
+        let before = value.get();
+        a.on_pointer(PointerEvent::single(
+            PointerKind::Move,
+            at(b.right() - 3, b.bottom() - 3),
+            MouseButton::Left,
+        ));
+        a.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(w, h));
+        assert_ne!(value.get(), before, "前置：Move 改了颜色");
+        assert!(!a.damage.last_frame_full, "拖动帧应走局部路径，而不是整窗");
+
+        let mut full = Pixmap::new(w as u32, h as u32).unwrap();
+        a.damage.needs_full = true;
+        a.render(&mut PixmapTarget { pixmap: &mut full }, Size::new(w, h));
+        assert!(
+            pm.data() == full.data(),
+            "局部拖动帧与整窗重画不一致（漏盖或残影）"
+        );
+
+        // 方向键走同一条提交路径（焦点在 SV 方块上，按下时拿到的），失效也得同样盖住。
+        a.on_pointer(PointerEvent::single(
+            PointerKind::Up,
+            at(b.x + 2, b.y + 2),
+            MouseButton::Left,
+        ));
+        a.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(w, h));
+        let before = value.get();
+        a.on_key(crate::app::test_support::key_ev()(crate::event::Key::Up));
+        a.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(w, h));
+        assert_ne!(value.get(), before, "前置：方向键改了颜色");
+        assert!(!a.damage.last_frame_full, "方向键帧应走局部路径");
+        a.damage.needs_full = true;
+        a.render(&mut PixmapTarget { pixmap: &mut full }, Size::new(w, h));
+        assert!(pm.data() == full.data(), "局部方向键帧与整窗重画不一致");
     }
 
     /// 窗口激活态：失活后聚焦的输入框不再请求续帧（后台窗口不该按刷新率出帧），
@@ -5867,6 +7249,53 @@ mod tests {
             lum(handler.bg) < 300,
             "未经 App::bg 显式固定时，清屏色应随主题热切换"
         );
+    }
+
+    /// 主题默认字族运行期更换：没设字族的文字下一帧换字体重排，显式设过的不动。
+    /// 走真实宿主 + 真实 DirectWrite，字体是 Windows 自带的两款。
+    #[cfg(windows)]
+    #[test]
+    fn theme_font_family_reflows_unstyled_text() {
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use tiny_skia::Pixmap;
+        let theme = crate::theme::Theme {
+            font_family: Some("Segoe UI".into()),
+            ..Default::default()
+        };
+        let mut app = App::new("t", 400, 80).theme(theme);
+        let handle = app.theme_handle();
+        app = app.content(
+            Element::row()
+                .child(Element::label("iiiiiiiiii"))
+                .child(Element::label("iiiiiiiiii").font_family("Segoe UI")),
+        );
+        let mut handler = app.into_handler_for_test();
+        handler.set_scale(1.0);
+        let mut pm = Pixmap::new(400, 80).unwrap();
+        let mut frame = |h: &mut UiHost| {
+            h.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(400, 80));
+        };
+        let widths = |h: &UiHost| {
+            // 根 → row → 两个 label。
+            let mut id = h.tree.root.expect("已构建");
+            while h.tree.get(id).unwrap().children.len() == 1 {
+                id = h.tree.get(id).unwrap().children[0];
+            }
+            let kids = h.tree.get(id).unwrap().children.clone();
+            (h.tree.abs_bounds(kids[0]).w, h.tree.abs_bounds(kids[1]).w)
+        };
+        frame(&mut handler);
+        let (plain0, fixed0) = widths(&handler);
+        assert_eq!(plain0, fixed0, "前提：默认字族与显式字族同款时同宽");
+        handle.update(|t| t.font_family = Some("Consolas".into()));
+        frame(&mut handler);
+        let (plain1, fixed1) = widths(&handler);
+        assert!(
+            plain1 > plain0,
+            "没设字族的文字应换成等宽字体、变宽：{plain0} → {plain1}"
+        );
+        assert_eq!(fixed1, fixed0, "显式设过字族的不受默认字族影响");
     }
 
     #[test]
@@ -6592,6 +8021,47 @@ mod tests {
         );
     }
 
+    /// 贴窗口右缘的滚动条只在「无边框且可缩放」的窗口里内缩。
+    ///
+    /// 内缩是给客户区里那圈缩放边框让路的：带框窗口的缩放边在客户区外，不可缩放的
+    /// 无边框窗根本没有这一圈（win32 `handle_nchittest` 按 `WS_THICKFRAME` 判）。这两类
+    /// 窗口若也内缩，滚动条离窗口右缘平白空出 8px，看起来像没贴边。
+    #[test]
+    fn scrollbar_edge_inset_follows_window_capabilities() {
+        use crate::core::scrollbar::WINDOW_EDGE_INSET;
+        let hit_zone_right = |app: App| {
+            let mut host = app
+                .content({
+                    let mut sc = Element::scroll().width_match().height_match();
+                    for _ in 0..20 {
+                        sc = sc.child(Element::leaf().width_match().height(30));
+                    }
+                    sc
+                })
+                .into_handler_for_test();
+            layout_once(&mut host, 200, 120);
+            let root = host.tree.root.unwrap();
+            let abs = host.tree.abs_bounds(root);
+            assert_eq!(abs.right(), 200, "前置：滚动容器贴着窗口右缘");
+            host.tree.scrollbar_hit_zone(abs).1
+        };
+        assert_eq!(
+            hit_zone_right(App::new("t", 200, 120).frameless()),
+            200 - WINDOW_EDGE_INSET,
+            "无边框且可缩放：让出缩放边框那一圈"
+        );
+        assert_eq!(
+            hit_zone_right(App::new("t", 200, 120).frameless().resizable(false)),
+            200,
+            "无边框但不可缩放：没有缩放边框，滚动条贴边"
+        );
+        assert_eq!(
+            hit_zone_right(App::new("t", 200, 120)),
+            200,
+            "带框窗口：缩放边在客户区外，滚动条贴边"
+        );
+    }
+
     /// 正文区右键不弹：系统菜单是"标题栏"的语义，不是"整个窗口"的。
     #[test]
     fn system_menu_only_on_the_drag_region() {
@@ -6664,6 +8134,35 @@ mod tests {
         );
     }
 
+    /// 右键弹菜单的那一下必须报告"要重绘"：菜单是窗口里的浮层，开了不重画就不上屏。
+    ///
+    /// 自绘标题栏的右键是平台合成的**单个**按下，后面没有任何客户区事件带出下一帧——
+    /// 漏掉这一位，用户看到的就是"标题栏第一次右键没反应"（菜单其实开着，鼠标一动才冒出）。
+    /// 这里在指针没动、悬停也没变的前提下（同一点按两次）钉住它。
+    #[test]
+    fn opening_context_menu_requests_repaint() {
+        use crate::event::{MenuItem, MouseButton, PointerEvent, PointerKind};
+        use crate::platform::AppHandler;
+        let ui = Element::col().fill().child(
+            Element::row()
+                .width_match()
+                .height(32)
+                .window_drag()
+                .on_context_menu(|| vec![MenuItem::run("项", |_| {}, false)]),
+        );
+        let mut host = App::new("t", 200, 120)
+            .frameless()
+            .content(ui)
+            .into_handler_for_test();
+        layout_once(&mut host, 200, 120);
+        let down = PointerEvent::single(PointerKind::Down, Point::new(60, 16), MouseButton::Right);
+        assert!(host.on_pointer(down), "首次弹菜单应请求重绘");
+        host.close_menu();
+        layout_once(&mut host, 200, 120);
+        assert!(host.on_pointer(down), "同一点再弹一次也应请求重绘");
+        assert!(host.menu.is_open());
+    }
+
     /// 菜单里的「关闭」走完整的关闭决策链，与自绘 × 按钮一致——否则右键菜单就成了
     /// 绕过"有未保存的更改"守卫的后门。
     ///
@@ -6718,5 +8217,266 @@ mod tests {
         layout_once(&mut host, 200, 120);
         press(&mut host, 60, 16, MouseButton::Right);
         assert!(menu_rows(&host).is_empty(), "macOS 不该默认接管标题栏右键");
+    }
+
+    /// 外框取色策略：平台（win32）给浅灰，主题边框是深蓝——`Theme` 画深蓝且换主题当帧
+    /// 跟上；`Color` 画指定色；`Off` 不画；平台说不画（最大化）时任何策略都不画。
+    /// `frame_outline`（Linux 那条路）同一套策略。
+    #[test]
+    fn window_outline_policy_picks_color_or_turns_off() {
+        use crate::platform::{AppHandler, WindowOutline};
+        use crate::render::PixmapTarget;
+        use tiny_skia::Pixmap;
+
+        let gray = Color::hex(0xAAAAAA);
+        let navy = Color::hex(0x102060);
+        let wine = Color::hex(0x802030);
+        let theme = |border: Color| {
+            let mut t = Theme::default();
+            t.palette.border = border;
+            t
+        };
+        let rim = |policy: WindowOutline, platform: Option<Color>| {
+            let mut app = App::new("t", 120, 60)
+                .theme(theme(navy))
+                .window_outline(policy)
+                .content(Element::col().width(120).height(60));
+            let src = app.theme_handle();
+            let mut h = app.into_handler_for_test();
+            h.set_scale(1.0);
+            h.set_window_outline(platform);
+            let mut pm = Pixmap::new(120, 60).unwrap();
+            h.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(120, 60));
+            let p = pm.pixel(60, 0).unwrap();
+            (Color::rgb(p.red(), p.green(), p.blue()), h, src, pm)
+        };
+        let bg = Theme::default().palette.bg;
+
+        let (c, ..) = rim(WindowOutline::Auto, Some(gray));
+        assert_eq!(c, gray, "Auto：用平台给的颜色（Win10 仿 Win11）");
+
+        let (c, mut h, src, mut pm) = rim(WindowOutline::Theme, Some(gray));
+        assert_eq!(c, navy, "Theme：用主题的 palette.border，而不是平台的灰");
+        src.set(theme(wine));
+        h.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(120, 60));
+        let p = pm.pixel(60, 0).unwrap();
+        assert_eq!(
+            Color::rgb(p.red(), p.green(), p.blue()),
+            wine,
+            "换主题当帧跟上"
+        );
+        assert_eq!(h.frame_outline(), Some(wine), "Linux 那条路同一策略");
+
+        let (c, h, ..) = rim(WindowOutline::Color(wine), Some(gray));
+        assert_eq!(c, wine, "Color：画指定色");
+        assert_eq!(h.frame_outline(), Some(wine));
+
+        let (c, h, ..) = rim(WindowOutline::Off, Some(gray));
+        assert_eq!(c, Color::rgb(bg.r, bg.g, bg.b), "Off：不画");
+        assert_eq!(h.frame_outline(), None);
+
+        let (c, ..) = rim(WindowOutline::Theme, None);
+        assert_eq!(
+            c,
+            Color::rgb(bg.r, bg.g, bg.b),
+            "平台说不画（最大化）时策略不得自作主张"
+        );
+    }
+
+    /// 平台要求宿主画外框（Win10 无边框窗）：整窗帧画出四边，局部帧之后边线原样（子缓冲
+    /// 新铺底，不叠加），半透明边框色在角上也只叠一层，关掉后整窗重画、边线消失。
+    #[test]
+    fn window_outline_survives_partial_frames_without_stacking() {
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use tiny_skia::Pixmap;
+
+        let theme = Theme::default();
+        let line = Color::rgba(0, 0, 0, 128);
+        let bg = theme.palette.bg;
+        let app = App::new("t", 200, 100).theme(theme).content(
+            Element::col()
+                .width(200)
+                .height(100)
+                .child(Element::button("按钮").width(80).height(30)),
+        );
+        let mut h = app.into_handler_for_test();
+        h.set_scale(1.0);
+        let mut pm = Pixmap::new(200, 100).unwrap();
+        let size = Size::new(200, 100);
+        let red = |pm: &Pixmap, x: u32, y: u32| pm.pixel(x, y).unwrap().red() as i32;
+        // 50% 黑叠在不透明底色上 ≈ 底色一半；角上若叠两层会是四分之一。
+        let half = bg.r as i32 / 2;
+        let rim = [(100, 0), (100, 99), (0, 50), (199, 50), (0, 0), (199, 99)];
+
+        h.render(&mut PixmapTarget { pixmap: &mut pm }, size);
+        assert_eq!(red(&pm, 0, 0), bg.r as i32, "默认不画外框");
+
+        h.set_window_outline(Some(line));
+        h.render(&mut PixmapTarget { pixmap: &mut pm }, size);
+        for (x, y) in rim {
+            assert!(
+                (red(&pm, x, y) - half).abs() <= 2,
+                "({x},{y}) 应叠一层外框色"
+            );
+        }
+        assert_eq!(red(&pm, 100, 50), bg.r as i32, "内部不动");
+
+        // 悬停按钮出局部帧（前提：确实是局部帧，否则本段测不到叠加问题）。
+        let mv = |x, y| {
+            crate::event::PointerEvent::single(
+                PointerKind::Move,
+                Point::new(x, y),
+                MouseButton::Left,
+            )
+        };
+        for _ in 0..3 {
+            h.on_pointer(mv(10, 10));
+            h.render(&mut PixmapTarget { pixmap: &mut pm }, size);
+            h.on_pointer(mv(150, 80));
+            h.render(&mut PixmapTarget { pixmap: &mut pm }, size);
+        }
+        let d = h.last_frame_damage();
+        assert!(
+            d.is_some_and(|d| d.w < 200),
+            "前提：最后一帧应是局部帧，实为 {d:?}"
+        );
+        for (x, y) in rim {
+            assert!(
+                (red(&pm, x, y) - half).abs() <= 2,
+                "局部帧后 ({x},{y}) 外框不对（丢失或叠深）"
+            );
+        }
+
+        h.set_window_outline(None);
+        h.render(&mut PixmapTarget { pixmap: &mut pm }, size);
+        for (x, y) in rim {
+            assert_eq!(red(&pm, x, y), bg.r as i32, "关掉后 ({x},{y}) 应回到底色");
+        }
+    }
+
+    /// 分数缩放下外框恰好占最外一圈物理像素：边宽按物理尺寸 / 缩放算，取整后的逻辑尺寸
+    /// 会差出零点几个像素，右 / 下边线落到窗外或缩进一像素。
+    #[test]
+    fn window_outline_hugs_the_physical_edge_at_fractional_scale() {
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use tiny_skia::Pixmap;
+
+        let theme = Theme::default();
+        let bg = theme.palette.bg;
+        // 物理尺寸挑了逻辑尺寸向上、向下取整都有的几组（251/1.25 = 200.8，248/1.25 = 198.4，
+        // 247/1.5 ≈ 164.7，245/1.5 ≈ 163.3）。
+        for (s, pw, ph) in [
+            (1.25, 251, 101),
+            (1.25, 248, 99),
+            (1.5, 247, 97),
+            (1.5, 245, 95),
+        ] {
+            let app = App::new("t", 200, 80)
+                .theme(theme.clone())
+                .content(Element::col().width(150).height(60));
+            let mut h = app.into_handler_for_test();
+            h.set_scale(s);
+            h.set_window_outline(Some(Color::rgb(0, 0, 0)));
+            let mut pm = Pixmap::new(pw, ph).unwrap();
+            h.render(
+                &mut PixmapTarget { pixmap: &mut pm },
+                Size::new(pw as i32, ph as i32),
+            );
+            let red = |x: u32, y: u32| pm.pixel(x, y).unwrap().red();
+            let (mx, my) = (pw / 2, ph / 2);
+            for (x, y) in [(pw - 1, my), (mx, ph - 1), (0, my), (mx, 0)] {
+                assert_eq!(red(x, y), 0, "{s}x {pw}×{ph}：({x},{y}) 应是外框");
+            }
+            for (x, y) in [(pw - 2, my), (mx, ph - 2), (1, my), (mx, 1)] {
+                assert_eq!(
+                    red(x, y),
+                    bg.r,
+                    "{s}x {pw}×{ph}：({x},{y}) 外框只有 1 物理像素"
+                );
+            }
+        }
+    }
+
+    /// 横向滚动条在纵向页面里的触摸路由：横向平移滚横条、竖向平移落到页面；
+    /// 横向松手惯性沿横轴滑到头，回弹结束后越界偏移归零。scale 1.5 下验证物理→逻辑换算。
+    #[test]
+    fn touch_pan_and_fling_follow_the_locked_axis() {
+        use crate::platform::AppHandler;
+        use crate::render::PixmapTarget;
+        use crate::spec::{Axis, ScrollAxis};
+        use tiny_skia::Pixmap;
+
+        let mut row = Element::row();
+        for _ in 0..8 {
+            row = row.child(Element::leaf().width(50).height(30));
+        }
+        let app = App::new("t", 200, 150).content(
+            Element::scroll()
+                .width_match()
+                .height_match()
+                .child(
+                    Element::scroll()
+                        .scroll_axis(ScrollAxis::Horizontal)
+                        .width_match()
+                        .height(50)
+                        .child(row),
+                )
+                .child(Element::leaf().width_match().height(400)),
+        );
+        let mut h = app.into_handler_for_test();
+        h.set_scale(1.5);
+        let mut pm = Pixmap::new(300, 225).unwrap();
+        let mut t = 1_000;
+        let mut frame = |h: &mut UiHost, t: &mut u64| {
+            *t += 16;
+            crate::anim::pin_clock(Some(*t));
+            h.render(&mut PixmapTarget { pixmap: &mut pm }, Size::new(300, 225));
+        };
+        frame(&mut h, &mut t);
+        // 从横条上的一点往上找：先遇到横条，再遇到页面。
+        let scrolls: Vec<_> = {
+            let mut v = Vec::new();
+            let mut cur = h.tree.hit_test(Point::new(40, 20));
+            while let Some(id) = cur {
+                let n = h.tree.get(id).unwrap();
+                if matches!(n.layout, crate::core::Layout::Scroll) {
+                    v.push(id);
+                }
+                cur = n.parent;
+            }
+            v
+        };
+        let (strip, page) = (scrolls[0], scrolls[1]);
+        let on_strip = Point::new(60, 30); // 物理像素，落在横条上
+                                           // 锁轴回落的依据：横条上两个方向都有容器可滚（横条 / 页面），页面空白处只能竖滚。
+        let on_page = Point::new(60, 150);
+        assert!(h.can_pan(on_strip, Axis::Horizontal) && h.can_pan(on_strip, Axis::Vertical));
+        assert!(!h.can_pan(on_page, Axis::Horizontal) && h.can_pan(on_page, Axis::Vertical));
+        // 手指左移 30 物理像素 = 20 逻辑像素 → 横条右滚 20。
+        assert!(h.on_pan(on_strip, Axis::Horizontal, -30));
+        frame(&mut h, &mut t);
+        assert_eq!(h.tree.get(strip).unwrap().scroll_x, 20);
+        // 竖向平移在横条上：横条不竖滚，交给页面。
+        assert!(h.on_pan(on_strip, Axis::Vertical, -30));
+        frame(&mut h, &mut t);
+        assert_eq!(h.tree.get(page).unwrap().scroll_y, 20);
+        assert_eq!(h.tree.get(strip).unwrap().scroll_x, 20, "竖向平移不动横条");
+        // 横向快速松手：惯性沿横轴滑到头，回弹后越界偏移归零，页面不动。
+        assert!(h.start_fling(on_strip, Axis::Horizontal, -3.0));
+        let mut max_over = 0;
+        for _ in 0..60 {
+            frame(&mut h, &mut t);
+            let (sn, pn) = (h.tree.get(strip).unwrap(), h.tree.get(page).unwrap());
+            max_over = max_over.max(sn.over_scroll_x.abs());
+            assert_eq!((sn.over_scroll, pn.over_scroll), (0, 0), "回弹只写横向偏移");
+        }
+        assert!(max_over > 0, "撞到右端应有横向回弹");
+        crate::anim::pin_clock(None);
+        let n = h.tree.get(strip).unwrap();
+        assert_eq!(n.scroll_x, n.content_w - n.scroll_view().w, "滑到最右");
+        assert_eq!(n.over_scroll_x, 0, "回弹结束归零");
+        assert_eq!(h.tree.get(page).unwrap().scroll_y, 20);
     }
 }

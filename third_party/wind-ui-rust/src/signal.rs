@@ -14,8 +14,8 @@
 //!
 //! 剩下一小撮是**构建期临时信号**：在 `Element` 构建过程中被创建（控件内部需要一处可写状态，
 //! 或调用方在行构建闭包里现造一个）。这一撮的问题在于**元素构建会重复发生**——本库有三处
-//! 会按数据变化重建子树的宿主（`Element::list_signal` 的 `DynList`、`reorder_list_signal`
-//! 的行源、以及可排序表格的行/表头），每重建一轮就再造一批。没有回收，这批槽位随线程存活。
+//! 会按数据变化重建子树的宿主（`Element::list_signal` 的 `KeyedList`、`host_signal` 的 `DynList`、
+//! `reorder_list_signal` 的行源、以及可排序表格的行/表头），每重建一轮就再造一批。没有回收，这批槽位随线程存活。
 //!
 //! 所以本模块的所有权模型是**两级**的，而不是 leptos / floem 那样的单一作用域树：
 //!
@@ -52,7 +52,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 /// 运行时 slot 键：索引 + 代际（复用 core arena 的失效心智，回收后旧句柄自然失效）。
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 struct SlotKey {
     index: u32,
     generation: u32,
@@ -279,6 +279,16 @@ pub(crate) fn begin_event() {
     TOUCHED.with(|c| c.set(false));
 }
 
+/// 跑一段代码并报告它是否写过信号，**不吞掉**外层事件期已记下的写入（返回后外层照样
+/// 看得到这次的写）。只在事件期内有意义；事件期外的写自己会请求整窗重绘，这里报 `false`。
+pub(crate) fn track_writes<R>(f: impl FnOnce() -> R) -> (R, bool) {
+    let outer = TOUCHED.with(|c| c.replace(false));
+    let r = f();
+    let inner = TOUCHED.with(|c| c.get());
+    TOUCHED.with(|c| c.set(outer || inner));
+    (r, inner)
+}
+
 /// 核心：退出节点事件处理后调用——结束事件期，返回这期间是否写过信号。
 pub(crate) fn end_event() -> bool {
     EVENT_ACTIVE.with(|c| c.set(false));
@@ -339,6 +349,12 @@ impl<T> PartialEq for Signal<T> {
     }
 }
 impl<T> Eq for Signal<T> {}
+/// 与 `PartialEq` 同一身份（slot + 代际），可作 `HashMap` 键。
+impl<T> std::hash::Hash for Signal<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.key.hash(state);
+    }
+}
 
 /// 打印**句柄标识**（slot + 代际）而非值——`T` 未必 `Debug`，且绝大多数调试场景
 /// 想知道的是"这两处引用的是不是同一个信号"。值请自行 `sig.get()`。
@@ -380,9 +396,9 @@ pub fn signal<T: 'static>(value: T) -> Signal<T> {
 ///
 /// # 谁在用它
 ///
-/// 库内三处会按数据重建子树的宿主各持有一个：`Element::list_signal` 的 `DynList`、
-/// `Element::reorder_list_signal` 的行源、以及可排序表格的行/表头。它们在重建时先回收
-/// 上一轮的作用域、再在新作用域里构建新行——所以**在 `row_fn` 里 `signal(..)` 是安全的**，
+/// 库内会按数据重建子树的宿主各自持有：`Element::list_signal` 的 `KeyedList`（**每行一个**，
+/// 删行或重建那一行时回收）、`Element::host_signal` 的 `DynList`、`Element::reorder_list_signal`
+/// 的行源、以及可排序表格的行/表头。它们在重建时先回收上一轮的作用域、再在新作用域里构建新行——所以**在 `row_fn` 里 `signal(..)` 是安全的**，
 /// 每轮重建的临时信号会随该轮子树一起消失，不会累积。
 ///
 /// # 回收后旧句柄会失效
@@ -681,6 +697,19 @@ impl<T: 'static> Signal<T> {
     /// 而读它没有值可返回。这个不对称让"控件子树刚被重建、其上一次点击排队的回调才跑到"
     /// 这类竞态在 release 里退化为无害的丢弃，而不是崩溃。
     pub fn set(&self, value: T) {
+        self.write_raw(value);
+        notify_changed();
+    }
+
+    /// 写值但**不**触发任何重绘通知（不置跨窗口脏、不请求续帧）。只给平台层驱动的、自己
+    /// 负责重画的小宿主用（客户端装饰标题栏的标题 / 激活态）：普通的 `set` 在事件期外会让
+    /// 所有窗口整窗重画。失效语义同 [`Signal::set`]。
+    pub(crate) fn set_quiet(&self, value: T) {
+        self.write_raw(value);
+    }
+
+    /// 只写值、版本号自增，不发通知。[`Signal::set`] 与 [`Signal::set_quiet`] 共用。
+    fn write_raw(&self, value: T) {
         RT.with(|rt| {
             let mut rt = rt.borrow_mut();
             if let Some(slot) = rt.slot_mut(self.key) {
@@ -696,7 +725,6 @@ impl<T: 'static> Signal<T> {
                 debug_assert!(false, "signal 句柄已失效");
             }
         });
-        notify_changed();
     }
 
     /// 原地修改并触发重绘（避免 get→改→set 的一次 clone）。

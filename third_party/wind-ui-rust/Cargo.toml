@@ -1,24 +1,29 @@
 [package]
 name = "windui"
-version = "0.20.0"
+version = "0.30.0"
 edition = "2021"
-description = "轻量跨平台桌面 GUI：tiny-skia 渲染 + 平台原生窗口/文字（Windows: Win32+DirectWrite；macOS: Cocoa+CoreText；Linux: X11+fontconfig）"
+description = "轻量跨平台桌面 GUI：tiny-skia 渲染 + 平台原生窗口/文字（Windows: Win32+DirectWrite；macOS: Cocoa+CoreText；Linux: X11/Wayland+fontconfig）"
 authors = ["huanfeng <huanfengf@gmail.com>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/huanfeng/wind-ui-rust"
 homepage = "https://github.com/huanfeng/wind-ui-rust"
 documentation = "https://docs.rs/windui"
 readme = "README.md"
-keywords = ["gui", "ui", "desktop", "windows", "macos"]
-categories = ["gui", "rendering", "os::windows-apis", "os::macos-apis"]
+keywords = ["gui", "desktop", "windows", "macos", "linux"]
+categories = ["gui", "rendering", "os::windows-apis", "os::macos-apis", "os::linux-apis"]
 # 发布到 crates.io 时排除非源码资产，保持包精简。
 exclude = [".github/", ".remember/", "/scripts", "/temp", "/artifacts"]
 
 [features]
 # SVG 支持默认开启；体积敏感可 `--no-default-features` 关掉以剔除 resvg/usvg 依赖树。
-default = ["svg", "d2d"]
+default = ["svg", "d2d", "wayland"]
 svg = ["dep:resvg"]
 d2d = []
+# Linux 原生 Wayland 后端（默认开）。只对 Linux 有意义：依赖声明在 Linux 的 target 段里，
+# 别的平台开着它也不会多编任何东西（与 `d2d` 之于非 Windows 同理）——所以能直接放进
+# 全局 `default`，不必走 `gpu_backend` 那种 build.rs cfg 别名。关掉它（`--no-default-features`）
+# 得到纯 X11 后端，Wayland 会话经 XWayland 运行。运行期怎么选后端见 `platform/linux/mod.rs`。
+wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:wayland-cursor", "dep:xkbcommon-dl"]
 # 跨平台 GPU 渲染后端（wgpu）。
 #
 # **macOS 上无需开启，它恒可用**：那里 GPU 后端是唯一的硬件加速路径（Windows 有 D2D），
@@ -94,6 +99,8 @@ windows = { version = "0.62", features = [
     "Win32_UI_HiDpi",
     "Win32_UI_Shell",
     "Win32_UI_Input_Ime",
+    "Win32_UI_TextServices",
+    "Win32_System_Variant",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Input_Touch",
     "Win32_System_LibraryLoader",
@@ -126,7 +133,8 @@ windows = { version = "0.62", features = [
 # 也能退回扫字体目录。Wayland 会话经 XWayland 运行。详见 docs/LINUX_PORTING.md。
 [target.'cfg(target_os = "linux")'.dependencies]
 # 0.13 而非最新：与 xim（XIM 输入法协议）依赖的大版本对齐，两者共用同一个连接类型。
-x11rb = "0.13"
+# xfixes：监听合成器选区（`_NET_WM_CM_S<屏>`）的出现 / 消失，无边框窗口的圆角随之开关。
+x11rb = { version = "0.13", features = ["xfixes"] }
 # XIM 客户端：与 fcitx5 / ibus 的 XIM 前端通话（合成串回调 + 提交）。
 xim = { version = "0.5", default-features = false, features = ["x11rb-client"] }
 ttf-parser = "0.25"
@@ -134,6 +142,19 @@ ab_glyph_rasterizer = "0.1"
 # rfd 在 Linux 上必须选一个后端：xdg-portal 走 D-Bus 门户（无门户时回退 zenity），
 # 只多一个 pollster；gtk3 会把整套 GTK 拉进进程，与低内存目标相悖。
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
+# Wayland 协议（`wayland` feature）：默认特性即纯 Rust 协议实现，不链 libwayland-client，
+# 同 x11rb 的取向。不用 smithay-client-toolkit——它自带 calloop 事件循环与整套抽象，
+# 而我们已有自己的 poll 循环与宿主结构。
+wayland-client = { version = "0.31", optional = true }
+# `staging`：fractional-scale-v1 在 staging 段（viewporter 是 stable）；cursor-shape-v1 依赖
+# tablet（unstable 段）的对象类型，要 `staging` + `unstable` 同开才生成。两个特性只多生成
+# 协议绑定代码，不引新依赖。
+wayland-protocols = { version = "0.32", optional = true, features = ["client", "staging", "unstable"] }
+# 合成器没有 cursor-shape-v1 时（如 GNOME 42）按光标主题自己挂光标图：读 XCURSOR 主题文件。
+wayland-cursor = { version = "0.31", optional = true }
+# 键盘映射：运行期 dlopen libxkbcommon（任何 Wayland 桌面必有），同 fontconfig 做法，
+# 编译期不要 -dev 包。取不到时键盘不可用（提示一次），指针照常。
+xkbcommon-dl = { version = "0.4", optional = true }
 
 # ---- macOS 平台后端（Cocoa/AppKit + Core Text）----
 # objc2 生态（活跃维护、类型安全、自动内存管理）。框架子 crate 的类型按 feature 暴露，
@@ -200,6 +221,7 @@ objc2-app-kit = { version = "0.3", features = [
     "NSMenu",
     "NSMenuItem",
     "NSWorkspace",
+    "NSAccessibility",
     "NSCursor",
     "NSTrackingArea",
     "NSText",
@@ -287,3 +309,7 @@ strip = true
 default-target = "x86_64-pc-windows-msvc"
 targets = ["x86_64-pc-windows-msvc", "x86_64-apple-darwin", "aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
 all-features = true
+
+# The vendored tree omits build.rs, which normally declares this cfg.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(gpu_backend)'] }

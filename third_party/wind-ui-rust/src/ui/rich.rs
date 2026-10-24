@@ -69,7 +69,7 @@ pub enum RichColor {
     Text,
     /// 次要文字（palette.text_muted）。
     Muted,
-    /// 强调色（palette.accent）。
+    /// 强调色（当前景用的那一档，`Palette::accent_text()`）。
     Accent,
     /// 危险色（palette.danger）。
     Danger,
@@ -82,7 +82,7 @@ impl RichColor {
         match self {
             RichColor::Text => p.text,
             RichColor::Muted => p.text_muted,
-            RichColor::Accent => p.accent,
+            RichColor::Accent => p.accent_text(),
             RichColor::Danger => p.danger,
             RichColor::Fixed(c) => c,
         }
@@ -615,7 +615,9 @@ struct FragStyle {
 impl FragStyle {
     fn ts(&self) -> TextStyle<'_> {
         TextStyle {
-            family: self.family.as_deref(),
+            // 字面量构造绕过了 `TextStyle::of`，主题默认字族得在这里补上，否则碎片按
+            // `None` 进引擎缓存，换默认字族后沿用旧宽度。
+            family: crate::text::or_default(self.family.as_deref()),
             size: self.size,
             weight: self.weight,
             italic: self.italic,
@@ -925,7 +927,7 @@ impl Walker<'_> {
             .unwrap_or_default();
         let s = span.style.over(&named);
         FragStyle {
-            size: s.size.unwrap_or(base.font_size),
+            size: s.size.unwrap_or(base.font_size()),
             weight: s.weight.unwrap_or(base.font_weight),
             family: s.family.or_else(|| base.font_family.clone()),
             line_height: base.line_height,
@@ -1129,7 +1131,7 @@ impl Walker<'_> {
         sig: Signal<bool>,
     ) {
         let fs = FragStyle {
-            size: base.font_size,
+            size: base.font_size(),
             weight: base.font_weight,
             family: base.font_family.clone(),
             line_height: base.line_height,
@@ -1259,7 +1261,7 @@ impl Walker<'_> {
                         None => {
                             self.anims.push(SectAnim {
                                 sig: sec.collapsed,
-                                h: Transition::new(f32::NAN),
+                                h: Transition::new(f32::NAN).movement(),
                             });
                             self.anims.len() - 1
                         }
@@ -1281,13 +1283,13 @@ impl Walker<'_> {
                     let target = if collapsed { 0.0 } else { full };
                     if !anim.value().is_finite() {
                         // 首次遇到：静止落定，首帧不动画。
-                        anim = Transition::new(target);
+                        anim.settle(target);
                     } else if (anim.target() <= 0.5) != (target <= 0.5) {
                         // 折叠态翻转：起卷帘动画。
                         anim.retarget(target, self.th.anim.normal(), Easing::EaseInOut);
                     } else if (anim.target() - target).abs() > 0.5 && !anim.is_active() {
                         // 内容/宽度变化导致全高漂移（非折叠切换）：静止跟随，不动画。
-                        anim = Transition::new(target);
+                        anim.settle(target);
                     }
                     // 布局期只读取值（无副作用）：下一帧的请求由 paint 经
                     // anim::request_relayout 走宿主 needs_relayout 正规门发出，
@@ -1451,6 +1453,9 @@ pub struct RichText {
     cache: RefCell<Option<Rc<RichLayout>>>,
     /// 最近一帧 paint 的 content 绝对矩形（事件坐标换算用）。
     last_content: Cell<Rect>,
+    /// 钉了高度、内容溢出 bounds 时 paint 裁出的可见高度（相对 content 顶，按整行
+    /// 对齐）；`None` = 未裁剪。命中测试据此把被裁掉的部分当作不存在。
+    visible_h: Cell<Option<i32>>,
     /// 悬停中的折叠头下标（headers 序）。
     hover_header: Cell<Option<usize>>,
     /// 按下时锁定的折叠头下标。
@@ -1515,6 +1520,7 @@ impl RichText {
             doc,
             cache: RefCell::new(None),
             last_content: Cell::new(Rect::new(0, 0, 0, 0)),
+            visible_h: Cell::new(None),
             hover_header: Cell::new(None),
             pressed_header: Cell::new(None),
             triple: Cell::new(crate::event::TripleClick::default()),
@@ -1592,8 +1598,8 @@ impl RichText {
         collect_collapsed(&self.doc.blocks, &mut collapsed);
         LayoutKey {
             wrap_w,
-            family: style.font_family.clone(),
-            size_bits: style.font_size.to_bits(),
+            family: TextStyle::of(style).family.map(str::to_string),
+            size_bits: style.font_size().to_bits(),
             weight: style.font_weight,
             line_height_bits: style.line_height.map(f32::to_bits),
             scale_bits: scale.to_bits(),
@@ -1621,8 +1627,10 @@ impl RichText {
                 // 每帧交替重排、把选区一并清掉。
                 && l.size.w <= want_w
                 && want_w <= l.wrap_hi
-                && k.family.as_deref() == style.font_family.as_deref()
-                && k.size_bits == style.font_size.to_bits()
+                // 比的是**实际字族**（含主题默认）：只比 `style.font_family` 的话，换默认字族
+                // 时两边都是 `None`，命中旧布局。
+                && k.family.as_deref() == TextStyle::of(style).family
+                && k.size_bits == style.font_size().to_bits()
                 && k.weight == style.font_weight
                 && k.line_height_bits == style.line_height.map(f32::to_bits)
                 && k.scale_bits == scale.to_bits()
@@ -1658,8 +1666,18 @@ impl RichText {
         }
     }
 
+    /// `pos`（绝对坐标）是否落在被裁掉的那截里（钉了高度、内容溢出时）。
+    fn hidden_at(&self, pos: Point) -> bool {
+        self.visible_h
+            .get()
+            .is_some_and(|h| pos.y - self.last_content.get().y >= h)
+    }
+
     /// 命中测试折叠头（`pos` 为绝对坐标）。
     fn header_at(&self, pos: Point) -> Option<usize> {
+        if self.hidden_at(pos) {
+            return None;
+        }
         let content = self.last_content.get();
         let local = Point::new(pos.x - content.x, pos.y - content.y);
         let cache = self.cache.borrow();
@@ -1669,6 +1687,9 @@ impl RichText {
 
     /// 命中测试可点击 span 碎片（`pos` 为绝对坐标）。比折叠头更具体，优先判定。
     fn span_at(&self, pos: Point) -> Option<usize> {
+        if self.hidden_at(pos) {
+            return None;
+        }
         let content = self.last_content.get();
         let local = Point::new(pos.x - content.x, pos.y - content.y);
         let cache = self.cache.borrow();
@@ -1686,6 +1707,9 @@ impl RichText {
 
     /// 命中「… 展开」标记（`pos` 为绝对坐标），返回其展开信号。
     fn expander_at(&self, pos: Point) -> Option<Signal<bool>> {
+        if self.hidden_at(pos) {
+            return None;
+        }
         let content = self.last_content.get();
         let local = Point::new(pos.x - content.x, pos.y - content.y);
         let cache = self.cache.borrow();
@@ -2122,6 +2146,37 @@ impl SelectionScope {
     }
 }
 
+/// 内容画出 bounds 下沿时的可见高度（相对 content 顶）；不溢出返回 `None`。
+///
+/// 按整行对齐：取不越过 bounds 下沿的最低行底（文字行与分隔线都算一"行"）；一行都放不下
+/// 时退回 bounds 下沿，保证首行至少露出能放下的部分。分隔线不参与的话，恰好落在下沿内的
+/// 分隔线会随它上面那行的行底一起被裁掉。
+fn overflow_visible_h(lay: &RichLayout, content: Rect, bounds: Rect) -> Option<i32> {
+    let avail = bounds.bottom() - content.y;
+    if lay.size.h <= avail {
+        return None;
+    }
+    // 折叠动画期落在收拢隐藏带内的行不画（同 paint 的判断），也就不能拿来对齐下沿。
+    let hidden = |y: i32| {
+        lay.clips
+            .iter()
+            .any(|r| y >= r.y0 + r.reveal && y < r.y0 + r.full)
+    };
+    let text_rows = lay
+        .frags
+        .iter()
+        .map(|f| (f.line_top, f.line_top + f.line_h));
+    let divider_rows = lay.dividers.iter().map(|&(_, y)| (y, y + 1));
+    let keep = text_rows
+        .chain(divider_rows)
+        .filter(|&(top, _)| !hidden(top))
+        .map(|(_, b)| b)
+        .filter(|&b| b <= avail)
+        .max()
+        .unwrap_or(avail);
+    Some(keep.clamp(0, avail))
+}
+
 impl Widget for RichText {
     fn measure(&self, avail: Size, style: &Style, text: &mut dyn TextEngine) -> Size {
         // 与 Label 同约定：宽度受限时按其换行；换行准确性仅保证于显式宽度
@@ -2138,7 +2193,7 @@ impl Widget for RichText {
 
     fn paint(
         &self,
-        _bounds: Rect,
+        bounds: Rect,
         content: Rect,
         focused: bool,
         enabled: bool,
@@ -2165,6 +2220,20 @@ impl Widget for RichText {
                 lay: Rc::clone(lay),
                 content,
             });
+        }
+
+        // 钉了高度而内容更高：裁回 bounds，下沿按整行对齐（不露下一行的字头残片），至少
+        // 留一行。不裁则多出的行画到下方兄弟上——整窗帧里被盖住、局部重绘时又露出来。
+        let visible_h = overflow_visible_h(lay, content, bounds);
+        self.visible_h.set(visible_h);
+        if let Some(h) = visible_h {
+            canvas.save();
+            canvas.clip_rect(Rect::new(
+                bounds.x,
+                bounds.y,
+                bounds.w,
+                content.y + h - bounds.y,
+            ));
         }
 
         // 高度动画进行中：请求下一帧重排（经正规门，见 anim::request_relayout）。
@@ -2315,19 +2384,39 @@ impl Widget for RichText {
                 &Paint::fill(dcol),
             );
         }
+        if visible_h.is_some() {
+            canvas.restore();
+        }
         // 键盘焦点：给当前聚焦的折叠头描 accent 细框（Tab 聚焦后 ↑↓/Enter 可视化）。
+        // 未裁剪时画在内容裁剪之外（框外扩 2px）；裁剪时被裁掉的折叠头不画框，部分可见的
+        // 头框高收到可见处，且整框裁回 bounds——多行头配矮高度时框会画出下沿。
         if focused && enabled && !lay.headers.is_empty() {
-            let idx = self.focus_header.get().min(lay.headers.len() - 1);
+            // 与键盘导航同一口径：只在可见的头里钳制，框才画在 Enter 实际作用的那个头上。
+            let n_vis = visible_h.map_or(lay.headers.len(), |h| {
+                lay.headers.iter().take_while(|(r, _)| r.y < h).count()
+            });
+            if n_vis == 0 {
+                return;
+            }
+            let idx = self.focus_header.get().min(n_vis - 1);
             let (r, _) = &lay.headers[idx];
+            let rh = visible_h.map_or(r.h, |h| r.h.min(h - r.y));
+            if visible_h.is_some() {
+                canvas.save();
+                canvas.clip_rect(bounds);
+            }
             canvas.stroke_round_rect(
                 (content.x + r.x) as f32 - 2.0,
                 (content.y + r.y) as f32 - 2.0,
                 (r.w + 4) as f32,
-                (r.h + 4) as f32,
+                (rh + 4) as f32,
                 4.0,
                 1.0,
-                &Paint::fill(pal.accent),
+                &Paint::fill(pal.accent_text()),
             );
+            if visible_h.is_some() {
+                canvas.restore();
+            }
         }
     }
 
@@ -2382,6 +2471,17 @@ impl Widget for RichText {
                 .as_ref()
                 .map(|l| l.headers.len())
                 .unwrap_or(0);
+            // 被裁掉的折叠头（钉了高度、内容溢出）不参与：焦点移过去看不见框，Enter
+            // 还会翻转一个看不见的分区。头按版面自上而下排列，可见的是前一段。
+            let n = match self.visible_h.get() {
+                Some(h) => self
+                    .cache
+                    .borrow()
+                    .as_ref()
+                    .map(|l| l.headers.iter().take_while(|(r, _)| r.y < h).count())
+                    .unwrap_or(0),
+                None => n,
+            };
             if n == 0 {
                 return false;
             }
@@ -2407,6 +2507,28 @@ impl Widget for RichText {
             };
         }
         let Event::Pointer(p) = ev else { return false };
+        // 被裁掉的那截（钉了高度、内容溢出）不可命中：悬停与左键按下都当它不存在。拖选
+        // 进行中不拦——指针已被捕获，拖到裁剪区乃至界外照样延伸选区，与系统文本控件拖出
+        // 可视区的行为一致（复制会带上看不见的部分）。那截仍在 bounds 内、看着就是控件
+        // 的一部分，所以左键按下照样清掉旧选区，右键照样弹复制菜单（不命中任何 span）。
+        if !self.selecting.get() && self.hidden_at(p.pos) {
+            match p.kind {
+                PointerKind::Move | PointerKind::Enter => {
+                    if self.hover_span.take().is_some() {
+                        ctx.mark_dirty();
+                    }
+                    self.hover_header.set(None);
+                    self.hover_text.set(false);
+                    self.hover_exp.set(false);
+                    return false;
+                }
+                PointerKind::Down if p.button == MouseButton::Left => {
+                    self.clear_sel(ctx);
+                    return false;
+                }
+                _ => {}
+            }
+        }
         match p.kind {
             PointerKind::Move | PointerKind::Enter => {
                 // 拖拽划选中：更新延伸点（capture 保证界外 Move 也送达）。
@@ -3348,6 +3470,48 @@ mod tests {
         assert!(text.starts_with("汉"), "选区应为正文内容");
     }
 
+    /// 换主题默认字族要让布局缓存失效、碎片按新字族重测——缓存键只比 `style.font_family`
+    /// 的话，两边都是 `None`，命中旧布局（旧字体的宽度）。Wrap 宽与显式宽各走一遍。
+    #[test]
+    fn theme_default_family_change_invalidates_layout() {
+        use crate::theme::{set_current, Theme};
+        struct Seen(Vec<Option<String>>);
+        impl Measurer for Seen {
+            fn size(&mut self, text: &str, ts: &TextStyle) -> Size {
+                self.0.push(ts.family.map(str::to_string));
+                crate::text::NullTextEngine.measure(text, ts, None)
+            }
+            fn metrics(&mut self, text: &str, ts: &TextStyle) -> LineMetrics {
+                crate::text::NullTextEngine.line_metrics(text, ts)
+            }
+            fn scale(&self) -> f32 {
+                1.0
+            }
+        }
+        let set = |f: &str| {
+            set_current(std::rc::Rc::new(Theme {
+                font_family: Some(f.into()),
+                ..Theme::default()
+            }))
+        };
+        for wrap in [None, Some(200)] {
+            let rt = RichText::new(RichDoc::new().para("汉汉"));
+            let style = Style::default();
+            set("甲");
+            rt.ensure_layout(wrap, &style, &mut Seen(Vec::new()));
+            rt.sel.set(Some(cjk_sel(0, 1)));
+            set("乙");
+            let mut seen = Seen(Vec::new());
+            rt.ensure_layout(wrap, &style, &mut seen);
+            assert!(rt.sel.get().is_none(), "{wrap:?}：换默认字族应重排");
+            assert!(
+                seen.0.iter().any(|f| f.as_deref() == Some("乙")),
+                "{wrap:?}：碎片应按新默认字族测量，实得 {:?}",
+                seen.0
+            );
+        }
+    }
+
     #[test]
     fn dpi_scale_change_invalidates_layout() {
         // 自定义 Measurer 模拟 DPI 变化（Null 引擎恒 1.0，无法直接驱动）。
@@ -3821,5 +3985,204 @@ mod tests {
         let frags = &cache.as_ref().unwrap().frags;
         assert_eq!(frags.len(), 2, "空白碎片不应产出");
         assert_eq!(frags[1].rect.x, 0, "第二行行首不应残留空格缩进");
+    }
+
+    // ---- 钉了高度、内容溢出：裁剪与命中 ----
+
+    /// 点一下 `at`，返回 span 回调次数。`h` 为钉死的高度，`width` 为显式宽（`None`
+    /// 走 Wrap 宽）。第 1 行纯文字、第 2 行是可点击 span，每行 14px。
+    fn clicks_on_second_line(h: i32, width: Option<i32>, at: crate::geometry::Point) -> i32 {
+        let hit = signal(0);
+        // 同一段内硬换行：两行紧挨（段与段之间另有段距，行位置就不好算了）。
+        let doc = RichDoc::new().para(Para::new().text("短\n").span_id(
+            "x",
+            "链接",
+            SpanStyle::new(),
+        ));
+        let mut el = Element::rich(doc)
+            .height(h)
+            .on_span_click(move |_, _| hit.set(hit.get() + 1));
+        if let Some(w) = width {
+            el = el.width(w);
+        }
+        let (mut tree, _) = build(el, 200, 200);
+        // 命中依赖 paint 记下的可见高度：真跑一帧。
+        paint_once(&mut tree, 200, 200);
+        let (mut hover, mut cap) = (None, None);
+        for kind in [PointerKind::Down, PointerKind::Up] {
+            tree.dispatch_pointer(
+                PointerEvent::single(kind, at, MouseButton::Left),
+                &mut hover,
+                &mut cap,
+            );
+        }
+        hit.get()
+    }
+
+    /// 高度 21：第 2 行（14..28）只露出上半截，整行对齐后被裁掉——落在 bounds 之内的
+    /// 那截也不可点。高度 40 的对照证明坐标确实点在 span 上。显式宽与 Wrap 宽各一遍。
+    #[test]
+    fn clipped_span_is_not_clickable() {
+        let at = crate::geometry::Point::new(5, 17);
+        for width in [Some(200), None] {
+            assert_eq!(
+                clicks_on_second_line(40, width, at),
+                1,
+                "对照（{width:?}）：完整显示时应点中第 2 行的 span"
+            );
+            assert_eq!(
+                clicks_on_second_line(21, width, at),
+                0,
+                "（{width:?}）第 2 行已被裁掉，不应再能点中"
+            );
+        }
+    }
+
+    /// 真实文字引擎下钉了高度的长文：不得画出 bounds，且下沿按整行对齐。
+    #[test]
+    fn overflowing_rich_text_stays_inside_bounds() {
+        use crate::ui::text_fit::ink::*;
+        assert_wraps_taller(LONG_LATIN, 14.0, 120, 30);
+        let doc = || RichDoc::new().para(LONG_LATIN).para(LONG_LATIN);
+        for (what, el, win_w) in [
+            ("显式宽", Element::rich(doc()).width(120).height(30), 200),
+            ("Wrap 宽", Element::rich(doc()).height(30), 120),
+        ] {
+            let el = Element::col()
+                .width_match()
+                .children([el, Element::col().height(80).width_match()]);
+            let (pm, b) = paint_first_child(el, win_w, 200);
+            assert_eq!(b.h, 30, "{what}");
+            assert_no_ink_outside(&pm, b, &format!("RichText {what}"));
+        }
+    }
+
+    /// 下沿恰好落在分隔线下方：分隔线也算一"行"，须完整保留，不能随上一行的行底一起
+    /// 被裁掉。显式宽与 Wrap 宽各一遍。
+    #[test]
+    fn clip_keeps_divider_that_fits() {
+        use crate::geometry::Rect;
+        use crate::ui::text_fit::ink::*;
+        let doc = || RichDoc::new().para("Ab").divider().para("Cd").para("Ef");
+        for (what, w) in [("显式宽", Some(160)), ("Wrap 宽", None)] {
+            let el = |h: Option<i32>| {
+                let mut el = Element::rich(doc());
+                if let Some(w) = w {
+                    el = el.width(w);
+                }
+                if let Some(h) = h {
+                    el = el.height(h);
+                }
+                Element::col().children([el])
+            };
+            // 不钉高：找出分隔线所在的像素行（整行横贯、墨最多的那行）。
+            let (pm, b) = paint_first_child(el(None), 160, 200);
+            let row = (b.y..b.bottom())
+                .max_by_key(|&y| ink_in(&pm, Rect::new(b.x, y, b.w, 1)))
+                .unwrap();
+            assert!(
+                ink_in(&pm, Rect::new(b.x, row, b.w, 1)) > b.w as usize / 2,
+                "{what}：前提——应能找到横贯的分隔线"
+            );
+            // 钉高到分隔线下沿：比文字行底更低，按旧口径会退回上一行行底、把它裁掉。
+            let (pm, b2) = paint_first_child(el(Some(row + 1 - b.y)), 160, 200);
+            assert!(
+                ink_in(&pm, Rect::new(b2.x, row, b2.w, 1)) > b2.w as usize / 2,
+                "{what}：放得下的分隔线被裁掉了"
+            );
+            assert_no_ink_outside(&pm, b2, &format!("RichText 分隔线 {what}"));
+        }
+    }
+
+    fn key(k: Key) -> crate::event::KeyEvent {
+        crate::event::KeyEvent {
+            key: k,
+            pressed: true,
+            shift: false,
+            ctrl: false,
+            alt: false,
+            meta: false,
+        }
+    }
+
+    /// 键盘 ↓ 不得把焦点移到被裁掉的折叠头上，Enter 也就翻转不了看不见的分区。
+    /// 高度 200 的对照证明 ↓ + Enter 本来确实会翻转第二个头。显式宽与 Wrap 宽各一遍。
+    #[test]
+    fn keyboard_skips_clipped_headers() {
+        let second_toggled = |h: i32, width: Option<i32>| {
+            let second = signal(false);
+            let doc = RichDoc::new()
+                .section("头一", signal(true), |d| d.para("甲"))
+                .section("头二", second, |d| d.para("乙"));
+            let mut el = Element::rich(doc).height(h);
+            if let Some(w) = width {
+                el = el.width(w);
+            }
+            let (mut tree, node) = build(el, 200, 300);
+            paint_once(&mut tree, 200, 300);
+            tree.dispatch_key(key(Key::Down), Some(node));
+            tree.dispatch_key(key(Key::Enter), Some(node));
+            second.get()
+        };
+        for width in [Some(200), None] {
+            assert!(
+                second_toggled(200, width),
+                "对照（{width:?}）：↓ + Enter 应翻转第二个头"
+            );
+            assert!(
+                !second_toggled(14, width),
+                "（{width:?}）第二个头已被裁掉，键盘不应能翻转它"
+            );
+        }
+    }
+
+    /// 多行折叠头配矮高度、有焦点：焦点框收到可见处并裁回 bounds，不画出下沿。
+    #[test]
+    fn focus_ring_of_clipped_header_stays_inside_bounds() {
+        use crate::ui::text_fit::ink::*;
+        // 折叠头须折成多行、高于钉死的 20：不然焦点框本就在 bounds 内，测不到越界。
+        assert_wraps_taller(LONG_LATIN, 14.0, 120, 20);
+        let doc = RichDoc::new().section(LONG_LATIN, signal(true), |d| d.para("body"));
+        let el = Element::col().children([
+            Element::rich(doc).width(120).height(20),
+            Element::col().height(80).width_match(),
+        ]);
+        let mut eng = engine();
+        let mut tree = Tree::new();
+        let root = el.build(&mut tree);
+        tree.root = Some(root);
+        tree.layout_root(Size::new(200, 150), &mut eng);
+        let node = tree.get(root).unwrap().children[0];
+        tree.set_focused(Some(node), None);
+        let b = tree.abs_bounds(node);
+        let mut pm = tiny_skia::Pixmap::new(200, 150).unwrap();
+        pm.fill(tiny_skia::Color::WHITE);
+        let mut cv = crate::render::SkiaCanvas::with_text(&mut pm, &mut eng, 1.0);
+        tree.paint(&mut cv);
+        drop(cv);
+        assert_no_ink_outside(&pm, b, "聚焦的多行折叠头");
+    }
+
+    /// 被裁那截仍在 bounds 内、看着就是控件的一部分：右键照样弹复制菜单。
+    #[test]
+    fn right_click_in_clipped_band_still_shows_copy_menu() {
+        let doc = RichDoc::new().para(Para::new().text("短\n").span_id(
+            "x",
+            "链接",
+            SpanStyle::new(),
+        ));
+        let (mut tree, _) = build(Element::rich(doc).width(200).height(21), 200, 200);
+        paint_once(&mut tree, 200, 200);
+        let (mut hover, mut cap) = (None, None);
+        let res = tree.dispatch_pointer(
+            PointerEvent::single(
+                PointerKind::Down,
+                crate::geometry::Point::new(5, 17),
+                MouseButton::Right,
+            ),
+            &mut hover,
+            &mut cap,
+        );
+        assert!(res.menu.is_some(), "裁剪带内右键应弹复制菜单");
     }
 }

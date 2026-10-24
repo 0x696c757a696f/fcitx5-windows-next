@@ -11,6 +11,10 @@
 [![docs.rs](https://docs.rs/windui/badge.svg)](https://docs.rs/windui)
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#许可证)
 
+<p align="center">
+  <a href="https://atomgit.com/huanfengf/wind-ui-rust" target="_blank"><img src="https://atomgit.com/huanfengf/wind-ui-rust/star/new_badge.svg" alt="AtomGit" height="54" /></a>
+</p>
+
 > 轻量跨平台桌面 GUI 框架 — 用 Rust 构建内存友好的小工具。
 
 `平台原生窗口` · `tiny-skia 矢量渲染` · `平台原生文字排版` · 无运行时 · 无 GC。
@@ -23,7 +27,7 @@
 |------|-----------|------|
 | **Windows** | Win32 + GDI（DIB 拷屏） | DirectWrite |
 | **macOS** | Cocoa/AppKit + CoreGraphics（CGImage blit） | Core Text |
-| **Linux** | X11（x11rb，纯 Rust 协议实现；Wayland 经 XWayland）+ PutImage | fontconfig 选字 + 自带光栅 |
+| **Linux** | X11（x11rb，纯 Rust 协议实现）+ PutImage；原生 Wayland（wl_shm，`WINDUI_BACKEND=wayland` 启用，默认仍经 XWayland） | fontconfig 选字 + 自带光栅 |
 
 渲染层（`tiny-skia`）与全部控件/布局/事件逻辑平台无关；每个平台只实现「窗口+事件循环」与「文字引擎」两条缝。
 
@@ -50,7 +54,7 @@
 ## 特性
 
 - **命令式 Builder API** — 纯 Rust 链式构建，类型安全、零解析开销。
-- **Copy 句柄状态** — 状态是 `Signal<T>`，闭包里 `move` 直接捕获、不用 `clone()` 前戏；`set()` 自动触发重绘。数据变化驱动子树重建（`list_signal`），动态列表不用手写 diff。
+- **Copy 句柄状态** — 状态是 `Signal<T>`，闭包里 `move` 直接捕获、不用 `clone()` 前戏；`set()` 自动触发重绘。数据变化驱动子树更新（`list_signal` 按键复用行、可带增删重排动效），动态列表不用手写 diff。
 - **运行期换主题** — `App::theme_handle()` 拿句柄，回调里 `set(Theme::dark())` 即整树热切换；用 `Role` 表达的颜色（`fg_role`/`bg_role`）自动跟随。
 - **一份代码，三个平台** — 控件树、布局、事件、动画、主题全平台无关；切换平台零改动。
 - **Retained 模式 + 脏触发** — 空闲不重绘、阻塞在事件循环，零 CPU 占用。
@@ -126,9 +130,9 @@ fn main() {
 | 布局 | `col` / `row`（LinearLayout，支持 weight）、`stack`（FrameLayout）、`grid`（等宽网格）、`split`（可拖动分栏）、`flex_spacer` |
 | 文本 | `label`（自动换行）、`label_signal`（绑信号）、`link`（可点击链接）、`rich`（富文本：多样式 span / 折叠段） |
 | 按钮 | `button`（hover/press/focus 三态 + 点击/回车/空格激活）、`icon_button`（纯图标） |
-| 表单 | `checkbox` / `switch` / `radio`（互斥组）/ `slider`（拖动+键盘）/ `text_input`（CJK 编辑+密码+多行）/ `dropdown` / `check_menu` / `stepper` / `chip` / `tag_field` / `color_picker`（取色面板） |
+| 表单 | `checkbox` / `switch` / `radio`（互斥组）/ `slider`（拖动+键盘）/ `text_input`（CJK 编辑+密码+多行+区间底色）/ `dropdown` / `combo_box`（可输入下拉）/ `check_menu` / `stepper` / `chip` / `tag_field` / `color_picker`（取色面板） |
 | 反馈 | `progress`（确定/不确定）/ `tooltip`（悬停提示）/ `toast`（居中轻提示）/ `badge`（胶囊徽章） |
-| 容器 | `scroll`（滚轮/触摸+裁剪+滚动条）/ `tabs` / `tabs_pill` / `divider` / `dialog`（模态）/ `dialog_panel`（带标题栏）/ `visible_when`（条件可见） |
+| 容器 | `scroll`（竖向 / 横向 / 双向；滚轮/触摸+裁剪+滚动条）/ `tabs` / `tabs_pill` / `divider` / `dialog`（模态）/ `dialog_panel`（带标题栏）/ `visible_when`（条件可见） |
 | 导航 | `menu_bar`（原生手感菜单栏：滑动切换、←→ 跨菜单、F10 / Alt 激活、助记键）/ `segmented`（连体多段单选）/ `nav_row`（钻入行）/ `collapsible` / `accordion`·`accordion_multi`（手风琴） |
 | 列表 | `list` / `list_pill`（侧栏样式）/ `list_icons`（单选/滚动/高亮/图标/禁用态）/ `list_signal`（数据驱动动态列表）/ `reorder_list`（拖拽排序） |
 | 表格 | `table`（只读）/ `table_custom` / `table_editable` / `table_sortable` / `table_sortable_server`（服务端排序分页）/ `table_selectable`（多选） |
@@ -154,9 +158,9 @@ cargo clippy --all-targets                                  # 静态检查
 | 类别 | 示例 |
 |------|------|
 | **完整应用** | `settings`（设置窗：标题栏 + 图标侧栏 + 内容 + 底部操作栏 + 两个对话框）、`about`（关于页）、`ime_settings`（输入法设置场景）、`light_titlebar`（安装器风格的浅色标题栏） |
-| **控件与能力** | `fullshowcase`（控件总览，七个分页）、`theming`（TOML 主题 + 运行期换肤）、`image`（图片/SVG）、`animation`、`emoji`（彩色 emoji）、`caret`（文本光标四风格） |
+| **控件与能力** | `fullshowcase`（控件总览，七个分页）、`theming`（TOML 主题 + 运行期换肤）、`font_switch`（运行期换界面字体 + 字体查询）、`image`（图片/SVG）、`animation`、`emoji`（彩色 emoji）、`caret`（文本光标四风格） |
 | **数据展示** | `virtual_list`（虚拟滚动列表 + 表格）、`virtual_table_server`（服务端分页）、`table_pager`（分页操作栏）、`dyn_list`（数据驱动动态列表）、`list`、`dropdown`、`tabs_pill`、`toast`、`progress`、`multiline` |
-| **系统集成** | `tray`（系统托盘）、`hotkey`（全局热键 + 启动即隐藏）、`resident`（零窗口常驻托盘服务）、`multi_window`（子窗 + 跨窗共享状态）、`file_drop`、`frameless`（自定义标题栏 + 系统菜单）、`background_task`（跨线程更新）、`ime` |
+| **系统集成** | `tray`（系统托盘）、`hotkey`（全局热键 + 启动即隐藏）、`resident`（零窗口常驻托盘服务）、`multi_window`（子窗 + 跨窗共享状态）、`file_drop`、`frameless`（自定义标题栏 + 系统菜单）、`background_task`（跨线程更新）、`window_attrs`（指定位置 / 不进任务栏 / 不可缩放的无边框窗）、`ime` |
 
 另有 `phase0`–`phase5` 分阶段演示与 `perfprobe` 性能探针，供开发与回归比对使用。
 
@@ -170,14 +174,14 @@ cargo clippy --all-targets                                  # 静态检查
 核心层  Arena + Node 树 · Measure/Arrange/Paint 三阶段 · 事件分发
 渲染层  Canvas trait → tiny-skia 后端（纯 Rust，跨平台）
 文字层  TextEngine trait → DirectWrite（Windows）/ Core Text（macOS）/ fontconfig + ttf-parser（Linux）
-平台层  AppHandler trait → win32（窗口/WndProc/DIB 呈现）/ macos（NSWindow/NSView/CGImage 呈现）/ linux（X11/PutImage 呈现）
+平台层  AppHandler trait → win32（窗口/WndProc/DIB 呈现）/ macos（NSWindow/NSView/CGImage 呈现）/ linux（X11/PutImage 或 Wayland/wl_shm 呈现）
 ```
 
 关键设计：节点存于 **generational arena**（非 `Rc<RefCell>`），`Widget` trait 退化为纯内容、布局递归由 `Tree` 独占 `&mut self` 驱动 —— 从根上规避 Rust 借用冲突。文字用平台原生引擎在 tiny-skia 预乘缓冲上抗锯齿合成。平台缝合层映射见 [`docs/MACOS_PORTING.md`](docs/MACOS_PORTING.md) 与 [`docs/LINUX_PORTING.md`](docs/LINUX_PORTING.md)。
 
 ## 状态
 
-Windows 与 macOS 均已支持；Linux（X11）基本可用——托盘、文件拖出、零窗口常驻与窗口模式 GPU 尚未实现，见 [`docs/LINUX_PORTING.md`](docs/LINUX_PORTING.md)。MVP 控件集完成，持续完善中。
+Windows 与 macOS 均已支持；Linux 基本可用：X11 后端为默认，原生 Wayland 后端（输入法 text-input-v3、客户端标题栏、xdg-activation）已在 GNOME 42 上过真桌面回归清单，并在 Deepin 25 Treeland 上确认服务端装饰时不重复画标题栏，暂需 `WINDUI_BACKEND=wayland` 启用。托盘、文件拖出、零窗口常驻与窗口模式 GPU 尚未实现，原生 Wayland 下全局热键不可用，见 [`docs/LINUX_PORTING.md`](docs/LINUX_PORTING.md)。MVP 控件集完成，持续完善中。
 
 ## 文档
 
@@ -189,7 +193,7 @@ Windows 与 macOS 均已支持；Linux（X11）基本可用——托盘、文件
 | [`docs/DESIGN.md`](docs/DESIGN.md) | 架构设计与取舍 |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | 实施路线与验收 |
 | [`docs/MACOS_PORTING.md`](docs/MACOS_PORTING.md) | macOS 后端缝合层映射 |
-| [`docs/LINUX_PORTING.md`](docs/LINUX_PORTING.md) | Linux（X11）后端：依赖取舍、现状、无桌面验证方法 |
+| [`docs/LINUX_PORTING.md`](docs/LINUX_PORTING.md) | Linux（X11 / Wayland）后端：依赖取舍、现状、无桌面验证方法 |
 | [`AGENTS.md`](AGENTS.md) | 仓库开发约定（流程、陷阱速查） |
 
 ## 许可证

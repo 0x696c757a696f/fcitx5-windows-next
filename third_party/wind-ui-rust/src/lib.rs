@@ -7,6 +7,12 @@
 #![allow(clippy::too_many_arguments)]
 
 pub mod accessibility;
+/// 本 crate 的版本号（取自 `Cargo.toml`），供应用的「关于」页显示所用框架版本。
+///
+/// 下游读不到依赖的 `Cargo.toml`，`env!("CARGO_PKG_VERSION")` 在应用里展开的是应用自己的
+/// 版本，故由框架转发。
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod anim;
 pub mod app;
 pub mod core;
@@ -29,28 +35,31 @@ pub mod theme;
 pub mod ui;
 
 pub mod prelude {
+    pub use crate::anim::MotionLevel;
     pub use crate::accessibility::{
         AccessibilityAction, AccessibilityNode, AccessibilityNodeId, AccessibilityRole,
         AccessibilitySnapshot,
     };
     pub use crate::app::{App, HotkeyHandle, ThemeHandle, Window};
     pub use crate::event::{
-        window_open, window_state, CursorShape, Hotkey, HotkeyCtx, HotkeyOp, Key, MenuBarLink,
-        MenuItem, Mods, Preedit, ToastKind, WindowRequest, WindowState,
+        window_open, window_state, CursorShape, Hotkey, HotkeyCtx, HotkeyOp, ImeField, ImeHints,
+        Key, MenuBarLink, MenuItem, MenuRequest, Mods, Preedit, PreeditSpan, ToastKind,
+        UnderlineStyle, WindowRequest, WindowState,
     };
-    pub use crate::geometry::{Color, Insets, Point, Rect, Size};
+    pub use crate::geometry::{Color, Corners, Insets, Point, Rect, Size};
     pub use crate::i18n::{Initial, LocaleHandle, LocaleInfo, Locales};
     pub use crate::icon::{brand_icon, brand_icon_at, IconSource, WindowIcon};
     pub use crate::platform::{
-        PickDialog, Renderer, Tray, TrayCtx, TrayHandle, TrayMenuItem, TrayOp,
+        ActiveRenderer, ImeInterrupt, PickDialog, Renderer, Tray, TrayCtx, TrayHandle,
+        TrayMenuItem, TrayOp, WindowOutline,
     };
     pub use crate::render::image::{Fit, Image, ImageError, VisualState};
-    pub use crate::render::{Gradient, PixmapTarget, RenderTarget};
+    pub use crate::render::{Gradient, PixelSnap, PixmapTarget, RenderTarget};
     pub use crate::signal::{signal, Signal};
-    pub use crate::spec::{Align, Axis, Dimension};
+    pub use crate::spec::{Align, Axis, Dimension, ScrollAxis};
     pub use crate::style::{Brush, Edges, Role, Shadow, Style};
     pub use crate::sync::Sender;
-    pub use crate::theme::{Intent, Len, TableTheme, Theme};
+    pub use crate::theme::{Intent, Len, Palette, TableTheme, Theme};
     // 两个文案宏由 `#[macro_export]` 挂在 crate 根上。这里再导一次，让
     // `use windui::prelude::*;` 之后 `t!` / `tr!` 直接可用——否则下游还得单独写
     // 一行 `use windui::{t, tr};`，而 prelude 的全部意义就是省掉这种行。
@@ -62,9 +71,9 @@ pub mod prelude {
     pub use crate::ui::split::SplitOpts;
     pub use crate::ui::{
         default_presets, CaretStyle, CheckMenuItem, ColorPickerOpts, CommitMode, DropdownItem,
-        Element, Hsva, ImageContent, ImageView, Link, MenuBarEntry, Para, RichColor, RichDoc,
-        RowRequest, RowSource, SelectionScope, SortKey, SortOrder, SortStyle, SpanStyle,
-        TextContent, Truncate, WindowButton, WindowButtonKind, ROW_CACHE_SEGMENTS, ROW_CHUNK,
-        TABLE_ROW_H,
+        Element, Hsva, ImageContent, ImageView, Link, MenuBarEntry, Para, Presence, RichColor,
+        RichDoc, RowRequest, RowSource, SelectionScope, SortKey, SortOrder, SortStyle, SpanStyle,
+        TextContent, TextMark, Truncate, WindowButton, WindowButtonKind, ROW_CACHE_SEGMENTS,
+        ROW_CHUNK, TABLE_ROW_H,
     };
 }

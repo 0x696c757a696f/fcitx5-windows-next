@@ -1,8 +1,8 @@
 diff --git a/Cargo.toml b/Cargo.toml
-index 2dcf43e..8de25e1 100644
+index 37cdb6c..242fc19 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -88,6 +88,7 @@ windows = { version = "0.62", features = [
+@@ -94,6 +94,7 @@ windows = { version = "0.62", features = [
      "Win32_Graphics_DirectWrite",
      "Win32_Media",
      "Win32_UI_WindowsAndMessaging",
@@ -10,7 +10,7 @@ index 2dcf43e..8de25e1 100644
      "Win32_UI_Controls",
      "Win32_UI_HiDpi",
      "Win32_UI_Shell",
-@@ -104,6 +105,7 @@ windows = { version = "0.62", features = [
+@@ -112,6 +113,7 @@ windows = { version = "0.62", features = [
      "Win32_System_Threading",
      "Win32_Security",
      "Win32_System_Ole",
@@ -18,6 +18,14 @@ index 2dcf43e..8de25e1 100644
      # 拖出（DoDragDrop）：IDropSource 的按键位在 SystemServices，IDataObject 的
      # STGMEDIUM 挂在 Com_StructuredStorage 下。
      "Win32_System_SystemServices",
+@@ -307,3 +309,7 @@ strip = true
+ default-target = "x86_64-pc-windows-msvc"
+ targets = ["x86_64-pc-windows-msvc", "x86_64-apple-darwin", "aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
+ all-features = true
++
++# The vendored tree omits build.rs, which normally declares this cfg.
++[lints.rust]
++unexpected_cfgs = { level = "warn", check-cfg = ['cfg(gpu_backend)'] }
 diff --git a/examples/uia_smoke.rs b/examples/uia_smoke.rs
 new file mode 100644
 index 0000000..a3513e5
@@ -376,10 +384,10 @@ index 0000000..a3513e5
 +}
 diff --git a/src/accessibility.rs b/src/accessibility.rs
 new file mode 100644
-index 0000000..9ab7ca0
+index 0000000..64a0c94
 --- /dev/null
 +++ b/src/accessibility.rs
-@@ -0,0 +1,485 @@
+@@ -0,0 +1,487 @@
 +//! Platform-neutral accessibility projection for the real WindUI tree.
 +//!
 +//! This is deliberately a projection, not a second UI state tree: every node and every value
@@ -580,7 +588,8 @@ index 0000000..9ab7ca0
 +            name: root_node.widget.accessibility_name().unwrap_or_default(),
 +            description: root_node
 +                .tooltip
-+                .clone()
++                .as_ref()
++                .map(|tip| tip.resolve().into_owned())
 +                .or_else(|| root_node.widget.accessibility_description()),
 +            bounds: self.abs_bounds(root),
 +            enabled: root_node.own_enabled(),
@@ -637,7 +646,8 @@ index 0000000..9ab7ca0
 +                name: node.widget.accessibility_name().unwrap_or_default(),
 +                description: node
 +                    .tooltip
-+                    .clone()
++                    .as_ref()
++                    .map(|tip| tip.resolve().into_owned())
 +                    .or_else(|| node.widget.accessibility_description()),
 +                bounds: self.abs_bounds(id.node_id()),
 +                enabled,
@@ -866,7 +876,7 @@ index 0000000..9ab7ca0
 +    }
 +}
 diff --git a/src/app/mod.rs b/src/app/mod.rs
-index 7ced649..3670245 100644
+index 3ad0134..5cc25c7 100644
 --- a/src/app/mod.rs
 +++ b/src/app/mod.rs
 @@ -22,6 +22,9 @@ use std::time::Duration;
@@ -879,7 +889,7 @@ index 7ced649..3670245 100644
  use crate::core::{DamageReq, DispatchResult, EventCtx, NodeId, Tree};
  use crate::event::{
      CursorShape, Key, MouseButton, PointerEvent, PointerKind, WindowOp, WindowRequest,
-@@ -3196,6 +3199,44 @@ impl AppHandler for UiHost {
+@@ -3884,6 +3887,45 @@ impl AppHandler for UiHost {
          repaint
      }
  
@@ -921,10 +931,11 @@ index 7ced649..3670245 100644
 +        result
 +    }
 +
++
      fn wants_close(&self) -> bool {
          self.close
      }
-@@ -3507,6 +3548,58 @@ mod test_support {
+@@ -4326,6 +4368,59 @@ mod test_support {
  mod tests {
      use super::*;
  
@@ -980,18 +991,19 @@ index 7ced649..3670245 100644
 +        );
 +    }
 +
-     /// ESC 的处理次序：先收锚定浮层，再关对话框，最后才轮到关窗口。
-     ///
-     /// 这条排序必须端到端地测。`Tree::close_topmost_overlay` 自己的单测证明不了它——
++
+     /// 标题栏宿主不是窗口：渲染它不认领通道消费权（否则消费权持有者关窗后可能落到它身上，
+     /// 消息画进标题栏、开窗请求无人取走、只在悬停时才排空）。之后出帧的内容宿主照常认领。
+     #[test]
 diff --git a/src/core.rs b/src/core.rs
-index d8ea742..5bee133 100644
+index 895396f..f3d205a 100644
 --- a/src/core.rs
 +++ b/src/core.rs
-@@ -131,6 +131,18 @@ pub struct NodeId {
-     generation: u32,
- }
- 
-+impl NodeId {
+@@ -159,6 +159,16 @@ impl NodeId {
+     pub(crate) fn as_u64(self) -> u64 {
+         (u64::from(self.generation) << 32) | u64::from(self.index)
+     }
++
 +    /// Arena slot index. The generation remains part of the identity.
 +    pub fn index(self) -> u32 {
 +        self.index
@@ -1001,12 +1013,10 @@ index d8ea742..5bee133 100644
 +    pub fn generation(self) -> u32 {
 +        self.generation
 +    }
-+}
-+
+ }
+ 
  /// 紧凑格式 `#12`（复用过的槽位带代际：`#12g2`）。
- ///
- /// 手写而非 `derive`：派生格式是 `NodeId { index: 12, generation: 0 }`，一行诊断里塞三五个
-@@ -148,6 +160,18 @@ impl std::fmt::Debug for NodeId {
+@@ -178,6 +188,18 @@ impl std::fmt::Debug for NodeId {
  
  /// 纯内容控件接口。不持有也不访问树。
  pub trait Widget {
@@ -1026,7 +1036,7 @@ index d8ea742..5bee133 100644
      /// `text` 供需要测量文本的控件（如 Label）使用。
      fn measure(&self, _avail: Size, _style: &Style, _text: &mut dyn TextEngine) -> Size {
 diff --git a/src/lib.rs b/src/lib.rs
-index 39b0c73..645b222 100644
+index 9371b00..573ad86 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
 @@ -6,6 +6,7 @@
@@ -1034,25 +1044,25 @@ index 39b0c73..645b222 100644
  #![allow(clippy::too_many_arguments)]
  
 +pub mod accessibility;
- pub mod anim;
- pub mod app;
- pub mod core;
-@@ -27,6 +28,10 @@ pub mod theme;
- pub mod ui;
+ /// 本 crate 的版本号（取自 `Cargo.toml`），供应用的「关于」页显示所用框架版本。
+ ///
+ /// 下游读不到依赖的 `Cargo.toml`，`env!("CARGO_PKG_VERSION")` 在应用里展开的是应用自己的
+@@ -35,6 +36,10 @@ pub mod ui;
  
  pub mod prelude {
+     pub use crate::anim::MotionLevel;
 +    pub use crate::accessibility::{
 +        AccessibilityAction, AccessibilityNode, AccessibilityNodeId, AccessibilityRole,
 +        AccessibilitySnapshot,
 +    };
      pub use crate::app::{App, HotkeyHandle, ThemeHandle, Window};
      pub use crate::event::{
-         window_open, window_state, CursorShape, Hotkey, HotkeyCtx, HotkeyOp, Key, MenuBarLink,
+         window_open, window_state, CursorShape, Hotkey, HotkeyCtx, HotkeyOp, ImeField, ImeHints,
 diff --git a/src/platform/mod.rs b/src/platform/mod.rs
-index b409483..686085a 100644
+index 8f4eb44..d137e70 100644
 --- a/src/platform/mod.rs
 +++ b/src/platform/mod.rs
-@@ -674,6 +674,19 @@ pub trait AppHandler {
+@@ -887,6 +887,19 @@ pub trait AppHandler {
      fn on_key(&mut self, _ev: KeyEvent) -> bool {
          false
      }
@@ -1074,10 +1084,10 @@ index b409483..686085a 100644
          false
 diff --git a/src/platform/win32/accessibility.rs b/src/platform/win32/accessibility.rs
 new file mode 100644
-index 0000000..536dddd
+index 0000000..8cd98dd
 --- /dev/null
 +++ b/src/platform/win32/accessibility.rs
-@@ -0,0 +1,761 @@
+@@ -0,0 +1,762 @@
 +//! Native UI Automation provider for a WindUI HWND.
 +//!
 +//! The provider is intentionally a stateless COM façade.  It stores only the HWND and the
@@ -1087,7 +1097,7 @@ index 0000000..536dddd
 +
 +#![deny(unsafe_op_in_unsafe_fn)]
 +
-+use std::mem::{ManuallyDrop, zeroed};
++use std::mem::ManuallyDrop;
 +use std::ptr::null_mut;
 +
 +use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
@@ -1398,6 +1408,7 @@ index 0000000..536dddd
 +        .ok_or_else(no_element_error)
 +}
 +
++#[allow(non_upper_case_globals)]
 +fn neighbor(
 +    state: ProviderState,
 +    direction: NavigateDirection,
@@ -1840,48 +1851,35 @@ index 0000000..536dddd
 +    }
 +}
 diff --git a/src/platform/win32/mod.rs b/src/platform/win32/mod.rs
-index 4f7c0da..541befe 100644
+index 88a21b0..b568c4a 100644
 --- a/src/platform/win32/mod.rs
 +++ b/src/platform/win32/mod.rs
-@@ -9,6 +9,7 @@ pub(super) mod d2d;
- pub mod dragdrop;
+@@ -11,6 +11,7 @@ pub mod dragdrop;
  pub mod hotkey;
  pub mod tray;
+ mod tsf;
 +mod accessibility;
  
  use std::cell::{Cell, RefCell};
  use std::ffi::c_void;
-@@ -24,8 +25,9 @@ use windows::Win32::Graphics::Dwm::{
-     DWMWCP_ROUND,
- };
- use windows::Win32::Graphics::Gdi::{
--    BeginPaint, EndPaint, GetDC, GetDeviceCaps, GetMonitorInfoW, InvalidateRect, MonitorFromWindow,
--    ReleaseDC, ScreenToClient, SetDIBitsToDevice, UpdateWindow, BITMAPINFO, BITMAPINFOHEADER,
-+    BeginPaint, ClientToScreen, EndPaint, GetDC, GetDeviceCaps, GetMonitorInfoW, InvalidateRect,
-+    MonitorFromWindow, ReleaseDC, ScreenToClient, SetDIBitsToDevice, UpdateWindow, BITMAPINFO,
-+    BITMAPINFOHEADER,
-     BI_RGB, DEFAULT_CHARSET, DIB_RGB_COLORS, LOGFONTW, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-     PAINTSTRUCT, VREFRESH,
- };
-@@ -71,7 +73,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
-     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE,
-     WM_APP, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COPYDATA, WM_DESTROY, WM_DPICHANGED,
-     WM_DROPFILES, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_HOTKEY,
--    WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP,
-+    WM_GETOBJECT, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION, WM_KEYDOWN,
-+    WM_KEYUP,
-     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-     WM_NCCALCSIZE, WM_NCCREATE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCMBUTTONDOWN, WM_NCMOUSEMOVE,
-     WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-@@ -79,6 +82,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
-     WM_TIMER, WM_TOUCH, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
-     WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
+@@ -78,7 +79,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
+     SW_SHOWNORMAL, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE,
+     WM_ACTIVATE, WM_APP, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COPYDATA, WM_DESTROY,
+     WM_DPICHANGED, WM_DROPFILES, WM_DWMCOLORIZATIONCOLORCHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE,
+-    WM_GETMINMAXINFO, WM_HOTKEY, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_SETCONTEXT,
++    WM_GETMINMAXINFO, WM_GETOBJECT, WM_HOTKEY, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_SETCONTEXT,
+     WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+     WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCCREATE,
+     WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCMBUTTONDOWN, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN,
+@@ -87,6 +88,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
+     WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP,
+     WS_THICKFRAME,
  };
 +use windows::Win32::UI::Accessibility::UiaReturnRawElementProvider;
  // 窗口图标（`App::icon`）：HICON 由 tray 那份 RGBA 转换复用，销毁归 WindowState::drop。
  use windows::Win32::UI::WindowsAndMessaging::{
      DestroyIcon, SendMessageW, HICON, ICON_BIG, ICON_SMALL, SM_CXICON, SM_CXSMICON,
-@@ -1146,6 +1150,10 @@ const CLASS_NAME: PCWSTR = w!("WindUiWindowClass");
+@@ -1270,6 +1272,10 @@ const CLASS_NAME: PCWSTR = w!("WindUiWindowClass");
  /// 跨线程唤醒消息（WM_APP+2；WM_APP+1 已用于托盘）。
  const WM_APP_WAKE: u32 = WM_APP + 2;
  
@@ -1892,7 +1890,7 @@ index 4f7c0da..541befe 100644
  /// 跨线程唤醒句柄：仅持 HWND 数值，PostMessage 线程安全。
  struct Win32Wake {
      hwnd: isize,
-@@ -1783,6 +1791,15 @@ unsafe fn window_frame_interval_ms(hwnd: HWND) -> u128 {
+@@ -1979,6 +1985,15 @@ unsafe fn window_frame_interval_ms(hwnd: HWND) -> u128 {
      (1000 / fps.max(1)) as u128
  }
  
@@ -1908,7 +1906,7 @@ index 4f7c0da..541befe 100644
  unsafe extern "system" fn wnd_proc(
      hwnd: HWND,
      msg: u32,
-@@ -1803,6 +1820,41 @@ unsafe extern "system" fn wnd_proc(
+@@ -1997,6 +2012,41 @@ unsafe extern "system" fn wnd_proc(
              }
              DefWindowProcW(hwnd, msg, wparam, lparam)
          }
@@ -1950,13 +1948,19 @@ index 4f7c0da..541befe 100644
          WM_PAINT => {
              if let Some(state) = state_from(hwnd) {
                  state.paint(hwnd);
-@@ -3749,7 +3801,18 @@ mod live_windows_tests {
+@@ -4698,7 +4748,7 @@ mod live_windows_tests {
  
  #[cfg(test)]
  mod tests {
--    use super::{accumulate_char, ClickTracker};
-+    use super::{accumulate_char, is_uia_root_object, ClickTracker, LPARAM};
-+
+-    use super::{accumulate_char, frame_size_for_client, ClickTracker};
++    use super::{accumulate_char, frame_size_for_client, is_uia_root_object, ClickTracker, LPARAM};
+ 
+     /// 无边框窗外框即客户区（按缩放取整）；带框窗口外框严格更大——差值就是无边框窗曾经
+     /// 多出来的那一圈。
+@@ -4723,6 +4773,17 @@ mod tests {
+         }
+     }
+ 
 +    #[test]
 +    fn only_the_uia_root_object_id_takes_the_accessibility_path() {
 +        // The UIA root request is the single object id that may create a raw provider.
@@ -1967,14 +1971,15 @@ index 4f7c0da..541befe 100644
 +        assert!(!is_uia_root_object(LPARAM(-4)));
 +        assert!(!is_uia_root_object(LPARAM(0)));
 +    }
- 
++
      #[test]
      fn bmp_char_passes_through() {
+         let mut pend = None;
 diff --git a/src/platform/win32/tray.rs b/src/platform/win32/tray.rs
-index 21cca39..df977df 100644
+index 5187cff..c35e2c2 100644
 --- a/src/platform/win32/tray.rs
 +++ b/src/platform/win32/tray.rs
-@@ -467,11 +467,16 @@ mod tests {
+@@ -501,11 +501,16 @@ mod tests {
              HICON(std::ptr::null_mut()),
              "提示",
          );
@@ -1996,7 +2001,7 @@ index 21cca39..df977df 100644
              .iter()
              .take_while(|c| **c != 0)
              .map(|c| char::from_u32(*c as u32).unwrap())
-@@ -491,9 +496,10 @@ mod tests {
+@@ -525,9 +530,10 @@ mod tests {
              HICON(std::ptr::null_mut()),
              &long,
          );
@@ -2011,10 +2016,10 @@ index 21cca39..df977df 100644
  
      /// 注册成功时按消息号精确匹配。
 diff --git a/src/ui/mod.rs b/src/ui/mod.rs
-index 7fc9436..9f5f3d1 100644
+index b862588..6cd0e0d 100644
 --- a/src/ui/mod.rs
 +++ b/src/ui/mod.rs
-@@ -204,6 +204,12 @@ impl Label {
+@@ -172,6 +172,12 @@ impl Label {
  }
  
  impl Widget for Label {
@@ -2027,10 +2032,10 @@ index 7fc9436..9f5f3d1 100644
      fn measure(&self, avail: Size, style: &Style, text: &mut dyn TextEngine) -> Size {
          // 绑了信号时这里现取当前值——文案变化因此**自然改变测量宽度**，无需控件自己
          // 比对版本号：写信号已经把本帧顶成整窗帧（见 `Signal` 的失效通道），而整窗帧
-@@ -428,6 +434,12 @@ impl Button {
- }
- 
- impl Widget for Button {
+@@ -420,6 +426,12 @@ impl Widget for Button {
+         let th = crate::theme::current();
+         Some(th.button.corner(&th.metrics))
+     }
 +    fn accessibility_role(&self) -> Option<crate::accessibility::AccessibilityRole> {
 +        Some(crate::accessibility::AccessibilityRole::Button)
 +    }

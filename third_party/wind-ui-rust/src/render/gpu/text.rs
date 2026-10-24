@@ -121,7 +121,7 @@ impl RunKey {
     ) -> Self {
         Self {
             text: text.to_string(),
-            family: ts.family.map(|f| f.to_string()),
+            family: ts.family_or_default().map(|f| f.to_string()),
             size: ts.size.to_bits(),
             weight: ts.weight,
             line_height: ts.line_height.map(f32::to_bits).unwrap_or(u32::MAX),
@@ -346,6 +346,20 @@ impl<K: std::hash::Hash + Eq, V> LruCache<K, V> {
         self.evict();
         self.report();
         value
+    }
+
+    /// 移除一条（不计入逐出统计）。返回是否存在。
+    pub(super) fn remove(&mut self, key: &K) -> bool {
+        let Some(old) = self.map.remove(key) else {
+            return false;
+        };
+        self.order.remove(&old.stamp);
+        self.bytes -= old.bytes;
+        true
+    }
+
+    pub(super) fn contains(&self, key: &K) -> bool {
+        self.map.contains_key(key)
     }
 
     /// 逐出最久未用的，直到两条预算都满足。
@@ -1292,6 +1306,28 @@ mod tests {
 
     fn key(text: &str, size: f32, scale: f32) -> RunKey {
         RunKey::new(text, &TextStyle::new(size), Align::Start, 100.0, scale)
+    }
+
+    /// 字面量 `family: None` 的键要带上主题默认字族：只存 `None` 的话换了默认字族键不变，
+    /// 缓存继续交出旧字体的字形。
+    #[test]
+    fn key_follows_the_theme_default_family() {
+        use crate::theme::{set_current, Theme};
+        let set = |f: &str| {
+            set_current(std::rc::Rc::new(Theme {
+                font_family: Some(f.into()),
+                ..Theme::default()
+            }))
+        };
+        let literal = TextStyle {
+            family: None,
+            ..TextStyle::new(14.0)
+        };
+        set("A");
+        let a = RunKey::new("hi", &literal, Align::Start, 100.0, 1.0);
+        set("B");
+        let b = RunKey::new("hi", &literal, Align::Start, 100.0, 1.0);
+        assert_ne!(a, b);
     }
 
     /// 键含全部影响排版的属性：任一项不同即不同键。漏一项的症状是「改了属性画面不变」，

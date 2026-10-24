@@ -4,7 +4,7 @@
 #[cfg(windows)]
 pub mod dwrite;
 #[cfg(windows)]
-pub use dwrite::{register_private_use_font, DWriteEngine};
+pub use dwrite::{family_available, font_coverage, register_private_use_font, DWriteEngine};
 
 #[cfg(target_os = "macos")]
 pub mod coretext;
@@ -31,6 +31,8 @@ use crate::spec::Align;
 
 /// 默认字重（DirectWrite NORMAL = 400）。
 pub const WEIGHT_NORMAL: u16 = 400;
+/// 半粗字重（DirectWrite 数值 600）：卡片 / 对话框标题等需要压过正文、又不必全粗的文字。
+pub const WEIGHT_SEMIBOLD: u16 = 600;
 
 /// 一次文字排版所需的全部字体属性。
 ///
@@ -46,7 +48,7 @@ pub const WEIGHT_NORMAL: u16 = 400;
 ///
 /// 收进一个结构体后，新增属性只是加一个字段，签名不动、调用点不动；对控件代码
 /// 反而更短——`&TextStyle::of(style)` 比原先的 `style.font_family.as_deref(),
-/// style.font_size` 少写一截，且字重与行高自动随行，不会漏传。
+/// style.font_size()` 少写一截，且字重与行高自动随行，不会漏传。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextStyle<'a> {
     /// 字族名。`None` 用引擎默认。
@@ -68,7 +70,7 @@ impl<'a> TextStyle<'a> {
     /// 只指定字号，其余取默认。用于菜单、徽标等不随控件 `Style` 走的固定字号处。
     pub fn new(size: f32) -> Self {
         Self {
-            family: None,
+            family: default_family(),
             size,
             weight: WEIGHT_NORMAL,
             italic: false,
@@ -79,12 +81,22 @@ impl<'a> TextStyle<'a> {
     /// 从控件 `Style` 提取文字属性。控件绘制路径一律用它。
     pub fn of(style: &'a crate::style::Style) -> Self {
         Self {
-            family: style.font_family.as_deref(),
-            size: style.font_size,
+            family: or_default(style.font_family.as_deref()),
+            size: style.font_size(),
             weight: style.font_weight,
             italic: style.font_italic,
             line_height: style.line_height,
         }
+    }
+
+    /// 实际要用的字族：自己设了用自己的，否则用主题默认字族（[`default_family`]）；
+    /// 两者都没有时为 `None`，由引擎落到平台默认。
+    ///
+    /// 引擎与缓存一律经它取字族，而不是直接读 `family`——`TextStyle` 字段公开，字面量
+    /// 构造的 `family: None` 绕过了 `new` / `of`。拿 `None` 本身做缓存键的话，换了默认字族
+    /// 键却没变，缓存会继续交出旧字体的宽度与字形，不报错也看不出来。
+    pub(crate) fn family_or_default(&self) -> Option<&'a str> {
+        or_default(self.family)
     }
 
     /// 换一个字号，其余不变。用于「比正文小两号」这类相对尺寸。
@@ -105,6 +117,42 @@ impl<'a> TextStyle<'a> {
     /// 行高解析为绝对像素；未指定行高时返回 `None`，由引擎沿用字体自带行距。
     pub fn line_height_px(&self) -> Option<f32> {
         self.line_height.map(|m| self.size * m)
+    }
+}
+
+/// 当前主题的默认字族（[`Theme::font_family`](crate::theme::Theme::font_family)），
+/// 未设时为 `None`（引擎落到平台默认）。
+///
+/// 返回 `&'static str` 是为了能直接填进任何生命周期的 `TextStyle`：名字在首次出现时
+/// 驻留（leak）一份，此后同名复用——换来换去也只是几个短字符串，不随调用次数增长。
+pub(crate) fn default_family() -> Option<&'static str> {
+    thread_local! {
+        static INTERNED: std::cell::RefCell<std::collections::HashSet<&'static str>> =
+            std::cell::RefCell::new(std::collections::HashSet::new());
+    }
+    let theme = crate::theme::current();
+    let name = theme.font_family.as_deref()?;
+    Some(INTERNED.with(|set| {
+        let mut set = set.borrow_mut();
+        match set.get(name) {
+            Some(&s) => s,
+            None => {
+                let s: &'static str = Box::leak(name.into());
+                set.insert(s);
+                s
+            }
+        }
+    }))
+}
+
+/// `family` 有值用它，没有用主题默认字族。
+///
+/// 不写成 `family.or_else(default_family)`：函数项的返回类型 `Option<&'static str>` 不会
+/// 协变成 `Option<&'a str>`，借用检查会把 `'a` 硬推成 `'static`。
+pub(crate) fn or_default(family: Option<&str>) -> Option<&str> {
+    match family {
+        Some(f) => Some(f),
+        None => default_family(),
     }
 }
 
@@ -142,11 +190,24 @@ pub trait TextEngine {
     }
     /// 文字尺寸。`max_width=None` 单行不换行；`Some(w)` 在宽度 w 内换行并返回多行尺寸。
     fn measure(&mut self, text: &str, ts: &TextStyle, max_width: Option<f32>) -> Size;
+    /// `text` 单行排版的宽度（逻辑单位，含尾随空白，**不取整**），与 `draw` 同一次排版。
+    ///
+    /// `measure` 的 `Size` 是向上取整的整数，每个字符串最多多出 1 逻辑像素；拿它逐字
+    /// 建宽度表，误差按一行的字数累积，折行、光标、点击落位整体偏移。自绘排版要的是
+    /// 「渲染真正用的那个 advance」，就用这个。物理宽 = 本值 × scale，不损失精度。
+    ///
+    /// `text` 不应含换行：这是单行量，各引擎对 `\n` 的处理不一致。
+    ///
+    /// 默认实现由 `measure` 的整数宽换算——**这正是它要避免的误差**，只给 Null 一类
+    /// 测试引擎兜底；有真实文字栈的引擎必须覆盖（三平台引擎都已覆盖，有契约测试）。
+    fn advance(&mut self, text: &str, ts: &TextStyle) -> f32 {
+        self.measure(text, ts, None).w as f32
+    }
     /// `text` 按 `ts` 单行排版后的基线度量。传入实际文本（而非样本串）是有意的：
     /// 字体回退可能改变行度量，按实际内容询问才与 `draw` 同源。
     ///
     /// 默认实现按「基线 = 行高 × 0.8」近似——与 DirectWrite UNIFORM 行距的基线
-    /// 约定一致，供 Null 引擎与尚未实现精确度量的引擎（Core Text 待接）使用。
+    /// 约定一致，只给 Null 一类测试引擎兜底；三平台引擎都已覆盖为精确值。
     fn line_metrics(&mut self, text: &str, ts: &TextStyle) -> LineMetrics {
         let h = self.measure(text, ts, None).h as f32;
         LineMetrics {
@@ -451,6 +512,63 @@ pub(crate) fn block_offset_y(rect_h: f32, text_h: f32) -> f32 {
     (rect_h - text_h).max(0.0) / 2.0
 }
 
+/// 一款字体覆盖的 Unicode 码位，由 `text::font_coverage` 取得（目前仅 Windows）。
+///
+/// 对应的是**名字本身指向的那一款字面**：调用方另设的 `font_weight` / 斜体会让渲染换到
+/// 同族另一款字面，其覆盖范围可能不同。
+///
+/// 内部是**有序、不重叠、不相邻**的闭区间表：查询二分，O(log 区间数)；一款完整的 CJK
+/// 字体通常几百段，整张表几 KB。取一次存起来，排版时只做本地查询。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FontCoverage {
+    ranges: Vec<std::ops::RangeInclusive<u32>>,
+}
+
+impl FontCoverage {
+    /// 由任意顺序、可重叠的区间构造；内部排序并合并。
+    pub fn from_ranges(ranges: impl IntoIterator<Item = std::ops::RangeInclusive<u32>>) -> Self {
+        let mut v: Vec<_> = ranges.into_iter().filter(|r| !r.is_empty()).collect();
+        v.sort_by_key(|r| *r.start());
+        let mut out: Vec<std::ops::RangeInclusive<u32>> = Vec::with_capacity(v.len());
+        for r in v {
+            match out.last_mut() {
+                // 重叠或首尾相接（end + 1 == start）都并成一段，保持「不相邻」的不变式。
+                Some(last) if *r.start() <= last.end().saturating_add(1) => {
+                    let end = (*last.end()).max(*r.end());
+                    *last = *last.start()..=end;
+                }
+                _ => out.push(r),
+            }
+        }
+        Self { ranges: out }
+    }
+
+    /// 覆盖区间表：有序、不重叠、不相邻。
+    pub fn ranges(&self) -> &[std::ops::RangeInclusive<u32>] {
+        &self.ranges
+    }
+
+    /// 这款字体有没有 `c` 的字形。
+    pub fn contains(&self, c: char) -> bool {
+        let c = c as u32;
+        // 第一个 end >= c 的区间；它的 start <= c 才算落在里面。
+        let i = self.ranges.partition_point(|r| *r.end() < c);
+        self.ranges.get(i).is_some_and(|r| *r.start() <= c)
+    }
+
+    /// `text` 里这款字体画不出来的字符，去重、按首次出现的顺序。
+    ///
+    /// 逐个 `char`（Unicode 标量）判定。异体字选择符（`U+FE00..`、`U+E0100..`）这类附着在
+    /// 前一个字上的码位也会被单独判定，分段时须让它们跟随基字，不要单独切出去。
+    pub fn missing(&self, text: &str) -> Vec<char> {
+        // 去重用集合：整章正文对一款西文字体查，缺的不同汉字可达几千个，线性判重是平方级。
+        let mut seen = std::collections::HashSet::new();
+        text.chars()
+            .filter(|&c| !self.contains(c) && seen.insert(c))
+            .collect()
+    }
+}
+
 /// 纵向定位契约的跨引擎测试：Windows 跑 DirectWrite、macOS 跑 Core Text，
 /// **同一份断言**。两边的实现细节可以不同，可观察的纵向行为不许不同。
 #[cfg(test)]
@@ -585,5 +703,160 @@ mod hard_break_contract {
         let one = measure("甲", None);
         assert_eq!(measure("甲\n", None).h, one.h * 2, "尾随换行也占一行");
         assert_eq!(measure("甲\n\n乙", None).h, one.h * 3, "中间空行同样占位");
+    }
+}
+
+/// `advance` 的跨引擎契约：当前平台的真实引擎跑**同一份断言**。
+///
+/// 默认实现（由 `measure` 的整数宽换算）会让它全线失败——这正是要守住的：引擎漏了覆盖，
+/// 编译照过、界面照常，只有下游拿它逐字建宽度表时才发现折行与光标整体偏移。
+#[cfg(test)]
+mod advance_contract {
+    use super::*;
+
+    #[test]
+    fn platform_engine_advance_is_unrounded_and_additive() {
+        for scale in [1.0f32, 1.25] {
+            let mut e = PlatformTextEngine::new();
+            e.set_scale(scale);
+            let ts = TextStyle::new(13.0);
+            let one_w = e.measure("i", &ts, None).w;
+            let one_a = e.advance("i", &ts);
+            let ten = "iiiiiiiiii";
+            let ten_w = e.measure(ten, &ts, None).w;
+            let ten_a = e.advance(ten, &ts);
+            // 前提：整数宽逐字累加确实会漂（否则这条测不出取整损失）。
+            assert!(
+                one_w * 10 - ten_w >= 2,
+                "scale={scale}：前提，measure 逐字累加应明显偏宽（{} vs {ten_w}）",
+                one_w * 10
+            );
+            assert!(
+                (one_a * 10.0 - ten_a).abs() < 0.5,
+                "scale={scale}：advance 逐字累加应与整串一致（{} vs {ten_a}）",
+                one_a * 10.0
+            );
+            for (a, w) in [(one_a, one_w), (ten_a, ten_w)] {
+                assert!(
+                    a <= w as f32 && a > w as f32 - 1.0,
+                    "scale={scale}：advance {a} 应落在 measure 宽 {w} 往下 1 像素内"
+                );
+            }
+            assert_eq!(e.advance("", &ts), 0.0);
+        }
+    }
+
+    /// 画布上的同名转发：控件在 paint 里只拿得到画布。
+    #[test]
+    fn skia_canvas_forwards_text_advance_to_engine() {
+        use crate::render::{Canvas, SkiaCanvas};
+        let mut e = PlatformTextEngine::new();
+        e.set_scale(1.25);
+        let ts = TextStyle::new(13.0);
+        let want = e.advance("Hello, i", &ts);
+        let mut pm = Pixmap::new(4, 4).unwrap();
+        let mut c = SkiaCanvas::with_text(&mut pm, &mut e, 1.25);
+        assert_eq!(c.text_advance("Hello, i", &ts), want);
+    }
+}
+
+#[cfg(test)]
+mod font_coverage_tests {
+    use super::FontCoverage;
+
+    #[test]
+    fn overlapping_and_adjacent_ranges_merge() {
+        let c = FontCoverage::from_ranges([0x60..=0x7A, 0x41..=0x5A, 0x5B..=0x60, 0x100..=0x17F]);
+        assert_eq!(c.ranges(), &[0x41..=0x7A, 0x100..=0x17F]);
+    }
+
+    #[test]
+    fn contains_checks_both_ends_and_gaps() {
+        let c = FontCoverage::from_ranges([0x41..=0x5A, 0x4E00..=0x9FFF, 0x20000..=0x2A6DF]);
+        for ch in ['A', 'Z', '中', '\u{20000}', '\u{2A6DF}'] {
+            assert!(c.contains(ch), "{ch:?} 在覆盖区间内");
+        }
+        for ch in ['@', '[', 'a', '\u{3400}', '\u{2A6E0}', '\u{1F600}'] {
+            assert!(!c.contains(ch), "{ch:?} 不在覆盖区间内");
+        }
+    }
+
+    #[test]
+    fn empty_coverage_contains_nothing() {
+        let c = FontCoverage::from_ranges([]);
+        assert!(!c.contains('A'));
+        assert_eq!(c.missing("AA"), vec!['A']);
+    }
+
+    #[test]
+    fn missing_dedups_in_first_seen_order() {
+        let c = FontCoverage::from_ranges(std::iter::once(0x41..=0x5A));
+        assert_eq!(c.missing("AbcAb\u{20000}c"), vec!['b', 'c', '\u{20000}']);
+        assert!(c.missing("ABC").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod default_family_tests {
+    use super::{default_family, TextStyle};
+    use crate::theme::{set_current, Theme};
+    use std::rc::Rc;
+
+    /// 主题线程局部；Rust 测试各跑各的线程，互不影响。
+    fn with_default(name: Option<&str>) {
+        set_current(Rc::new(Theme {
+            font_family: name.map(str::to_string),
+            ..Theme::default()
+        }));
+    }
+
+    #[test]
+    fn unset_default_leaves_family_empty() {
+        with_default(None);
+        assert_eq!(TextStyle::new(12.0).family, None, "未设时交引擎落平台默认");
+    }
+
+    /// 框架自绘（菜单、tooltip、toast）都用 `TextStyle::new`，它跟着主题默认字族走就全跟上了。
+    #[test]
+    fn new_and_of_pick_up_the_theme_default() {
+        with_default(Some("界面字体"));
+        assert_eq!(TextStyle::new(12.0).family, Some("界面字体"));
+        let plain = crate::style::Style::default();
+        assert_eq!(TextStyle::of(&plain).family, Some("界面字体"));
+    }
+
+    /// 兜底而非覆盖：显式设过的节点照旧用自己的。
+    #[test]
+    fn explicit_family_wins_over_the_default() {
+        with_default(Some("界面字体"));
+        let style = crate::style::Style {
+            font_family: Some("正文字体".into()),
+            ..Default::default()
+        };
+        assert_eq!(TextStyle::of(&style).family, Some("正文字体"));
+    }
+
+    /// 字面量构造绕过了 `new`/`of`，引擎经 `family_or_default` 补上默认字族。
+    #[test]
+    fn literal_none_resolves_through_family_or_default() {
+        with_default(Some("界面字体"));
+        let ts = TextStyle {
+            family: None,
+            ..TextStyle::new(12.0)
+        };
+        assert_eq!(ts.family_or_default(), Some("界面字体"));
+        with_default(None);
+        assert_eq!(ts.family_or_default(), None);
+    }
+
+    /// 名字驻留：同名复用同一块内存，反复切换不随调用次数泄漏。
+    #[test]
+    fn default_family_is_interned() {
+        with_default(Some("界面字体"));
+        let a = default_family().unwrap();
+        with_default(Some("别的"));
+        with_default(Some("界面字体"));
+        let b = default_family().unwrap();
+        assert!(std::ptr::eq(a, b), "同名应复用同一份驻留字符串");
     }
 }
