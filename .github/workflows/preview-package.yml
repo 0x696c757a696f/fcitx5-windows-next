@@ -127,6 +127,16 @@ jobs:
           # sccache; start its server once so they do not race to spawn it.
           & ./out/toolchains/fast/sccache-0.17.0/sccache-v0.17.0-x86_64-pc-windows-msvc/sccache.exe --start-server
           ./tools/bootstrap-fcitx.ps1
+          # The package gate runs the real Fcitx acceptance against the
+          # official-rebaseline roots; reuse the tree just built for them.
+          foreach ($pair in @(@('official-rebaseline-sources', 'sources'),
+                              @('official-rebaseline-stage', 'stage/fcitx5'))) {
+            $link = Join-Path 'out' $pair[0]
+            if (-not (Test-Path -LiteralPath $link)) {
+              New-Item -ItemType Junction -Path $link `
+                -Target (Resolve-Path (Join-Path 'out' $pair[1])).Path | Out-Null
+            }
+          }
 
       - name: Build, test, and stage the unsigned package
         run: ./tools/verify-product.ps1 package -Version 0.1.0 -Channel nightly
