@@ -123,6 +123,9 @@ jobs:
           # The first bootstrap verifies and unpacks the MSYS2 archive with
           # Git for Windows' xz and gpg, which are not on PATH by default.
           $env:PATH = "$env:PATH;C:\Program Files\Git\usr\bin"
+          # native-engine runs several cargo builds in parallel through this
+          # sccache; start its server once so they do not race to spawn it.
+          & ./out/toolchains/fast/sccache-0.17.0/sccache-v0.17.0-x86_64-pc-windows-msvc/sccache.exe --start-server
           ./tools/bootstrap-fcitx.ps1
 
       - name: Build, test, and stage the unsigned package
