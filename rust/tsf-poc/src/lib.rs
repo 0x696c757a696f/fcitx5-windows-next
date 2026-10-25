@@ -1854,9 +1854,7 @@ impl EngineClient {
             self.disconnect();
             return None;
         };
-        let Some(response_bytes) = self.transact(request, deadline) else {
-            return None;
-        };
+        let response_bytes = self.transact(request, deadline)?;
         let Some(frame) = protocol::decode_frame(&response_bytes) else {
             self.disconnect();
             return None;
@@ -3011,7 +3009,7 @@ impl Fcitx5TsfService {
         // SAFETY: The VARIANT contains VT_UNKNOWN, so reading the `punkVal` arm
         // is valid. Clone adds a Rust-owned COM reference before VariantClear
         // releases the original VARIANT reference.
-        let unknown = unsafe { (&*variant.Anonymous.Anonymous.Anonymous.punkVal).clone() };
+        let unknown = unsafe { (*variant.Anonymous.Anonymous.Anonymous.punkVal).clone() };
         // SAFETY: VARIANT was initialized by COM and is not otherwise moved.
         let _ = unsafe { VariantClear(&mut variant) };
         let Some(unknown) = unknown else {

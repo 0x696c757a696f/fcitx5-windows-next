@@ -107,25 +107,20 @@ mod candidate_focus_watch_tests {
     #[test]
     fn validity_follows_captured_target_and_interaction_contract() {
         let mut state = CandidateFocusWatchState::default();
-        assert_eq!(state.is_valid(1234, false), false, "zero target is invalid");
-        assert_eq!(
+        assert!(!state.is_valid(1234, false), "zero target is invalid");
+        assert!(
             state.is_valid(1234, true),
-            true,
             "interaction test is always valid"
         );
         state.target_process_id = 1234;
-        assert_eq!(state.is_valid(1234, false), true);
-        assert_eq!(state.is_valid(5678, false), false);
+        assert!(state.is_valid(1234, false));
+        assert!(!state.is_valid(5678, false));
         state.target_process_id = 0;
-        assert_eq!(
-            state.should_dismiss(0, true),
-            true,
-            "broadcast pid 0 dismisses"
-        );
+        assert!(state.should_dismiss(0, true), "broadcast pid 0 dismisses");
         state.target_process_id = 1234;
-        assert_eq!(state.should_dismiss(1234, true), true);
-        assert_eq!(state.should_dismiss(5678, true), false);
-        assert_eq!(state.should_dismiss(1234, false), false);
+        assert!(state.should_dismiss(1234, true));
+        assert!(!state.should_dismiss(5678, true));
+        assert!(!state.should_dismiss(1234, false));
     }
 }
 
@@ -136,18 +131,14 @@ mod candidate_click_guard_tests {
     #[test]
     fn begin_rejects_concurrent_clicks_and_timer_expires_the_guard() {
         let mut state = CandidateClickGuardState::default();
-        assert_eq!(state.begin(), true);
-        assert_eq!(
-            state.begin(),
-            false,
-            "second click during flight is rejected"
-        );
-        assert_eq!(state.expire(), true, "timer expiry releases the guard");
-        assert_eq!(state.expire(), false, "expiry without in-flight click");
-        assert_eq!(state.begin(), true, "clear guard accepts new clicks");
+        assert!(state.begin());
+        assert!(!state.begin(), "second click during flight is rejected");
+        assert!(state.expire(), "timer expiry releases the guard");
+        assert!(!state.expire(), "expiry without in-flight click");
+        assert!(state.begin(), "clear guard accepts new clicks");
         state.clear();
-        assert_eq!(state.expire(), false);
-        assert_eq!(state.begin(), true);
+        assert!(!state.expire());
+        assert!(state.begin());
     }
 }
 

@@ -1300,6 +1300,37 @@ if(BUILD_TESTING)
       set_tests_properties(
         rust-candidate-core-fuzz-smoke PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endif()
+    add_test(
+      NAME rust-candidate-core-unit
+      COMMAND
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+        "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --lib --bin fcitx5-ui
+        --target "${FCITX_RUST_TARGET}")
+    set_tests_properties(
+      rust-candidate-core-unit PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(
+      NAME rust-safety-policy
+      COMMAND
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+        "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-measurement-core --test
+        rust_safety_policy --target "${FCITX_RUST_TARGET}")
+    set_tests_properties(
+      rust-safety-policy PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(FCITX_RUST_TARGET STREQUAL "x86_64-pc-windows-msvc")
+      add_test(
+        NAME rust-clippy
+        COMMAND
+          "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+          "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
+          "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
+          "${FCITX_CARGO_EXECUTABLE}" clippy --locked --manifest-path
+          "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" --workspace --all-targets --target
+          "${FCITX_RUST_TARGET}" -- -D warnings)
+      set_tests_properties(
+        rust-clippy PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
   else()
     message(STATUS "Cargo was not found; Rust R1 package-core tests are not registered.")
   endif()

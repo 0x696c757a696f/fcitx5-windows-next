@@ -80,11 +80,7 @@ fn candidate_fixture(
 
 fn deterministic_measure(value: &str, font_size: f32) -> (f32, f32) {
     let clusters = grapheme_clusters(value);
-    let width_factor = if value.chars().all(|character| character.is_ascii()) {
-        0.58
-    } else {
-        1.0
-    };
+    let width_factor = if value.is_ascii() { 0.58 } else { 1.0 };
     (
         clusters.len() as f32 * font_size * width_factor,
         font_size * 1.25,

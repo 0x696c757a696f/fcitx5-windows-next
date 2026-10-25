@@ -37,7 +37,7 @@ mod tests {
 
     #[test]
     fn candidate_shape_tokens_keep_the_selection_as_an_inset_pill() {
-        assert!(WECHAT_WINDOW_RADIUS_DIP > WECHAT_SELECTION_RADIUS_DIP);
-        assert!(WECHAT_SELECTION_RADIUS_DIP > 0.0);
+        const { assert!(WECHAT_WINDOW_RADIUS_DIP > WECHAT_SELECTION_RADIUS_DIP) };
+        const { assert!(WECHAT_SELECTION_RADIUS_DIP > 0.0) };
     }
 }

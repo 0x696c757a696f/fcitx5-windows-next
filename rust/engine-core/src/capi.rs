@@ -1475,9 +1475,7 @@ pub unsafe extern "C" fn fcitx5_engine_core_snapshot_store_put_flat(
         // SAFETY: caller guarantees `snapshot` points to one initialized
         // flat snapshot for the duration of the call.
         let flat = unsafe { &*snapshot };
-        let Some(snapshot) = snapshot_from_flat(flat) else {
-            return None;
-        };
+        let snapshot = snapshot_from_flat(flat)?;
         // SAFETY: caller guarantees the handle came from `ledger_new`.
         let ledger = unsafe { &mut *(ledger as *mut ContextLedger) };
         ledger.snapshot_put(key, revision, snapshot);
@@ -1596,8 +1594,10 @@ fn snapshot_from_flat(
     })
 }
 
+/// # Safety
+///
+/// A non-null `out_offset` must be aligned, writable, and non-aliasing for this synchronous call.
 #[unsafe(no_mangle)]
-// SAFETY: non-null `out_offset` is aligned, writable, and non-aliasing for this synchronous call.
 pub unsafe extern "C" fn fcitx5_engine_core_scroll_label_offset(
     vertical: i32,
     cursor: u32,
