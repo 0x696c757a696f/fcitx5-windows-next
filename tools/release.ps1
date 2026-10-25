@@ -62,8 +62,11 @@ foreach ($path in $peFiles) {
   -Version $Version -Channel $Channel -ReleaseSequence $PluginReleaseSequence -StageRoot $stage `
   -TrustedKeyring $TrustedKeyring -SigningKey $PluginSigningKey
 
+$runtimeParent = Join-Path $stage 'runtime'
 $files = @(Get-ChildItem -LiteralPath $stage -File -Recurse |
-  Where-Object Name -ne 'manifest.json' | Sort-Object FullName | ForEach-Object {
+  Where-Object { $_.Name -ne 'manifest.json' -and
+    -not $_.FullName.StartsWith($runtimeParent + '\', [StringComparison]::OrdinalIgnoreCase) } |
+  Sort-Object FullName | ForEach-Object {
     [ordered]@{ path = [IO.Path]::GetRelativePath($stage, $_.FullName).Replace('\', '/');
       size = $_.Length; sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
   })
@@ -74,7 +77,13 @@ $artifacts = Join-Path $outRoot 'release-artifacts'
 New-Item -ItemType Directory -Force -Path $artifacts | Out-Null
 $suffix = if ($Channel -eq 'stable') { '' } else { "-$Channel" }
 $portable = Join-Path $artifacts "fcitx5-windows-$Version$suffix-portable.zip"
-Compress-Archive -Path $stage -DestinationPath $portable -CompressionLevel Optimal -Force
+$heldRuntime = Join-Path (Split-Path -Parent $stage) 'runtime-held'
+Move-Item -LiteralPath $runtimeParent -Destination $heldRuntime
+try {
+  Compress-Archive -Path $stage -DestinationPath $portable -CompressionLevel Optimal -Force
+} finally {
+  Move-Item -LiteralPath $heldRuntime -Destination $runtimeParent
+}
 & (Join-Path $PSScriptRoot 'prepare-package-toolchains.ps1')
 $iscc = Join-Path $repoRoot 'out/toolchains/inno-7.0.2/ISCC.exe'
 & $iscc "/DProductVersion=$Version" "/DReleaseChannel=$Channel" `

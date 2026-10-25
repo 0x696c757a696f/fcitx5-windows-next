@@ -100,6 +100,11 @@ fn run(args: Vec<OsString>) -> Result<i32, Box<dyn Error>> {
         );
         return Ok(0);
     }
+    if args.len() == 3 && args[1] == "--materialize-runtime-generation" {
+        let created = update::materialize_runtime_generation(&path_arg(&args[2]))?;
+        println!("runtime_created={}", bool_text(created));
+        return Ok(0);
+    }
     if args.len() == 5 && args[1] == "--publish-generation" {
         update::publish_runtime_generation(
             &path_arg(&args[2]),
@@ -136,7 +141,7 @@ fn run(args: Vec<OsString>) -> Result<i32, Box<dyn Error>> {
 
 fn usage() -> i32 {
     eprintln!(
-        "Usage:\n  fcitx5-updater --record-owner ROOT OWNER\n  fcitx5-updater --activate ARCHIVE ROOT TRANSACTION KEYRING CHANNEL\n  fcitx5-updater --health ROOT CHANNEL\n  fcitx5-updater --rollback ROOT CHANNEL CORE_PACKAGE_ID KEYRING\n  fcitx5-updater --cleanup-previous ROOT CHANNEL CORE_PACKAGE_ID\n  fcitx5-updater --install-tsf-dll REGISTERED_DLL NEW_DLL GENERATION\n  fcitx5-updater --cleanup-old-tsf-dlls TSF_ARCH_DIR\n  fcitx5-updater --activate-runtime-generation ROOT VERIFIED_PAYLOAD GENERATION BUILD_ID\n  fcitx5-updater --publish-generation ROOT GENERATION BUILD_ID\n  fcitx5-updater --generation-status ROOT\n  fcitx5-updater --status ROOT CHANNEL"
+        "Usage:\n  fcitx5-updater --record-owner ROOT OWNER\n  fcitx5-updater --activate ARCHIVE ROOT TRANSACTION KEYRING CHANNEL\n  fcitx5-updater --health ROOT CHANNEL\n  fcitx5-updater --rollback ROOT CHANNEL CORE_PACKAGE_ID KEYRING\n  fcitx5-updater --cleanup-previous ROOT CHANNEL CORE_PACKAGE_ID\n  fcitx5-updater --install-tsf-dll REGISTERED_DLL NEW_DLL GENERATION\n  fcitx5-updater --cleanup-old-tsf-dlls TSF_ARCH_DIR\n  fcitx5-updater --activate-runtime-generation ROOT VERIFIED_PAYLOAD GENERATION BUILD_ID\n  fcitx5-updater --materialize-runtime-generation ROOT\n  fcitx5-updater --publish-generation ROOT GENERATION BUILD_ID\n  fcitx5-updater --generation-status ROOT\n  fcitx5-updater --status ROOT CHANNEL"
     );
     1
 }
