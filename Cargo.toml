@@ -34,6 +34,11 @@ incremental = true
 [profile.dev.package."*"]
 debug = false
 
+[profile.release]
+codegen-units = 1
+lto = "fat"
+strip = "symbols"
+
 [profile.test]
 opt-level = 0
 debug = "line-tables-only"

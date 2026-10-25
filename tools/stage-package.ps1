@@ -105,9 +105,20 @@ New-Item -ItemType Directory -Force -Path $root, $artifacts | Out-Null
 Copy-Item -LiteralPath (Join-Path $core 'bin') -Destination $root -Recurse
 Copy-Item -LiteralPath (Join-Path $core 'lib') -Destination $root -Recurse
 Copy-Item -LiteralPath (Join-Path $core 'share') -Destination $root -Recurse
-foreach ($path in @((Join-Path $root 'lib/cmake'), (Join-Path $root 'share/fcitx5/testing'))) {
+# Drop build-time leftovers of the native install: CMake/pkg-config metadata,
+# import libraries, Linux desktop integration files, shell scripts and the
+# libime/Sogou dictionary build tools, none of which the Windows runtime loads.
+foreach ($relative in @('lib/cmake', 'lib/pkgconfig', 'share/cmake', 'share/metainfo',
+                         'share/applications', 'share/fcitx5/testing',
+                         'bin/fcitx5-configtool', 'bin/fcitx5-diagnose',
+                         'bin/scel2org5.exe')) {
+  $path = Join-Path $root $relative
   if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
 }
+Get-ChildItem -LiteralPath (Join-Path $root 'bin') -Filter 'libime_*' -File |
+  Remove-Item -Force
+Get-ChildItem -LiteralPath (Join-Path $root 'lib') -Filter '*.a' -File |
+  Remove-Item -Force
 Get-ChildItem -LiteralPath (Join-Path $root 'lib/fcitx5') -Filter 'libtest*.dll' -File `
   -ErrorAction SilentlyContinue | Remove-Item -Force
 
