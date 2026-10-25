@@ -755,7 +755,7 @@ mod tests {
         assert_eq!(outputs.preedit_utf8, b"ni".to_vec());
         assert!(!outputs.has_scrollbar);
         // Focus watch captured the presented target.
-        assert_eq!(state.focus_watch.target_process_id, 4321);
+        assert_eq!(state.focus_watch.target(), 4321);
     }
 
     #[test]

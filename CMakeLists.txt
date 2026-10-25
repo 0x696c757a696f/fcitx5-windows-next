@@ -353,8 +353,6 @@ add_dependencies(fcitx5_register_core_rust fcitx5_register_core_rustlib)
 
 set(FCITX_RUST_CANDIDATE_CORE_STATICLIB
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_candidate_core.lib")
-set(FCITX_RUST_CANDIDATE_POC_EXE
-    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5-candidate-poc.exe")
 add_custom_command(
   OUTPUT "${FCITX_RUST_CANDIDATE_CORE_STATICLIB}"
   COMMAND
@@ -385,15 +383,6 @@ add_library(fcitx5_candidate_core_rust STATIC IMPORTED GLOBAL)
 set_target_properties(fcitx5_candidate_core_rust
                       PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_CANDIDATE_CORE_STATICLIB}")
 add_dependencies(fcitx5_candidate_core_rust fcitx5_candidate_core_rustlib)
-add_custom_target(
-  fcitx5_candidate_poc_rustbin
-  COMMAND
-    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
-    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
-    fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}"
-  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-  COMMENT "Building Rust fcitx5-candidate-poc executable")
 
 set(FCITX_RUST_PROTOCOL_CORE_STATICLIB
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_protocol_core.lib")
@@ -1256,121 +1245,6 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/security/trusted-keys.template.json")
     set_tests_properties(
       rust-package-core-artifact-smoke PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-    add_custom_target(
-      fcitx5_rust_candidate_poc_contract
-      COMMAND
-        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-        "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
-        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
-        fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --self-check --report
-        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-report.json"
-      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-      COMMENT "Running Rust Candidate out-of-process PoC contract")
-    add_test(
-      NAME rust-candidate-poc-contract
-      COMMAND
-        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-        "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
-        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
-        fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --self-check --report
-        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-report.json")
-    set_tests_properties(
-      rust-candidate-poc-contract PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-    add_test(
-      NAME rust-candidate-poc-window-smoke
-      COMMAND
-        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-        "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
-        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
-        fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke --report
-        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-window-smoke.json" --screenshot
-        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-window-smoke.bmp")
-    set_tests_properties(
-      rust-candidate-poc-window-smoke PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-    add_test(
-      NAME rust-candidate-poc-demo-snapshot
-      COMMAND
-        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-        "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
-        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
-        fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke
-        --demo-snapshot --report
-        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-demo-snapshot.json" --screenshot
-        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-demo-snapshot.bmp")
-    set_tests_properties(
-      rust-candidate-poc-demo-snapshot PROPERTIES
-      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-    add_test(
-      NAME rust-candidate-poc-scroll-demo-snapshot
-      COMMAND
-        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-        "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
-        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
-        fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke
-        --scroll-demo-snapshot --report
-        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-scroll-demo-snapshot.json" --screenshot
-        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-scroll-demo-snapshot.bmp")
-    set_tests_properties(
-      rust-candidate-poc-scroll-demo-snapshot PROPERTIES
-      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-    foreach(FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT vertical horizontal grid glyph-fuzz vertical-dark horizontal-dark grid-dark)
-      add_test(
-        NAME "rust-candidate-poc-label-slot-${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}"
-        COMMAND
-          "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-          "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
-          "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
-          fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke
-          --label-slot-snapshot "${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}" --dpi-scale 1.50 --report
-          "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-label-slot-${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}.json"
-          --screenshot
-          "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-label-slot-${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}.bmp")
-      set_tests_properties(
-        "rust-candidate-poc-label-slot-${FCITX_CANDIDATE_LABEL_SLOT_SNAPSHOT}" PROPERTIES
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-    endforeach()
-    add_test(
-      NAME rust-candidate-poc-typography-vertical
-      COMMAND
-        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-        "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
-        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
-        fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke
-        --typography-snapshot --dpi-scale 1.50 --report
-        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-typography-vertical.json" --screenshot
-        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-typography-vertical.bmp")
-    set_tests_properties(
-      rust-candidate-poc-typography-vertical PROPERTIES
-      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-    foreach(FCITX_CANDIDATE_HOST_SNAPSHOT mock-notepad mock-word mock-chromium mock-emoji-host)
-      add_test(
-        NAME "rust-candidate-poc-host-snapshot-${FCITX_CANDIDATE_HOST_SNAPSHOT}"
-        COMMAND
-          "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-          "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
-          "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
-          fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke
-          --host-snapshot "${FCITX_CANDIDATE_HOST_SNAPSHOT}" --report
-          "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-host-${FCITX_CANDIDATE_HOST_SNAPSHOT}.json"
-          --screenshot
-          "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-host-${FCITX_CANDIDATE_HOST_SNAPSHOT}.bmp")
-      set_tests_properties(
-        "rust-candidate-poc-host-snapshot-${FCITX_CANDIDATE_HOST_SNAPSHOT}" PROPERTIES
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-    endforeach()
-    add_test(
-      NAME rust-candidate-poc-dpi-smoke
-      COMMAND
-        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-        "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
-        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --bin
-        fcitx5-candidate-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke
-        --dpi-scale 1.50 --report
-        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-dpi-smoke.json" --screenshot
-        "${CMAKE_CURRENT_BINARY_DIR}/candidate-poc-dpi-smoke.bmp")
-    set_tests_properties(
-      rust-candidate-poc-dpi-smoke PROPERTIES
-      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     if(FCITX_PWSH_EXECUTABLE)
       add_custom_target(
         fcitx5_rust_package_core_packaged_artifact_smoke
@@ -1460,8 +1334,7 @@ if(BUILD_TESTING)
     fcitx5_candidate_ui_config_integration_test
     tests/integration/candidate_ui_config_integration_test.cpp)
   add_dependencies(
-    fcitx5_candidate_ui_config_integration_test fcitx5_ui_rustbin fcitx5_control
-    fcitx5_candidate_poc_rustbin)
+    fcitx5_candidate_ui_config_integration_test fcitx5_ui_rustbin fcitx5_control)
   target_link_libraries(
     fcitx5_candidate_ui_config_integration_test PRIVATE user32)
   fcitx_apply_project_options(fcitx5_candidate_ui_config_integration_test)
@@ -1470,7 +1343,7 @@ if(BUILD_TESTING)
     NAME candidate-ui-live-presentation-contract
     COMMAND fcitx5_candidate_ui_config_integration_test
             "${FCITX_UI_EXE}" "${FCITX_CONTROL_EXE}"
-            "${FCITX_UI_RESOURCE_DIR}" "${FCITX_RUST_CANDIDATE_POC_EXE}")
+            "${FCITX_UI_RESOURCE_DIR}")
   set_tests_properties(candidate-ui-live-presentation-contract PROPERTIES TIMEOUT 30)
 
   add_executable(fcitx5_runtime_identity_test tests/unit/runtime_identity_test.cpp)

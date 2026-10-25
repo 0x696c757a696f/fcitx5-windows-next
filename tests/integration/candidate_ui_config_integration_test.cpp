@@ -464,28 +464,6 @@ families = ["Microsoft YaHei"]
 size_dip = 18.0
 )";
 
-int json_int_field(const std::string& text, std::string_view field) {
-  const std::string needle = "\"" + std::string(field) + "\":";
-  const auto marker = text.find(needle);
-  if (marker == std::string::npos) {
-    throw std::runtime_error("missing JSON field: " + std::string(field));
-  }
-  const auto start = marker + needle.size();
-  const auto end = text.find_first_not_of("-0123456789", start);
-  return std::stoi(text.substr(start, end == std::string::npos ? end : end - start));
-}
-
-std::uint64_t json_u64_field(const std::string& text, std::string_view field) {
-  const std::string needle = "\"" + std::string(field) + "\":";
-  const auto marker = text.find(needle);
-  if (marker == std::string::npos) {
-    throw std::runtime_error("missing JSON field: " + std::string(field));
-  }
-  const auto start = marker + needle.size();
-  const auto end = text.find_first_not_of("0123456789", start);
-  return std::stoull(text.substr(start, end == std::string::npos ? end : end - start));
-}
-
 void expect_contains(const std::string& text, std::string_view needle,
                      std::string_view message) {
   if (text.find(needle) == std::string::npos) {
@@ -493,34 +471,17 @@ void expect_contains(const std::string& text, std::string_view needle,
   }
 }
 
-void expect_rust_layout_paint_evidence(const std::string& report,
-                                       int expected_visible_candidates,
-                                       std::string_view context) {
-  expect_contains(report, "\"layout_driven_paint\":true",
-                  std::string(context) + " did not prove layout-driven painting");
-  expect_contains(report, "\"layout_rects_inside_window\":true",
-                  std::string(context) + " did not prove candidate rects stay inside window");
-  expect_contains(report, "\"layout_rects_non_overlapping\":true",
-                  std::string(context) + " did not prove candidate rects are non-overlapping");
-  expect(json_int_field(report, "visible_candidate_rects") == expected_visible_candidates,
-         std::string(context) + " visible candidate rect count mismatch");
-  expect(json_int_field(report, "painted_candidate_rects") == expected_visible_candidates,
-         std::string(context) + " painted candidate rect count mismatch");
-}
-
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
   try {
-    expect(argc == 5, "expected UI, Control, renderer resource, and Rust PoC paths");
+    expect(argc == 4, "expected UI, Control, and renderer resource paths");
     const fs::path ui_source = argv[1];
     const fs::path control_source = argv[2];
     const fs::path resources_source = argv[3];
-    const fs::path rust_candidate_poc = argv[4];
     expect(fs::is_regular_file(ui_source), "candidate UI executable is missing");
     expect(fs::is_regular_file(control_source), "Control executable is missing");
     expect(fs::is_directory(resources_source), "candidate renderer resources are missing");
-    expect(fs::is_regular_file(rust_candidate_poc), "Rust Candidate PoC executable is missing");
 
     TemporaryDirectory temporary;
     const auto root = temporary.path() / L"Fcitx5";
@@ -552,42 +513,6 @@ int wmain(int argc, wchar_t** argv) {
         capture_window(window, cpp_demo_screenshot, "vertical candidate UI");
     expect(cpp_demo.bytes > 0 && cpp_demo.non_background_pixels > 0 && cpp_demo.checksum != 0,
            "C++ candidate demo screenshot evidence is invalid");
-
-    const auto rust_demo_report = temporary.path() / L"rust-candidate-demo.json";
-    const auto rust_demo_screenshot = temporary.path() / L"rust-candidate-demo.bmp";
-    expect(run_process(rust_candidate_poc,
-                       {L"--window-smoke", L"--demo-snapshot", L"--report",
-                        rust_demo_report.wstring(), L"--screenshot",
-                        rust_demo_screenshot.wstring()}) == 0,
-           "Rust candidate demo snapshot smoke failed");
-    const auto rust_demo = read_text(rust_demo_report);
-    expect_contains(rust_demo, "\"snapshot_name\":\"demo-snapshot\"",
-                    "Rust candidate demo snapshot report used the wrong snapshot");
-    expect_contains(rust_demo, "\"orientation\":\"vertical\"",
-                    "Rust candidate demo snapshot did not use vertical orientation");
-    expect_contains(rust_demo, "\"candidate_count\":3",
-                    "Rust candidate demo snapshot did not use the C++ demo candidate count");
-    expect_rust_layout_paint_evidence(rust_demo, 3, "Rust candidate demo snapshot");
-    expect_contains(rust_demo, "\"screenshot_written\":true",
-                    "Rust candidate demo snapshot did not write screenshot evidence");
-    expect_contains(rust_demo, "\"msaa_accessible_name_readable\":true",
-                    "Rust candidate demo snapshot did not prove accessibility name");
-    expect_contains(rust_demo, "\"uia_name_readable\":true",
-                    "Rust candidate demo snapshot did not prove UIA name");
-    expect(json_u64_field(rust_demo, "visual_non_background_pixels") > 0,
-           "Rust candidate demo snapshot screenshot did not contain visible content");
-    expect(json_u64_field(rust_demo, "visual_checksum") != 0,
-           "Rust candidate demo snapshot checksum is invalid");
-    const int rust_demo_width =
-        json_int_field(rust_demo, "window_right") - json_int_field(rust_demo, "window_left");
-    const int rust_demo_height =
-        json_int_field(rust_demo, "window_bottom") - json_int_field(rust_demo, "window_top");
-    expect(rust_demo_width > 0 && rust_demo_height > 0,
-           "Rust candidate demo snapshot has invalid geometry");
-    expect(rust_demo_width <= vertical_width * 3 && rust_demo_width * 3 >= vertical_width,
-           "Rust/C++ candidate demo width diverged beyond allowed PoC tolerance");
-    expect(rust_demo_height <= vertical_height * 3 && rust_demo_height * 3 >= vertical_height,
-           "Rust/C++ candidate demo height diverged beyond allowed PoC tolerance");
 
     apply_presentation_config(control, data_root, presentation_source,
                               kHorizontalPresentation);
@@ -626,51 +551,6 @@ int wmain(int argc, wchar_t** argv) {
                cpp_scroll.checksum != 0,
            "C++ candidate scroll-demo screenshot evidence is invalid");
     scroll_candidate.close_window(scroll_window);
-
-    const auto rust_scroll_report = temporary.path() / L"rust-candidate-scroll-demo.json";
-    const auto rust_scroll_screenshot = temporary.path() / L"rust-candidate-scroll-demo.bmp";
-    expect(run_process(rust_candidate_poc,
-                       {L"--window-smoke", L"--scroll-demo-snapshot", L"--report",
-                        rust_scroll_report.wstring(), L"--screenshot",
-                        rust_scroll_screenshot.wstring()}) == 0,
-           "Rust candidate scroll-demo snapshot smoke failed");
-    const auto rust_scroll = read_text(rust_scroll_report);
-    expect_contains(rust_scroll, "\"snapshot_name\":\"scroll-demo-snapshot\"",
-                    "Rust candidate scroll-demo report used the wrong snapshot");
-    expect_contains(rust_scroll, "\"orientation\":\"horizontal\"",
-                    "Rust candidate scroll-demo snapshot did not use horizontal orientation");
-    expect_contains(rust_scroll, "\"scroll_mode\":true",
-                    "Rust candidate scroll-demo snapshot did not enable scroll mode");
-    expect_contains(rust_scroll, "\"candidate_count\":60",
-                    "Rust candidate scroll-demo snapshot did not use the C++ scroll candidate count");
-    // Scrolling is a page-per-row matrix: the PoC scroll demo shows six page
-    // rows of six candidates, matching the shipping window.
-    expect_rust_layout_paint_evidence(rust_scroll, 36,
-                                      "Rust candidate scroll-demo snapshot");
-    expect_contains(rust_scroll, "\"screenshot_written\":true",
-                    "Rust candidate scroll-demo snapshot did not write screenshot evidence");
-    expect_contains(rust_scroll, "\"msaa_accessible_name_readable\":true",
-                    "Rust candidate scroll-demo snapshot did not prove accessibility name");
-    expect_contains(rust_scroll, "\"uia_name_readable\":true",
-                    "Rust candidate scroll-demo snapshot did not prove UIA name");
-    expect(json_u64_field(rust_scroll, "visual_non_background_pixels") > 0,
-           "Rust candidate scroll-demo screenshot did not contain visible content");
-    expect(json_u64_field(rust_scroll, "visual_checksum") != 0,
-           "Rust candidate scroll-demo checksum is invalid");
-    const int rust_scroll_width =
-        json_int_field(rust_scroll, "window_right") - json_int_field(rust_scroll, "window_left");
-    const int rust_scroll_height =
-        json_int_field(rust_scroll, "window_bottom") - json_int_field(rust_scroll, "window_top");
-    // The matrix grows into extra rows; its width still exceeds the
-    // three-candidate vertical demo.
-    expect(rust_scroll_width > rust_demo_width && rust_scroll_height > 0,
-           "Rust candidate scroll-demo snapshot did not expand beyond the vertical demo width");
-    expect(rust_scroll_width <= horizontal_scroll_width * 3 &&
-               rust_scroll_width * 3 >= horizontal_scroll_width,
-           "Rust/C++ candidate scroll-demo width diverged beyond allowed PoC tolerance");
-    expect(rust_scroll_height <= horizontal_scroll_height * 4 &&
-                rust_scroll_height * 4 >= horizontal_scroll_height,
-            "Rust/C++ candidate scroll-demo height diverged beyond allowed PoC tolerance");
 
     const auto saved = read_text(root / L"data/config.toml");
     expect_contains(saved, "mode = \"dark\"", "appearance mode was not persisted");
