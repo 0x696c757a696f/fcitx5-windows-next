@@ -304,15 +304,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "fcitx5-config-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "toml",
-]
-
-[[package]]
-name = "fcitx5-config-poc"
+name = "fcitx5-config-app"
 version = "0.1.0"
 dependencies = [
  "fcitx5-candidate-core",
@@ -324,6 +316,14 @@ dependencies = [
  "serde",
  "serde_json",
  "windui",
+]
+
+[[package]]
+name = "fcitx5-config-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml",
 ]
 
 [[package]]
@@ -412,7 +412,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "fcitx5-tsf-poc"
+name = "fcitx5-tsf"
 version = "0.1.0"
 dependencies = [
  "fcitx5-protocol-core",

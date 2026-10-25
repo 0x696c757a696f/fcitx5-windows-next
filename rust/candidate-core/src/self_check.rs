@@ -5,14 +5,14 @@
 use super::*;
 
 #[derive(Clone, Debug)]
-pub struct PocCandidate {
+pub struct SelfCheckCandidate {
     pub label: String,
     pub text: String,
     pub comment: String,
 }
 
 #[derive(Clone, Debug)]
-pub struct PocScenario {
+pub struct SelfCheckScenario {
     pub name: &'static str,
     pub host: &'static str,
     pub locale: &'static str,
@@ -22,13 +22,13 @@ pub struct PocScenario {
     pub identity: CompositionIdentity,
     pub caret: Point,
     pub work_area: Rect,
-    pub candidates: Vec<PocCandidate>,
+    pub candidates: Vec<SelfCheckCandidate>,
     pub selected: usize,
     pub expected_orientation: Orientation,
 }
 
 #[derive(Clone, Debug)]
-pub struct PocScenarioEvidence {
+pub struct SelfCheckEvidence {
     pub name: &'static str,
     pub host: &'static str,
     pub locale: &'static str,
@@ -60,12 +60,12 @@ pub struct CandidatePreviewPaintPlan {
     pub items: Vec<CandidatePreviewPaintItem>,
 }
 
-pub fn run_candidate_poc_self_check() -> Result<String, String> {
+pub fn run_candidate_self_check() -> Result<String, String> {
     let mut evidence = Vec::new();
-    for scenario in candidate_poc_scenarios() {
-        evidence.push(check_candidate_poc_scenario(&scenario)?);
+    for scenario in candidate_self_check_scenarios() {
+        evidence.push(check_candidate_scenario(&scenario)?);
     }
-    Ok(render_candidate_poc_report(&evidence))
+    Ok(render_candidate_self_check_report(&evidence))
 }
 
 pub fn candidate_preview_paint_plan(
@@ -149,7 +149,7 @@ pub fn candidate_preview_paint_plan(
     })
 }
 
-pub fn candidate_poc_scenarios() -> Vec<PocScenario> {
+pub fn candidate_self_check_scenarios() -> Vec<SelfCheckScenario> {
     let work_area = Rect {
         left: 0.0,
         top: 0.0,
@@ -157,7 +157,7 @@ pub fn candidate_poc_scenarios() -> Vec<PocScenario> {
         bottom: 1080.0,
     };
     vec![
-        PocScenario {
+        SelfCheckScenario {
             name: "notepad-horizontal-zh",
             host: "mock-notepad",
             locale: "zh-CN",
@@ -179,7 +179,7 @@ pub fn candidate_poc_scenarios() -> Vec<PocScenario> {
             selected: 1,
             expected_orientation: Orientation::Horizontal,
         },
-        PocScenario {
+        SelfCheckScenario {
             name: "word-vertical-annotation",
             host: "mock-word",
             locale: "zh-CN",
@@ -201,7 +201,7 @@ pub fn candidate_poc_scenarios() -> Vec<PocScenario> {
             selected: 0,
             expected_orientation: Orientation::Vertical,
         },
-        PocScenario {
+        SelfCheckScenario {
             name: "chromium-right-edge-dpi200",
             host: "mock-chromium",
             locale: "zh-CN",
@@ -225,7 +225,7 @@ pub fn candidate_poc_scenarios() -> Vec<PocScenario> {
             selected: 0,
             expected_orientation: Orientation::Vertical,
         },
-        PocScenario {
+        SelfCheckScenario {
             name: "vscode-uiless-accessibility",
             host: "mock-vscode-uiless",
             locale: "en-US",
@@ -246,7 +246,7 @@ pub fn candidate_poc_scenarios() -> Vec<PocScenario> {
             selected: 1,
             expected_orientation: Orientation::Vertical,
         },
-        PocScenario {
+        SelfCheckScenario {
             name: "emoji-color-font",
             host: "mock-emoji-host",
             locale: "zh-CN",
@@ -271,7 +271,7 @@ pub fn candidate_poc_scenarios() -> Vec<PocScenario> {
     ]
 }
 
-fn check_candidate_poc_scenario(scenario: &PocScenario) -> Result<PocScenarioEvidence, String> {
+fn check_candidate_scenario(scenario: &SelfCheckScenario) -> Result<SelfCheckEvidence, String> {
     if scenario.candidates.is_empty() {
         return Err(format!("{} has no candidates", scenario.name));
     }
@@ -364,7 +364,7 @@ fn check_candidate_poc_scenario(scenario: &PocScenario) -> Result<PocScenarioEvi
         ));
     }
 
-    Ok(PocScenarioEvidence {
+    Ok(SelfCheckEvidence {
         name: scenario.name,
         host: scenario.host,
         locale: scenario.locale,
@@ -383,9 +383,9 @@ fn check_candidate_poc_scenario(scenario: &PocScenario) -> Result<PocScenarioEvi
     })
 }
 
-fn render_candidate_poc_report(evidence: &[PocScenarioEvidence]) -> String {
+fn render_candidate_self_check_report(evidence: &[SelfCheckEvidence]) -> String {
     let mut output = String::from(
-        "{\n  \"component\":\"fcitx5-candidate-poc\",\n  \"kind\":\"rust-out-of-process-headless-poc\",\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"scenarios\":[\n",
+        "{\n  \"component\":\"fcitx5-candidate-self-check\",\n  \"kind\":\"rust-out-of-process-headless-self-check\",\n  \"cpp_ffi\":false,\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"scenarios\":[\n",
     );
     for (index, item) in evidence.iter().enumerate() {
         if index > 0 {
@@ -438,15 +438,15 @@ fn render_candidate_poc_report(evidence: &[PocScenarioEvidence]) -> String {
     output
 }
 
-fn poc_candidate(label: &str, text: &str, comment: &str) -> PocCandidate {
-    PocCandidate {
+fn poc_candidate(label: &str, text: &str, comment: &str) -> SelfCheckCandidate {
+    SelfCheckCandidate {
         label: label.to_owned(),
         text: text.to_owned(),
         comment: comment.to_owned(),
     }
 }
 
-fn measure_candidate(candidate: &PocCandidate, scale: f32) -> Size {
+fn measure_candidate(candidate: &SelfCheckCandidate, scale: f32) -> Size {
     let label = text_units(&candidate.label) * 10.0 * scale;
     let text = text_units(&candidate.text) * 18.0 * scale;
     let comment = text_units(&candidate.comment) * 14.0 * scale;

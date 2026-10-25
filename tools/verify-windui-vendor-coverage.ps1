@@ -45,12 +45,12 @@ $deps = Get-Content -LiteralPath $depsFile -Raw | ConvertFrom-Json
 $windUi = $deps.packages | Where-Object { $_.name -eq 'wind-ui-rust' }
 if (-not $windUi) { Fail 'third_party/dependencies.json has no wind-ui-rust entry' }
 $depCommit = ($windUi.source -split '/')[-1]
-$constMatch = Select-String -LiteralPath (Join-Path $repoRoot 'rust/config-poc/src/main.rs') `
+$constMatch = Select-String -LiteralPath (Join-Path $repoRoot 'rust/config-app/src/main.rs') `
   -Pattern 'WIND_UI_RUST_REFERENCE_COMMIT: &str = "([0-9a-f]+)"'
-if (-not $constMatch) { Fail 'WIND_UI_RUST_REFERENCE_COMMIT not found in rust/config-poc/src/main.rs' }
+if (-not $constMatch) { Fail 'WIND_UI_RUST_REFERENCE_COMMIT not found in rust/config-app/src/main.rs' }
 $constCommit = $constMatch.Matches[0].Groups[1].Value
 if ($depCommit -ne $constCommit) {
-  Fail "pin mismatch: dependencies.json=$depCommit config-poc=$constCommit"
+  Fail "pin mismatch: dependencies.json=$depCommit config-app=$constCommit"
 }
 Write-Output "pin: $depCommit"
 

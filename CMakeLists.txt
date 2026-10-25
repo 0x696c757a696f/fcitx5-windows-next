@@ -441,18 +441,18 @@ set_target_properties(fcitx5_engine_core_rust
 add_dependencies(fcitx5_engine_core_rust fcitx5_engine_core_rustlib)
 target_link_libraries(fcitx5_engine_core_rust INTERFACE ws2_32 userenv ntdll)
 
-set(FCITX_RUST_TSF_POC_DLL
-    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_tsf_poc.dll")
+set(FCITX_RUST_TSF_DLL
+    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/$<IF:$<CONFIG:Debug>,debug,release>/fcitx5_tsf.dll")
 add_custom_target(
-  fcitx5_tsf_poc_rustdll
+  fcitx5_tsf_rustdll
   COMMAND
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
-    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-tsf-poc --lib --target
-    "${FCITX_RUST_TARGET}"
-  BYPRODUCTS "${FCITX_RUST_TSF_POC_DLL}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-tsf --lib --target
+    "${FCITX_RUST_TARGET}" --profile "$<IF:$<CONFIG:Debug>,dev,release>"
+  BYPRODUCTS "${FCITX_RUST_TSF_DLL}"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-  COMMENT "Building Rust fcitx5-tsf-poc DLL")
+  COMMENT "Building Rust fcitx5-tsf DLL")
 
 add_library(
   fcitx5_platform STATIC
@@ -607,7 +607,7 @@ add_custom_target(
   COMMAND
     "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
     "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
-    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-poc --bin
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-app --bin
     fcitx5-config --target "${FCITX_RUST_TARGET}" --profile
     "$<IF:$<CONFIG:Debug>,dev,release>"
   COMMAND
@@ -626,9 +626,9 @@ add_custom_target(
   DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-poc/Cargo.toml"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-poc/src/main.rs"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-poc/src/bin/fcitx5_config.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-app/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-app/src/main.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-app/src/bin/fcitx5_config.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-core/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/config-core/src/lib.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/config.toml"
@@ -688,21 +688,21 @@ add_custom_target(
   ALL
   BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-tsf.dll"
   COMMAND
-    "${CMAKE_COMMAND}" -DFCFW_COPY_FROM=${FCITX_RUST_TSF_POC_DLL}
+    "${CMAKE_COMMAND}" -DFCFW_COPY_FROM=${FCITX_RUST_TSF_DLL}
     -DFCFW_COPY_TO=${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/fcitx5-tsf.dll
     -DATTEMPTS=8 -DDELAY_SECONDS=1 -P
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/copy-with-retry.cmake"
   DEPENDS
-    fcitx5_tsf_poc_rustdll
+    fcitx5_tsf_rustdll
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/tsf.rc"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/resource.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/fcitx5-tsf.ico"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/build-support/windows_resource.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/tsf-poc/build.rs"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/tsf-poc/Cargo.toml"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/tsf-poc/src/lib.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/tsf/build.rs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/tsf/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/rust/tsf/src/lib.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/protocol-core/Cargo.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/protocol-core/src/lib.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/windows-common-core/Cargo.toml"
@@ -1070,14 +1070,14 @@ if(BUILD_TESTING)
       "${CMAKE_CURRENT_BINARY_DIR}/rust-config-ui-preview-qa")
   set_tests_properties(rust-config-ui-preview-qa PROPERTIES TIMEOUT 60)
   add_test(
-    NAME rust-config-poc-contract
+    NAME rust-config-self-check
     COMMAND
       "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
       "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
-      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-poc --bin
-      fcitx5-config-poc --target "${FCITX_RUST_TARGET}" -- --self-check --report
-      "${CMAKE_CURRENT_BINARY_DIR}/config-poc-report.json")
-  set_tests_properties(rust-config-poc-contract PROPERTIES
+      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-app --bin
+      fcitx5-config --target "${FCITX_RUST_TARGET}" -- --self-check --report
+      "${CMAKE_CURRENT_BINARY_DIR}/config-self-check.json")
+  set_tests_properties(rust-config-self-check PROPERTIES
                        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
   add_test(
     NAME rust-config-core-transaction-contract
@@ -1093,7 +1093,7 @@ if(BUILD_TESTING)
     COMMAND
       "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
       "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
-      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-poc --test
+      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-app --test
       config_core_cli_contract --target "${FCITX_RUST_TARGET}")
   set_tests_properties(rust-config-core-cli-contract PROPERTIES
                        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -1129,14 +1129,14 @@ if(BUILD_TESTING)
                        PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
                                   TIMEOUT 45)
   add_test(
-    NAME rust-config-poc-window-smoke
+    NAME rust-config-window-smoke
     COMMAND
       "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
       "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
-      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-poc --bin
-      fcitx5-config-poc --target "${FCITX_RUST_TARGET}" -- --window-smoke --report
-      "${CMAKE_CURRENT_BINARY_DIR}/config-poc-window-smoke.json")
-  set_tests_properties(rust-config-poc-window-smoke PROPERTIES
+      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-app --bin
+      fcitx5-config --target "${FCITX_RUST_TARGET}" -- --window-smoke --report
+      "${CMAKE_CURRENT_BINARY_DIR}/config-window-smoke.json")
+  set_tests_properties(rust-config-window-smoke PROPERTIES
                        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
   add_executable(fcitx5_engine_core_contract_test tests/unit/engine_core_contract_test.cpp)
@@ -1410,29 +1410,29 @@ if(BUILD_TESTING)
   add_test(NAME tsf-module-activation
            COMMAND fcitx5_tsf_module_test "${FCITX_SHIPPING_TSF_DLL}")
 
-  add_executable(fcitx5_rust_tsf_poc_export_smoke
-                 tests/unit/rust_tsf_poc_export_smoke.cpp)
-  add_dependencies(fcitx5_rust_tsf_poc_export_smoke fcitx5_tsf_poc_rustdll)
-  fcitx_apply_project_options(fcitx5_rust_tsf_poc_export_smoke)
-  fcitx_apply_binary_hardening(fcitx5_rust_tsf_poc_export_smoke)
-  add_test(NAME rust-tsf-poc-unit
+  add_executable(fcitx5_rust_tsf_export_smoke
+                 tests/unit/rust_tsf_export_smoke.cpp)
+  add_dependencies(fcitx5_rust_tsf_export_smoke fcitx5_tsf_rustdll)
+  fcitx_apply_project_options(fcitx5_rust_tsf_export_smoke)
+  fcitx_apply_binary_hardening(fcitx5_rust_tsf_export_smoke)
+  add_test(NAME rust-tsf-unit
            COMMAND
              "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
              "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
-             "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-tsf-poc --target
+             "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-tsf --target
              "${FCITX_RUST_TARGET}")
-  set_tests_properties(rust-tsf-poc-unit PROPERTIES
+  set_tests_properties(rust-tsf-unit PROPERTIES
                        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-  add_test(NAME rust-tsf-poc-export-smoke
-           COMMAND fcitx5_rust_tsf_poc_export_smoke "${FCITX_RUST_TSF_POC_DLL}")
+  add_test(NAME rust-tsf-export-smoke
+           COMMAND fcitx5_rust_tsf_export_smoke "${FCITX_RUST_TSF_DLL}")
 
-  add_executable(fcitx5_rust_tsf_poc_artifact_audit
-                 tests/unit/rust_tsf_poc_artifact_audit.cpp)
-  add_dependencies(fcitx5_rust_tsf_poc_artifact_audit fcitx5_tsf_poc_rustdll)
-  fcitx_apply_project_options(fcitx5_rust_tsf_poc_artifact_audit)
-  fcitx_apply_binary_hardening(fcitx5_rust_tsf_poc_artifact_audit)
-  add_test(NAME rust-tsf-poc-artifact-audit
-           COMMAND fcitx5_rust_tsf_poc_artifact_audit "${FCITX_RUST_TSF_POC_DLL}")
+  add_executable(fcitx5_rust_tsf_artifact_audit
+                 tests/unit/rust_tsf_artifact_audit.cpp)
+  add_dependencies(fcitx5_rust_tsf_artifact_audit fcitx5_tsf_rustdll)
+  fcitx_apply_project_options(fcitx5_rust_tsf_artifact_audit)
+  fcitx_apply_binary_hardening(fcitx5_rust_tsf_artifact_audit)
+  add_test(NAME rust-tsf-artifact-audit
+           COMMAND fcitx5_rust_tsf_artifact_audit "${FCITX_RUST_TSF_DLL}")
 
   add_executable(fcitx5_tsf_key_commit_test tests/integration/tsf_key_commit_test.cpp)
   add_dependencies(fcitx5_tsf_key_commit_test fcitx5_tsf)

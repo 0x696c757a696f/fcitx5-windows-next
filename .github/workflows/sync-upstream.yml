@@ -55,7 +55,7 @@ jobs:
             Automated upstream sync of the vendored `huanfeng/wind-ui-rust`
             path dependency. Re-applies the two repo-local Windows portability
             patches (fail-closed) and updates the pin in `dependencies.json`
-            and the config-poc reference-commit constant.
+            and the config-app reference-commit constant.
 
             Merged automatically once Core passes on this commit.
 

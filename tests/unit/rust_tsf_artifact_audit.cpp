@@ -133,13 +133,13 @@ bool hasForbiddenProductImport(const PeAudit& audit) {
 
 int wmain(int argc, wchar_t** argv) {
     if (argc != 2) {
-        std::cerr << "Rust TSF PoC DLL argument required\n";
+        std::cerr << "Rust TSF DLL argument required\n";
         return 1;
     }
     const std::filesystem::path dllPath = argv[1];
     std::ifstream input(dllPath, std::ios::binary);
     if (!input) {
-        std::cerr << "could not open Rust TSF PoC DLL\n";
+        std::cerr << "could not open Rust TSF DLL\n";
         return 1;
     }
     const std::vector<uint8_t> image((std::istreambuf_iterator<char>(input)),
@@ -147,32 +147,32 @@ int wmain(int argc, wchar_t** argv) {
     try {
         const PeAudit audit = parsePe(image);
         if (audit.machine != 0x014c && audit.machine != 0x8664 && audit.machine != 0xaa64) {
-            std::cerr << "unsupported Rust TSF PoC machine type\n";
+            std::cerr << "unsupported Rust TSF machine type\n";
             return 1;
         }
         if (audit.majorOperatingSystem > 10 || audit.majorSubsystem > 10) {
-            std::cerr << "Rust TSF PoC requires a future unsupported Windows version\n";
+            std::cerr << "Rust TSF requires a future unsupported Windows version\n";
             return 1;
         }
         if (image.size() > 2 * 1024 * 1024) {
-            std::cerr << "Rust TSF PoC DLL unexpectedly exceeds binary-size smoke budget\n";
+            std::cerr << "Rust TSF DLL unexpectedly exceeds binary-size smoke budget\n";
             return 1;
         }
         if (hasImport(audit, "winhttp.dll") || hasImport(audit, "wininet.dll") ||
             hasImport(audit, "ws2_32.dll") || hasImport(audit, "urlmon.dll")) {
-            std::cerr << "Rust TSF PoC must not import network/web runtime libraries\n";
+            std::cerr << "Rust TSF must not import network/web runtime libraries\n";
             return 1;
         }
         if (hasForbiddenProductImport(audit)) {
-            std::cerr << "Rust TSF PoC must not import product engine/config/package/control DLLs\n";
+            std::cerr << "Rust TSF must not import product engine/config/package/control DLLs\n";
             return 1;
         }
         if ((audit.dllCharacteristics & 0x0040) == 0 || (audit.dllCharacteristics & 0x0100) == 0) {
-            std::cerr << "Rust TSF PoC should keep ASLR and NX compatible PE flags\n";
+            std::cerr << "Rust TSF should keep ASLR and NX compatible PE flags\n";
             return 1;
         }
     } catch (const std::exception& error) {
-        std::cerr << "Rust TSF PoC artifact audit failed: " << error.what() << '\n';
+        std::cerr << "Rust TSF artifact audit failed: " << error.what() << '\n';
         return 1;
     }
     return 0;

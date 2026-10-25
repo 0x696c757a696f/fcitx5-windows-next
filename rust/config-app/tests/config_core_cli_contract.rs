@@ -11,7 +11,7 @@ struct TestDirectory(PathBuf);
 impl TestDirectory {
     fn new() -> Self {
         let path = std::env::temp_dir().join(format!(
-            "fcitx5-config-poc-cli-{}-{}",
+            "fcitx5-config-cli-{}-{}",
             std::process::id(),
             std::thread::current().name().unwrap_or("test")
         ));
@@ -42,7 +42,7 @@ fn get_uses_recovery_without_overwriting_a_bad_current_file() {
         .expect("valid config should create a recovery record");
     fs::write(&path, "candidate.page_size = 0\n").expect("bad current fixture should write");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_fcitx5-config-poc"))
+    let output = Command::new(env!("CARGO_BIN_EXE_fcitx5-config"))
         .args(["--config", path.to_str().expect("UTF-8 path"), "get"])
         .output()
         .expect("CLI should run");

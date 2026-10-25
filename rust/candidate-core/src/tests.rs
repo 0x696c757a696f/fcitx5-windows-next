@@ -1707,8 +1707,8 @@ fn candidate_presentation_orientation_fails_soft_on_invalid_utf8() {
 }
 
 #[test]
-fn candidate_poc_self_check_covers_required_evidence() {
-    let report = run_candidate_poc_self_check().expect("candidate poc self-check");
+fn candidate_self_check_covers_required_evidence() {
+    let report = run_candidate_self_check().expect("candidate self-check");
     assert!(report.contains("\"cpp_ffi\":false"));
     assert!(report.contains("\"global_hooks\":false"));
     assert!(report.contains("\"process_injection\":false"));
