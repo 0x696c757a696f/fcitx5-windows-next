@@ -17,7 +17,7 @@
 
 [English](README.md) · **简体中文**
 
-[亮点](#-亮点) · [候选窗](#-候选窗) · [架构](#-架构) · [快速开始](#-快速开始) · [配置](#-配置) · [文档](#-文档)
+[亮点](#-亮点) · [候选窗](#-候选窗) · [架构](#-架构) · [快速开始](#-快速开始) · [配置](#-配置) · [文档](#-文档) · [捐助](#-捐助)
 
 </div>
 
@@ -194,6 +194,23 @@ size_dip = 18.0
 - [`SECURITY.md`](SECURITY.md)：安全模型与漏洞报告
 - [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)：依赖声明
 - [`AGENTS.md`](AGENTS.md)：贡献者说明
+
+## 💖 捐助
+
+如果这个项目对你有帮助，欢迎捐助，用于支付构建机器、测试设备和开发时间。
+
+| 网络 | 币种 | 地址 |
+| --- | --- | --- |
+| **以太坊及 EVM 链**<br><sub>Ethereum、Arbitrum One、Base、Optimism、Polygon、BNB Smart Chain</sub> | ETH 或该链原生币、USDC、USDT | `0x619FeeF5986b9ed8E75D7CFD67AdB575355b9F80` |
+| **Bitcoin · Taproot** | BTC | `bc1p7jf7pzep76cld4pd6xmtfjckpn6qamdqc2rhjus64re2cvuc72sqdwszqc` |
+| **Bitcoin · Native SegWit** | BTC | `bc1q4rp3ag5lmnyy8eqwjm9s4xx62uulfr6n43ycvc` |
+| **Bitcoin · Nested SegWit** | BTC | `3Lu1yzQYfNZLpvh2dt6T6NuRbtwQkJHmT6` |
+| **Bitcoin · Legacy** | BTC | `123mpbi91xQitVkh9oosY4VczFqJB9kjDQ` |
+| **TRON (TRC-20)** | USDT | `TBHXcP2ReM5sqpRDTyrL1UWtcSmYeyrmnB` |
+| **Solana (SPL)** | USDT | `4s6uaauKCgwSNVzb5Lq1kxUe9dpm8V64D6FPw7hTwrQ6` |
+
+> [!CAUTION]
+> EVM 地址在该行列出的所有链上通用；其余地址只适用于各自的网络。转账前请在钱包或交易所里选择相同的网络，选错网络的资产可能无法找回。四个比特币地址都可以接收 BTC，按你钱包支持的格式任选其一即可。确认前请逐字核对地址。
 
 ## 📄 许可证
 
