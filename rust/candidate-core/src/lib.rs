@@ -4112,246 +4112,8 @@ fn render_theme(theme: &Fcitx5CandidateRenderThemeInput) -> renderer::RenderThem
     }
 }
 
-/// Background of the C render-window ABI: lays out the given candidates (each
-/// with a measured logical size, exactly like the axis-layout ABI input), runs
-/// the frozen three-axis geometry, then renders the complete window bitmap
-/// with the caller-supplied colors/geometry. Returns the work-area-local
-/// window rect plus the BGRA bitmap.
-///
-/// # Safety
-///
-/// `in_candidates`, `in_sizes` must be valid for `candidate_count` elements
-/// each when `candidate_count` is non-zero; `in_theme`/`in_geometry` must be
-/// valid. `out_pixels` must point to writable storage of at least
-/// `out_pixel_capacity` bytes, `out` to valid storage for one
-/// `Fcitx5CandidateRenderOutput` when non-null. `out_pixel_capacity` is
-/// queried two-phase like the other ABI entry points: pass 0 to learn the
-/// required size, then render into the buffer. Pointers are not retained.
-#[no_mangle]
-#[cfg(windows)]
-pub unsafe extern "C" fn fcitx5_candidate_render_window(
-    in_candidates: *const Fcitx5CandidateRenderCandidateInput,
-    in_sizes: *const Fcitx5CandidateLayoutSize,
-    candidate_count: usize,
-    in_theme: *const Fcitx5CandidateRenderThemeInput,
-    in_geometry: *const Fcitx5CandidateRenderGeometryInput,
-    preedit_utf8: *const u8,
-    preedit_len: usize,
-    dpi_scale: f32,
-    high_contrast: u8,
-    selected: u64,
-    out_pixels: *mut u8,
-    out_pixel_capacity: usize,
-    out: *mut Fcitx5CandidateRenderOutput,
-) -> i32 {
-    if in_theme.is_null() || in_geometry.is_null() {
-        return 1;
-    }
-    if !dpi_scale.is_finite() || !(0.5..=4.0).contains(&dpi_scale) {
-        return 1;
-    }
-    let candidates = if candidate_count == 0 {
-        &[]
-    } else {
-        if in_candidates.is_null() || in_sizes.is_null() {
-            return 1;
-        }
-        // SAFETY: validated candidate input covers `candidate_count` readable records for this call.
-        unsafe { std::slice::from_raw_parts(in_candidates, candidate_count) }
-    };
-    let sizes = if candidate_count == 0 {
-        &[]
-    } else {
-        // SAFETY: validated size input covers `candidate_count` readable records for this call.
-        unsafe { std::slice::from_raw_parts(in_sizes, candidate_count) }
-    };
-    // SAFETY: the non-null theme pointer is aligned and readable for one input value.
-    let theme = unsafe { *in_theme };
-    // SAFETY: the non-null geometry pointer is aligned and readable for one input value.
-    let geometry = unsafe { *in_geometry };
-    let orientation = match geometry.orientation {
-        0 => Orientation::Horizontal,
-        1 => Orientation::Vertical,
-        _ => return 1,
-    };
-    let Some(overflow) = axis_overflow_from_ffi(geometry.overflow) else {
-        return 1;
-    };
-    let Some(writing_mode) = axis_writing_from_ffi(geometry.writing) else {
-        return 1;
-    };
-    let preedit = if preedit_len > 0 {
-        if preedit_utf8.is_null() {
-            return 1;
-        }
-        // SAFETY: the validated preedit pointer covers `preedit_len` readable bytes for this copy.
-        let bytes = unsafe { std::slice::from_raw_parts(preedit_utf8, preedit_len) };
-        Some(String::from_utf8_lossy(bytes).into_owned())
-    } else {
-        None
-    };
-    let data = candidates
-        .iter()
-        .map(|c| CandidateRenderData {
-            // SAFETY: each candidate label span is valid for its declared length during rendering.
-            label: String::from_utf8_lossy(unsafe {
-                std::slice::from_raw_parts(c.label, c.label_len)
-            })
-            .into_owned(),
-            // SAFETY: each reserved-label span is valid for its declared length during rendering.
-            reserved_label: String::from_utf8_lossy(unsafe {
-                std::slice::from_raw_parts(c.reserved_label, c.reserved_label_len)
-            })
-            .into_owned(),
-            // SAFETY: each candidate text span is valid for its declared length during rendering.
-            text: String::from_utf8_lossy(unsafe {
-                std::slice::from_raw_parts(c.text, c.text_len)
-            })
-            .into_owned(),
-            // SAFETY: each candidate comment span is valid for its declared length during rendering.
-            comment: String::from_utf8_lossy(unsafe {
-                std::slice::from_raw_parts(c.comment, c.comment_len)
-            })
-            .into_owned(),
-        })
-        .collect::<Vec<_>>();
-    let axis_input = crate::axis_layout::AxisLayoutInput {
-        options: crate::axis_layout::CandidateLayoutOptions {
-            orientation,
-            overflow,
-            writing_mode,
-        },
-        items: sizes
-            .iter()
-            .map(|s| Size {
-                width: s.width,
-                height: s.height,
-            })
-            .collect(),
-        caret: Point { x: 0.0, y: 0.0 },
-        caret_height: 0.0,
-        work_area: Rect {
-            left: 0.0,
-            top: 0.0,
-            right: geometry.max_width.max(geometry.max_height).max(1.0) * 4.0,
-            bottom: geometry.max_width.max(geometry.max_height).max(1.0) * 4.0,
-        },
-        max_width: geometry.max_width,
-        max_height: geometry.max_height,
-        padding_x: geometry.padding_x,
-        padding_y: geometry.padding_y,
-        row_gap: geometry.row_gap,
-        column_gap: geometry.column_gap,
-        page_size: geometry.page_size as usize,
-        selected: selected as usize,
-        scroll_override: (geometry.scroll_override_px >= 0.0)
-            .then_some(geometry.scroll_override_px),
-        placement: Placement::Unlocked,
-    };
-    let axis_result = crate::axis_layout::layout(&axis_input);
-    let (_, _, pixel_width, pixel_height) = renderer::render_pixel_extent(
-        &axis_result,
-        preedit.as_deref(),
-        geometry.preedit_height,
-        dpi_scale,
-    );
-    let Some(required) = (pixel_width as usize)
-        .checked_mul(pixel_height as usize)
-        .and_then(|pixels| pixels.checked_mul(4))
-    else {
-        return 1;
-    };
-    let out_window = Fcitx5CandidateRenderOutput {
-        window_x: axis_result.window.left,
-        window_y: axis_result.window.top,
-        window_w: (axis_result.window.right - axis_result.window.left).max(0.0),
-        window_h: (axis_result.window.bottom - axis_result.window.top).max(0.0),
-        pixel_stride: 0,
-        pixel_byte_len: 0,
-    };
-    if out_pixel_capacity < required {
-        if !out.is_null() {
-            // SAFETY: the non-null output pointer is writable for one render result.
-            unsafe {
-                *out = Fcitx5CandidateRenderOutput {
-                    pixel_stride: pixel_width.saturating_mul(4),
-                    pixel_byte_len: required as u64,
-                    ..out_window
-                };
-            }
-        }
-        return 2;
-    }
-    if required > 0 && out_pixels.is_null() {
-        return 1;
-    }
-    let render = renderer::render_candidate_window(&renderer::RenderWindowInput {
-        axis_result: &axis_result,
-        candidates: &data,
-        theme: &render_theme(&theme),
-        geometry: &renderer::RenderGeometry {
-            font_size: geometry.font_size,
-            label_font_size: geometry.label_font_size,
-            comment_font_size: geometry.comment_font_size,
-            label_gap: geometry.label_gap,
-            item_padding_x: geometry.item_padding_x,
-            item_padding_y: geometry.item_padding_y,
-            preedit_height: geometry.preedit_height,
-            scroll_mode: geometry.overflow == 1,
-            max_width: geometry.max_width,
-            window_padding_x: geometry.padding_x,
-            anchor_stride: crate::axis_layout::horizontal_anchor_stride(
-                axis_input.options,
-                axis_input.page_size,
-            ),
-        },
-        font_family: "Microsoft YaHei UI",
-        preedit: preedit.as_deref(),
-        dpi_scale,
-        high_contrast: high_contrast != 0,
-        selected: if (selected as usize) < data.len() {
-            Some(selected as usize)
-        } else {
-            None
-        },
-    });
-    debug_assert_eq!(render.pixels.len(), required);
-    if required > 0 {
-        // SAFETY: the validated output pixel buffer has `required` writable bytes and does not alias render storage.
-        unsafe { std::ptr::copy_nonoverlapping(render.pixels.as_ptr(), out_pixels, required) };
-    }
-    if !out.is_null() {
-        // SAFETY: the non-null output pointer is writable for one render result.
-        unsafe {
-            *out = Fcitx5CandidateRenderOutput {
-                pixel_stride: render.stride,
-                pixel_byte_len: required as u64,
-                ..out_window
-            };
-        }
-    }
-    0
-}
-
-/// One candidate string triple fed to `fcitx5_candidate_render_window`.
-/// All three slices are counted byte buffers; a length of 0 means empty
-/// (label/comment optional). Not retained by the callee.
-#[cfg(windows)]
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct Fcitx5CandidateRenderCandidateInput {
-    pub label: *const u8,
-    pub label_len: usize,
-    pub reserved_label: *const u8,
-    pub reserved_label_len: usize,
-    pub text: *const u8,
-    pub text_len: usize,
-    pub comment: *const u8,
-    pub comment_len: usize,
-}
-
-/// Colors (RGB, alpha forced to 255 by the callee) + selection inflate +
-/// corner radius for `fcitx5_candidate_render_window`.
+/// Colors (RGB, alpha forced to 255 by the painter) + selection inflate +
+/// corner radius for `render_frame`.
 #[cfg(windows)]
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -4388,135 +4150,6 @@ pub struct Fcitx5CandidateRenderThemeInput {
     pub corner_radius: f32,
 }
 
-/// Font/padding/preedit geometry fed to `fcitx5_candidate_render_window`.
-#[cfg(windows)]
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct Fcitx5CandidateRenderGeometryInput {
-    pub font_size: f32,
-    pub label_font_size: f32,
-    pub comment_font_size: f32,
-    pub label_gap: f32,
-    pub item_padding_x: f32,
-    pub item_padding_y: f32,
-    pub preedit_height: f32,
-    pub max_width: f32,
-    pub max_height: f32,
-    pub padding_x: f32,
-    pub padding_y: f32,
-    pub row_gap: f32,
-    pub column_gap: f32,
-    pub page_size: u32,
-    pub orientation: u8,
-    pub overflow: u8,
-    pub writing: u8,
-    /// Manual scroll offset in physical pixels; negative means auto.
-    pub scroll_override_px: f32,
-}
-
-/// Geometry + pixel buffer descriptor returned by `fcitx5_candidate_render_window`.
-#[cfg(windows)]
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Fcitx5CandidateRenderOutput {
-    pub window_x: f32,
-    pub window_y: f32,
-    pub window_w: f32,
-    pub window_h: f32,
-    pub pixel_stride: u32,
-    pub pixel_byte_len: u64,
-}
-
-/// Combined two-phase render + DC blit (081C paint-assembly slice).
-///
-/// Runs `fcitx5_candidate_render_window`'s size query and buffer render, then
-/// blits the result through `window_host::blit_bgra_to_dc`. Returns 0 on a
-/// painted frame, 2 when the renderer produced no bitmap (empty window), and
-/// 1 on invalid input or blit failure.
-///
-/// # Safety
-///
-/// The candidate, size, theme, geometry, and preedit pointers must satisfy the
-/// two-phase render ABI; `dc` must be a live device context for the call.
-#[cfg(windows)]
-#[no_mangle]
-pub unsafe extern "C" fn fcitx5_candidate_render_window_blit_to_dc(
-    in_candidates: *const Fcitx5CandidateRenderCandidateInput,
-    in_sizes: *const Fcitx5CandidateLayoutSize,
-    candidate_count: usize,
-    in_theme: *const Fcitx5CandidateRenderThemeInput,
-    in_geometry: *const Fcitx5CandidateRenderGeometryInput,
-    preedit_utf8: *const u8,
-    preedit_len: usize,
-    dpi_scale: f32,
-    high_contrast: u8,
-    selected: u64,
-    dc: *mut c_void,
-    client_width: i32,
-    client_height: i32,
-) -> i32 {
-    let mut out = Fcitx5CandidateRenderOutput::default();
-    // SAFETY: callers uphold the same pointer contracts as the two-phase ABI.
-    let rc1 = unsafe {
-        fcitx5_candidate_render_window(
-            in_candidates,
-            in_sizes,
-            candidate_count,
-            in_theme,
-            in_geometry,
-            preedit_utf8,
-            preedit_len,
-            dpi_scale,
-            high_contrast,
-            selected,
-            core::ptr::null_mut(),
-            0,
-            &mut out,
-        )
-    };
-    if rc1 != 2 || out.window_w < 1.0 || out.window_h < 1.0 {
-        return 2;
-    }
-    let byte_len = out.pixel_byte_len as usize;
-    if byte_len == 0 {
-        return 2;
-    }
-    let mut pixels = vec![0_u8; byte_len];
-    // SAFETY: same pointer contracts; buffer matches the queried size.
-    let rc2 = unsafe {
-        fcitx5_candidate_render_window(
-            in_candidates,
-            in_sizes,
-            candidate_count,
-            in_theme,
-            in_geometry,
-            preedit_utf8,
-            preedit_len,
-            dpi_scale,
-            high_contrast,
-            selected,
-            pixels.as_mut_ptr(),
-            pixels.len(),
-            &mut out,
-        )
-    };
-    if rc2 != 0 {
-        return 1;
-    }
-    // SAFETY: `dc` validity is the caller's contract for the blit ABI.
-    let blitted = unsafe {
-        crate::window_host::blit_bgra_to_dc(
-            dc,
-            pixels.as_ptr(),
-            pixels.len(),
-            out.pixel_stride as usize,
-            client_width,
-            client_height,
-        )
-    };
-    i32::from(blitted != 0)
-}
-
 /// One frame to paint, positioned exactly as the frame update laid it out.
 #[cfg(windows)]
 pub struct FramePaint<'a> {
@@ -4550,6 +4183,26 @@ pub unsafe fn render_frame_to_dc(
     client_width: i32,
     client_height: i32,
 ) -> bool {
+    let render = render_frame(frame);
+    if render.pixels.is_empty() {
+        return false;
+    }
+    // SAFETY: `dc` validity is the caller's contract.
+    unsafe {
+        crate::window_host::blit_bgra_to_dc(
+            dc,
+            render.pixels.as_ptr(),
+            render.pixels.len(),
+            render.stride as usize,
+            client_width,
+            client_height,
+        ) != 0
+    }
+}
+
+/// Renders `frame` to a window-sized BGRA bitmap.
+#[cfg(windows)]
+pub fn render_frame(frame: &FramePaint<'_>) -> RenderWindowOutput {
     let preedit = frame.preedit.filter(|text| !text.is_empty());
     let candidate_top = if preedit.is_some() {
         frame.candidate_top
@@ -4597,7 +4250,7 @@ pub unsafe fn render_frame_to_dc(
         preedit_height: candidate_top,
         ..frame.geometry
     };
-    let render = renderer::render_candidate_window(&renderer::RenderWindowInput {
+    renderer::render_candidate_window(&renderer::RenderWindowInput {
         axis_result: &axis_result,
         candidates: frame.candidates,
         theme: &render_theme(&frame.theme),
@@ -4607,21 +4260,7 @@ pub unsafe fn render_frame_to_dc(
         dpi_scale: 1.0,
         high_contrast: frame.high_contrast,
         selected: frame.selected,
-    });
-    if render.pixels.is_empty() {
-        return false;
-    }
-    // SAFETY: `dc` validity is the caller's contract.
-    unsafe {
-        crate::window_host::blit_bgra_to_dc(
-            dc,
-            render.pixels.as_ptr(),
-            render.pixels.len(),
-            render.stride as usize,
-            client_width,
-            client_height,
-        ) != 0
-    }
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -7889,10 +7528,6 @@ mod axis_layout_ffi_tests {
         );
     }
 
-    fn utf8_slice(value: &str) -> (*const u8, usize) {
-        (value.as_ptr(), value.len())
-    }
-
     fn render_theme_input() -> Fcitx5CandidateRenderThemeInput {
         Fcitx5CandidateRenderThemeInput {
             background_r: 255,
@@ -7928,110 +7563,57 @@ mod axis_layout_ffi_tests {
         }
     }
 
-    fn render_geometry_input() -> Fcitx5CandidateRenderGeometryInput {
-        Fcitx5CandidateRenderGeometryInput {
-            font_size: 18.0,
-            label_font_size: 16.0,
-            comment_font_size: 14.0,
-            label_gap: 4.0,
-            item_padding_x: 8.0,
-            item_padding_y: 6.0,
-            preedit_height: 30.0,
-            max_width: 400.0,
-            max_height: 0.0,
-            padding_x: 8.0,
-            padding_y: 6.0,
-            row_gap: 2.0,
-            column_gap: 8.0,
-            page_size: 0,
-            orientation: 1,
-            overflow: 0,
-            writing: 0,
-            scroll_override_px: -1.0,
-        }
-    }
-
     #[test]
     #[cfg(windows)]
-    fn render_window_ffi_returns_bgra_buffer_and_window_rect() {
-        let cand_text = |text: &str, label: &str, comment: &str| {
-            let (text_p, text_len) = utf8_slice(text);
-            let (label_p, label_len) = utf8_slice(label);
-            let (reserved_label_p, reserved_label_len) = utf8_slice(label);
-            let (comment_p, comment_len) = utf8_slice(comment);
-            Fcitx5CandidateRenderCandidateInput {
-                label: label_p,
-                label_len,
-                reserved_label: reserved_label_p,
-                reserved_label_len,
-                text: text_p,
-                text_len,
-                comment: comment_p,
-                comment_len,
-            }
+    fn render_frame_paints_the_frame_rects_below_the_preedit_row() {
+        let candidates = ["你", "好", "汉"].map(|text| CandidateRenderData {
+            label: "1".to_owned(),
+            reserved_label: "1".to_owned(),
+            text: text.to_owned(),
+            comment: String::new(),
+        });
+        // Content rects as the frame stores them: window-local, below a
+        // 30 px preedit block, inset by the item padding.
+        let item_rects = [0.0_f32, 1.0, 2.0].map(|row| Rect {
+            left: 18.0,
+            top: 30.0 + 6.0 + row * 36.0 + 6.0,
+            right: 100.0,
+            bottom: 30.0 + 6.0 + row * 36.0 + 30.0,
+        });
+        let geometry = RenderGeometry {
+            item_padding_x: 8.0,
+            item_padding_y: 6.0,
+            ..RenderGeometry::default()
         };
-        let candidates = [
-            cand_text("你", "1", "nǐ"),
-            cand_text("好", "2", "hǎo"),
-            cand_text("汉", "3", ""),
-        ];
-        let sizes = [Fcitx5CandidateLayoutSize {
-            width: 80.0,
-            height: 24.0,
-        }; 3];
-        let theme = render_theme_input();
-        let geometry = render_geometry_input();
-        let mut out = Fcitx5CandidateRenderOutput::default();
-        let preedit = "ni";
-        let (preedit_p, preedit_len) = utf8_slice(preedit);
-        // SAFETY: all inputs are live for the call and out is uniquely writable test storage.
-        let code = unsafe {
-            fcitx5_candidate_render_window(
-                candidates.as_ptr(),
-                sizes.as_ptr(),
-                candidates.len(),
-                &theme,
-                &geometry,
-                preedit_p,
-                preedit_len,
-                1.0,
-                0,
-                1,
-                std::ptr::null_mut(),
-                0,
-                &mut out,
-            )
+        let frame = FramePaint {
+            candidates: &candidates,
+            item_rects: &item_rects,
+            window_width: 120.0,
+            window_height: 150.0,
+            candidate_top: 30.0,
+            viewport_offset: None,
+            content_size: Size {
+                width: 120.0,
+                height: 120.0,
+            },
+            writing: axis_layout::WritingMode::Horizontal,
+            theme: render_theme_input(),
+            geometry,
+            preedit: Some("ni"),
+            high_contrast: false,
+            selected: Some(1),
         };
-        assert_eq!(code, 2, "size query returns the required pixel size");
-        let required = out.pixel_byte_len as usize;
-        assert!(out.window_w > 0.0 && out.window_h > 0.0);
-        assert!(required > 0);
-        assert!(out.pixel_stride > 0);
-        let mut pixels = vec![0u8; required];
-        // SAFETY: all inputs are live for the call and pixels/out provide writable storage for supplied bounds.
-        let code = unsafe {
-            fcitx5_candidate_render_window(
-                candidates.as_ptr(),
-                sizes.as_ptr(),
-                candidates.len(),
-                &theme,
-                &geometry,
-                preedit_p,
-                preedit_len,
-                1.0,
-                0,
-                1,
-                pixels.as_mut_ptr(),
-                pixels.len(),
-                &mut out,
-            )
-        };
-        assert_eq!(code, 0, "render into the sized buffer succeeds");
-        assert_eq!(pixels.len(), out.pixel_byte_len as usize);
-        assert_eq!(
-            out.pixel_stride as usize,
-            (out.window_w.ceil() as usize) * 4
+        let render = render_frame(&frame);
+        assert_eq!((render.width, render.height), (120, 150));
+        // The highlight fills the second candidate's rect, not a row shifted
+        // by the preedit block.
+        let inside = render.pixel(60, 36 + 36 + 2).expect("inside the window");
+        assert_eq!(&inside[..3], &[96, 193, 7], "selected background (BGR)");
+        let first = render.pixel(60, 36 + 2).expect("inside the window");
+        assert_ne!(
+            &first[..3],
+            &[96, 193, 7],
+            "first candidate stays unselected"
         );
-        assert!(pixels.iter().any(|&b| b != 0), "buffer is not all zeros");
     }
 }

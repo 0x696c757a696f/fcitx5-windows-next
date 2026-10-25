@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 
 const UNSAFE_EXCEPTIONS: &[&str] = &[
     "rust/candidate-core/src/candidate_abi.rs",
-    "rust/candidate-core/src/bin/candidate_poc.rs",
     "rust/candidate-core/src/bin/fcitx5_ui.rs",
     "rust/candidate-core/src/frame_ffi.rs",
     "rust/candidate-core/src/frame_update.rs",

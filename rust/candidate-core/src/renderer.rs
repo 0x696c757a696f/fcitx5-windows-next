@@ -1188,7 +1188,7 @@ pub(crate) fn grapheme_clusters(text: &str) -> Vec<&str> {
 /// Vertical writing modes: the windui DWrite engine has no vertical text
 /// flow, so each glyph is typeset horizontally, one glyph per row, top →
 /// bottom, centered in the column cell (CJK reads as a vertical column of
-/// upright glyphs). This mirrors the frozen candidate_poc `render_vertical_text`
+/// upright glyphs). This mirrors the frozen `render_vertical_text`
 /// interim rendering note (per-glyph vertical glyph drawing stays a later
 /// renderer slice; the label draws once above the glyph stack).
 fn draw_candidate_vertical(
@@ -1358,7 +1358,7 @@ fn draw_border(
 /// One clipped no-wrap text run inside `rect` (vertical centering comes from
 /// the DWrite engine's block contract). `End`-aligned text is anchored so the
 /// visible run ends at the rect's right edge (layout widened on the align
-/// side, same trick as candidate_poc).
+/// side, the frozen prototype's trick).
 fn draw_text_clipped(
     canvas: &mut SkiaCanvas<'_>,
     text: &str,

@@ -17,9 +17,5 @@ path = "src/lib.rs"
 crate-type = ["rlib", "staticlib"]
 
 [[bin]]
-name = "fcitx5-candidate-poc"
-path = "src/bin/candidate_poc.rs"
-
-[[bin]]
 name = "fcitx5-ui"
 path = "src/bin/fcitx5_ui.rs"
