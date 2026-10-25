@@ -51,8 +51,16 @@ CloseApplications=no
 RestartApplications=no
 SetupLogging=yes
 
+#define RuntimeStageDir StageDir + "\runtime\" + ReleaseGeneration
+
 [Files]
-Source: "{#StageDir}\*"; DestDir: "{app}"; Excludes: "portable.flag,tsf\x64\fcitx5-tsf.dll,tsf\x64\fcitx5-tsf.generation,tsf\x86\fcitx5-tsf.dll,tsf\x86\fcitx5-tsf.generation"; Flags: ignoreversion recursesubdirs createallsubdirs
+; The top-level bin, lib and share trees are byte-identical copies of the
+; runtime generation. Source them from the runtime tree so the compiler stores
+; each file only once instead of compressing the payload twice.
+Source: "{#StageDir}\*"; DestDir: "{app}"; Excludes: "portable.flag,\bin,\bin\*,\lib,\lib\*,\share,\share\*,tsf\x64\fcitx5-tsf.dll,tsf\x64\fcitx5-tsf.generation,tsf\x86\fcitx5-tsf.dll,tsf\x86\fcitx5-tsf.generation"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#RuntimeStageDir}\bin\*"; DestDir: "{app}\bin"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#RuntimeStageDir}\lib\*"; DestDir: "{app}\lib"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#RuntimeStageDir}\share\*"; DestDir: "{app}\share"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StageDir}\tsf\x64\fcitx5-tsf.dll"; DestDir: "{tmp}\Fcitx5Tsf\x64"; Flags: deleteafterinstall
 Source: "{#StageDir}\tsf\x86\fcitx5-tsf.dll"; DestDir: "{tmp}\Fcitx5Tsf\x86"; Flags: deleteafterinstall
 

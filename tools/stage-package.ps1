@@ -105,9 +105,20 @@ New-Item -ItemType Directory -Force -Path $root, $artifacts | Out-Null
 Copy-Item -LiteralPath (Join-Path $core 'bin') -Destination $root -Recurse
 Copy-Item -LiteralPath (Join-Path $core 'lib') -Destination $root -Recurse
 Copy-Item -LiteralPath (Join-Path $core 'share') -Destination $root -Recurse
-foreach ($path in @((Join-Path $root 'lib/cmake'), (Join-Path $root 'share/fcitx5/testing'))) {
+# Drop build-time leftovers of the native install: CMake/pkg-config metadata,
+# import libraries, Linux desktop integration files, shell scripts and the
+# libime/Sogou dictionary build tools, none of which the Windows runtime loads.
+foreach ($relative in @('lib/cmake', 'lib/pkgconfig', 'share/cmake', 'share/metainfo',
+                         'share/applications', 'share/fcitx5/testing',
+                         'bin/fcitx5-configtool', 'bin/fcitx5-diagnose',
+                         'bin/scel2org5.exe')) {
+  $path = Join-Path $root $relative
   if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
 }
+Get-ChildItem -LiteralPath (Join-Path $root 'bin') -Filter 'libime_*' -File |
+  Remove-Item -Force
+Get-ChildItem -LiteralPath (Join-Path $root 'lib') -Filter '*.a' -File |
+  Remove-Item -Force
 Get-ChildItem -LiteralPath (Join-Path $root 'lib/fcitx5') -Filter 'libtest*.dll' -File `
   -ErrorAction SilentlyContinue | Remove-Item -Force
 
@@ -196,6 +207,29 @@ $manifest = [ordered]@{
 [IO.File]::WriteAllText((Join-Path $root 'manifest.json'),
   (($manifest | ConvertTo-Json -Depth 5) + "`n"), [Text.UTF8Encoding]::new($false))
 
+function Write-PayloadSizeReport([string] $payloadRoot) {
+  $all = @(Get-ChildItem -LiteralPath $payloadRoot -File -Recurse)
+  $total = ($all | Measure-Object -Property Length -Sum).Sum
+  Write-Host ('Payload: {0} files, {1:N1} MiB' -f $all.Count, ($total / 1MB))
+  $all | Group-Object {
+    $parts = [IO.Path]::GetRelativePath($payloadRoot, $_.FullName).Replace('\', '/').Split('/')
+    if ($parts.Count -gt 2) { $parts[0] + '/' + $parts[1] } else { $parts[0] }
+  } | ForEach-Object {
+    [pscustomobject]@{
+      Directory = $_.Name
+      Files = $_.Count
+      MiB = [math]::Round((($_.Group | Measure-Object -Property Length -Sum).Sum / 1MB), 2)
+    }
+  } | Sort-Object MiB -Descending | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+  $all | Sort-Object Length -Descending | Select-Object -First 40 | ForEach-Object {
+    [pscustomobject]@{
+      Path = [IO.Path]::GetRelativePath($payloadRoot, $_.FullName).Replace('\', '/')
+      MiB = [math]::Round($_.Length / 1MB, 2)
+    }
+  } | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+}
+Write-PayloadSizeReport $root
+
 $artifactSuffix = if ($Channel -eq 'stable') { '' } else { "-$Channel" }
 $portable = Join-Path $artifacts "fcitx5-windows-$Version$artifactSuffix-portable.zip"
 Compress-Archive -Path $root -DestinationPath $portable -CompressionLevel Optimal -Force
@@ -228,4 +262,7 @@ if (-not $SkipInstaller) {
 }
 [IO.File]::WriteAllText((Join-Path $outRoot 'current-stage.txt'), $root,
   [Text.UTF8Encoding]::new($false))
+Get-ChildItem -LiteralPath $artifacts -File | ForEach-Object {
+  Write-Host ('{0}: {1:N1} MiB' -f $_.Name, ($_.Length / 1MB))
+}
 Write-Host "Package artifacts staged from one build: $artifacts"

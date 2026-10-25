@@ -39,10 +39,25 @@ if ($manifest.version -ne $Version -or $manifest.channel -ne $Channel -or
     $manifest.source_commit -ne $sourceCommit -or $manifest.source_tree_clean -ne $true) {
   throw 'Tested stage lineage does not match requested release identity.'
 }
+$generation = [string] $manifest.release_generation
+if ($generation -notmatch '^[a-z0-9_-]{1,32}$') { throw 'Tested stage has no valid release generation.' }
+$runtimeRoot = Join-Path $stage (Join-Path 'runtime' $generation)
+$runtimePrefix = $runtimeRoot.TrimEnd('\') + '\'
+# The runtime generation mirrors the top-level bin/lib/share trees. Sign only the
+# top-level copies and mirror the signed bytes so both stay identical; the
+# installer stores each mirrored file once.
 $peFiles = @(Get-ChildItem -LiteralPath $stage -File -Recurse -Include *.exe,*.dll |
-  Select-Object -ExpandProperty FullName)
+  Select-Object -ExpandProperty FullName |
+  Where-Object { -not $_.StartsWith($runtimePrefix, [StringComparison]::OrdinalIgnoreCase) })
 & (Join-Path $PSScriptRoot 'sign-release.ps1') -Paths $peFiles `
   -CertificateThumbprint $CertificateThumbprint -TimestampUrl $TimestampUrl
+foreach ($path in $peFiles) {
+  $relative = [IO.Path]::GetRelativePath($stage, $path)
+  $mirror = Join-Path $runtimeRoot $relative
+  if (Test-Path -LiteralPath $mirror -PathType Leaf) {
+    Copy-Item -LiteralPath $path -Destination $mirror -Force
+  }
+}
 & (Join-Path $PSScriptRoot 'release-plugin-artifacts.ps1') `
   -Version $Version -Channel $Channel -ReleaseSequence $PluginReleaseSequence -StageRoot $stage `
   -TrustedKeyring $TrustedKeyring -SigningKey $PluginSigningKey
@@ -62,8 +77,8 @@ $portable = Join-Path $artifacts "fcitx5-windows-$Version$suffix-portable.zip"
 Compress-Archive -Path $stage -DestinationPath $portable -CompressionLevel Optimal -Force
 & (Join-Path $PSScriptRoot 'prepare-package-toolchains.ps1')
 $iscc = Join-Path $repoRoot 'out/toolchains/inno-7.0.2/ISCC.exe'
-& $iscc "/DProductVersion=$Version" "/DReleaseChannel=$Channel" "/DStageDir=$stage" `
-  "/DArtifactDir=$artifacts" (Join-Path $repoRoot 'installer/fcitx5-windows.iss')
+& $iscc "/DProductVersion=$Version" "/DReleaseChannel=$Channel" `
+  "/DReleaseGeneration=$generation" "/DStageDir=$stage" "/DArtifactDir=$artifacts" (Join-Path $repoRoot 'installer/fcitx5-windows.iss')
 if ($LASTEXITCODE -ne 0) { throw 'Release installer packaging failed.' }
 $installer = Join-Path $artifacts "fcitx5-windows-$Version$suffix-setup.exe"
 & (Join-Path $PSScriptRoot 'sign-release.ps1') -Paths @($installer) `
