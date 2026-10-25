@@ -55,15 +55,15 @@ jobs:
       - name: Install sccache compiler cache
         uses: Mozilla-Actions/sccache-action@v0.0.11
         with:
-          version: v0.17.0
+          version: v0.19.0
 
       - name: Restore fast Windows toolchain cache
         uses: actions/cache@v6
         with:
           path: out/toolchains/fast
-          key: ${{ runner.os }}-release-fast-toolchain-llvm-22.1.8-cmake-3.31.8-ninja-1.13.2-sccache-0.17.0-${{ hashFiles('tools/prepare-fast-toolchain.ps1') }}
+          key: ${{ runner.os }}-release-fast-toolchain-llvm-22.1.8-cmake-3.31.8-ninja-1.13.2-sccache-0.19.0-${{ hashFiles('tools/prepare-fast-toolchain.ps1') }}
           restore-keys: |
-            ${{ runner.os }}-release-fast-toolchain-llvm-22.1.8-cmake-3.31.8-ninja-1.13.2-sccache-0.17.0-
+            ${{ runner.os }}-release-fast-toolchain-llvm-22.1.8-cmake-3.31.8-ninja-1.13.2-sccache-0.19.0-
             ${{ runner.os }}-fast-toolchain-
 
       - name: Prepare fast Windows toolchain
@@ -104,7 +104,7 @@ jobs:
         run: |
           ./tools/prepare-rust.ps1
           ./tools/prepare-package-dependencies.ps1
-          rustup target add x86_64-pc-windows-gnu --toolchain 1.98.0-x86_64-pc-windows-msvc
+          rustup target add x86_64-pc-windows-gnu --toolchain 1.99.1-x86_64-pc-windows-msvc
           # native-engine invokes cargo from the repository CARGO_HOME. The
           # runner's rustup lives elsewhere, so give that bin directory rustup
           # proxies of its own.
@@ -134,7 +134,7 @@ jobs:
           }
           # native-engine runs several cargo builds in parallel through this
           # sccache; start its server once so they do not race to spawn it.
-          & ./out/toolchains/fast/sccache-0.17.0/sccache-v0.17.0-x86_64-pc-windows-msvc/sccache.exe --start-server
+          & ./out/toolchains/fast/sccache-0.19.0/sccache-v0.19.0-x86_64-pc-windows-msvc/sccache.exe --start-server
           ./tools/bootstrap-fcitx.ps1
           # The package gate runs the real Fcitx acceptance against the
           # official-rebaseline roots; reuse the tree just built for them.

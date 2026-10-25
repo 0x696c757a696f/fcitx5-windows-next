@@ -11,7 +11,7 @@
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-3B82F6?style=for-the-badge)](LICENSE)
 <br>
 [![Windows](https://img.shields.io/badge/Windows-TSF-0078D4?style=flat-square&logo=windows11&logoColor=white)](#-architecture)
-[![Rust](https://img.shields.io/badge/Rust-1.98-B7410E?style=flat-square&logo=rust&logoColor=white)](rust-toolchain.toml)
+[![Rust](https://img.shields.io/badge/Rust-1.99-B7410E?style=flat-square&logo=rust&logoColor=white)](rust-toolchain.toml)
 [![Arch](https://img.shields.io/badge/arch-x64%20%7C%20x86%20%7C%20ARM64-6E56CF?style=flat-square)](#-build-from-source)
 [![Fcitx5](https://img.shields.io/badge/engine-Fcitx5%20Core-2EA043?style=flat-square)](https://github.com/fcitx/fcitx5)
 

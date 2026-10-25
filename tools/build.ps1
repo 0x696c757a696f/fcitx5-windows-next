@@ -349,7 +349,7 @@ try {
   & (Join-Path $PSScriptRoot 'prepare-fast-toolchain.ps1') -InstallLocal
   & (Join-Path $PSScriptRoot 'configure-ci-cache.ps1')
   & (Join-Path $PSScriptRoot 'prepare-rust.ps1')
-  $rustToolchainBin = Join-Path $env:RUSTUP_HOME 'toolchains/1.98.0-x86_64-pc-windows-msvc/bin'
+  $rustToolchainBin = Join-Path $env:RUSTUP_HOME 'toolchains/1.99.1-x86_64-pc-windows-msvc/bin'
   $env:PATH = "$rustToolchainBin;$env:PATH"
   switch ($Command) {
     'bootstrap' {

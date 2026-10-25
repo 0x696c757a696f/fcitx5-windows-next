@@ -13,7 +13,7 @@ $downloadRoot = Join-Path $fastRoot 'downloads'
 $llvmVersion = '22.1.8'
 $cmakeVersion = '3.31.8'
 $ninjaVersion = '1.13.2'
-$sccacheVersion = '0.17.0'
+$sccacheVersion = '0.19.0'
 
 function Add-PathForCurrentAndFutureSteps {
   param([Parameter(Mandatory)] [string] $Directory)

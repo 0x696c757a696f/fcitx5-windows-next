@@ -114,7 +114,7 @@ find_program(FCITX_CARGO_EXECUTABLE cargo REQUIRED)
 find_program(
   FCITX_SCCACHE_EXECUTABLE sccache
   PATHS
-    "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/fast/sccache-0.17.0/sccache-v0.17.0-x86_64-pc-windows-msvc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/out/toolchains/fast/sccache-0.19.0/sccache-v0.19.0-x86_64-pc-windows-msvc"
   NO_DEFAULT_PATH)
 find_program(FCITX_SCCACHE_EXECUTABLE sccache)
 find_program(FCITX_PWSH_EXECUTABLE pwsh powershell REQUIRED)

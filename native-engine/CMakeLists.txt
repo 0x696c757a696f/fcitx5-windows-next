@@ -67,7 +67,7 @@ set(FCITX_RUST_CARGO
 set(FCITX_RUSTUP_HOME "${REPOSITORY_ROOT}/out/toolchains/rust/rustup-home")
 set(FCITX_RUST_CARGO_HOME "${REPOSITORY_ROOT}/out/toolchains/rust/cargo-home")
 set(FCITX_RUSTC_WRAPPER
-    "${REPOSITORY_ROOT}/out/toolchains/fast/sccache-0.17.0/sccache-v0.17.0-x86_64-pc-windows-msvc/sccache.exe")
+    "${REPOSITORY_ROOT}/out/toolchains/fast/sccache-0.19.0/sccache-v0.19.0-x86_64-pc-windows-msvc/sccache.exe")
 set(FCITX_RUST_TARGET_DIR "${REPOSITORY_ROOT}/out/toolchains/rust/target-gnu")
 set(FCITX_RUST_TARGET "x86_64-pc-windows-gnu")
 set(FCITX_RUST_CARGO_ENV

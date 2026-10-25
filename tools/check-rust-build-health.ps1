@@ -17,7 +17,7 @@ try {
   if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
     $env:CARGO_TARGET_DIR = Join-Path $rustRoot 'target'
   }
-  $rustToolchainBin = Join-Path $env:RUSTUP_HOME 'toolchains/1.98.0-x86_64-pc-windows-msvc/bin'
+  $rustToolchainBin = Join-Path $env:RUSTUP_HOME 'toolchains/1.99.1-x86_64-pc-windows-msvc/bin'
   $env:PATH = "$rustToolchainBin;$env:PATH"
 
   Write-Host 'Running fast Rust type-check for the workspace.'

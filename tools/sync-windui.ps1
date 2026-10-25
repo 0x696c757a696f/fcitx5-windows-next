@@ -101,10 +101,10 @@ if ($Commit -notmatch '^[0-9a-f]{40}$') {
 }
 
 # Use the repository toolchain cargo for the post-sync test run.
-$env:RUSTUP_HOME = 'D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\rust\rustup-home'
-$env:CARGO_HOME = 'D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\rust\cargo-home'
-$env:RUSTUP_TOOLCHAIN = '1.98.0-x86_64-pc-windows-msvc'
-$cargo = 'D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\rust\cargo-home\bin\cargo.exe'
+$env:RUSTUP_HOME = Join-Path $repoRoot 'out\toolchains\rust\rustup-home'
+$env:CARGO_HOME = Join-Path $repoRoot 'out\toolchains\rust\cargo-home'
+$env:RUSTUP_TOOLCHAIN = '1.99.1-x86_64-pc-windows-msvc'
+$cargo = Join-Path $env:CARGO_HOME 'bin\cargo.exe'
 if (-not (Test-Path -LiteralPath $cargo)) {
   $cargo = (Get-Command cargo.exe -ErrorAction SilentlyContinue).Source
   if (-not $cargo) { throw 'Cargo executable not found.' }
@@ -184,13 +184,13 @@ try {
         [System.Text.UTF8Encoding]::new($false))
       $windUiWorkspaceMarkerAdded = $true
     }
-    Invoke-Checked -FilePath $cargo -Arguments @('+1.98.0', 'check',
+    Invoke-Checked -FilePath $cargo -Arguments @('+1.99.1', 'check',
       '--manifest-path', $windUiManifest,
       '--target', 'i686-pc-windows-msvc',
       '--target-dir', $windUiTargetDir,
       '--no-default-features') -Name 'cargo check windui i686'
     Write-Output 'patched official wind-ui-rust i686 check passed.'
-    Invoke-Checked -FilePath $cargo -Arguments @('+1.98.0', 'check',
+    Invoke-Checked -FilePath $cargo -Arguments @('+1.99.1', 'check',
       '--manifest-path', $windUiManifest,
       '--target', 'aarch64-pc-windows-msvc',
       '--target-dir', $windUiTargetDir,
@@ -268,9 +268,9 @@ try {
     [System.Text.UTF8Encoding]::new($false))
 
   # Run the affected consumer tests.
-  Invoke-Checked -FilePath $cargo -Arguments @('+1.98.0', 'update',
-    '--package', 'windui', '--offline') -Name 'cargo update windui lockfile'
-  Invoke-Checked -FilePath $cargo -Arguments @('+1.98.0', 'test', '--locked',
+  Invoke-Checked -FilePath $cargo -Arguments @('+1.99.1', 'update',
+    '--package', 'windui') -Name 'cargo update windui lockfile'
+  Invoke-Checked -FilePath $cargo -Arguments @('+1.99.1', 'test', '--locked',
     '-p', 'fcitx5-config-poc', '-p', 'fcitx5-config-qa',
     '--target', 'x86_64-pc-windows-msvc') -Name 'cargo test config consumers'
   Write-Output 'config-poc/config-qa tests passed.'

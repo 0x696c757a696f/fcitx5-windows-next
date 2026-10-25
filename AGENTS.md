@@ -85,16 +85,19 @@ Execution environment for implementation agents (give every subagent these absol
   inside the agent worktree.
 - Set `RUSTUP_HOME=D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\rust\rustup-home`,
   `CARGO_HOME=D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\rust\cargo-home`, and
-  `RUSTUP_TOOLCHAIN=1.98.0-x86_64-pc-windows-msvc`.
+  `RUSTUP_TOOLCHAIN=1.99.1-x86_64-pc-windows-msvc`.
 - The repository `.cargo/config.toml` already points `rustc-wrapper` at the pinned sccache; also pass
   the absolute sccache path explicitly:
-  `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast\sccache-0.17.0\sccache-v0.17.0-x86_64-pc-windows-msvc\sccache.exe`.
+  `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast\sccache-0.19.0\sccache-v0.19.0-x86_64-pc-windows-msvc\sccache.exe`.
 - CMake/CTest:
   `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast\cmake-3.31.8\cmake-3.31.8-windows-x86_64\bin`.
 - Ninja: `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast\ninja-1.13.2\ninja.exe`.
 - LLVM bin:
   `D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast\llvm-22.1.8\clang+llvm-22.1.8-x86_64-pc-windows-msvc\bin`.
 - Python: `D:\Dev\pixi\envs\python\python.exe`.
+- To bump the Rust toolchain or crates, run `tools/update-rust-dependencies.py` (see `--help`); it
+  also resyncs the crate inventory in `third_party/dependencies.json`. CI runs it weekly through
+  `.github/workflows/update-dependencies.yml`.
 - Use PowerShell syntax only on this Windows task; never use Bash quoting/heredocs. Wrap statement
   blocks (`foreach`, `if`) in `$()`/`@()` before piping, expand wildcard directories with
   `Get-ChildItem -Filter` before passing real paths to `rg`, and prefer single quotes around complex

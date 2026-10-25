@@ -8,7 +8,7 @@ $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $rustRoot = Join-Path $repoRoot 'out/toolchains/rust'
 $rustupHome = Join-Path $rustRoot 'rustup-home'
 $cargoHome = Join-Path $rustRoot 'cargo-home'
-$toolchain = '1.98.0-x86_64-pc-windows-msvc'
+$toolchain = '1.99.1-x86_64-pc-windows-msvc'
 $targets = @(
   'x86_64-pc-windows-msvc',
   'i686-pc-windows-msvc',

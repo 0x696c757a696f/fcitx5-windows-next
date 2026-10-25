@@ -28,7 +28,7 @@ $env:Path = (($env:Path -split [IO.Path]::PathSeparator) |
 $env:FCITX_WINDOWS_VERSION = $Version
 if ([string]::IsNullOrWhiteSpace($env:RUSTC_WRAPPER)) {
   $repoSccache = Join-Path $repoRoot `
-    'out/toolchains/fast/sccache-0.17.0/sccache-v0.17.0-x86_64-pc-windows-msvc/sccache.exe'
+    'out/toolchains/fast/sccache-0.19.0/sccache-v0.19.0-x86_64-pc-windows-msvc/sccache.exe'
   if (Test-Path -LiteralPath $repoSccache -PathType Leaf) {
     $env:RUSTC_WRAPPER = [IO.Path]::GetFullPath($repoSccache)
   }
