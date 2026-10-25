@@ -17,7 +17,7 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-[Highlights](#-highlights) · [Candidate window](#-candidate-window) · [Architecture](#-architecture) · [Quick start](#-quick-start) · [Configuration](#-configuration) · [Docs](#-documentation)
+[Highlights](#-highlights) · [Candidate window](#-candidate-window) · [Architecture](#-architecture) · [Quick start](#-quick-start) · [Configuration](#-configuration) · [Docs](#-documentation) · [Sponsor](#-sponsor)
 
 </div>
 
@@ -194,6 +194,17 @@ The declared Windows compatibility matrix is not yet release-qualified across th
 - [`SECURITY.md`](SECURITY.md): security model and reporting
 - [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md): dependency notices
 - [`AGENTS.md`](AGENTS.md): contributor instructions
+
+## 💖 Sponsor
+
+If this project is useful to you, donations help cover build machines, test devices and development time.
+
+| Channel | Address |
+| --- | --- |
+| **USDC on Arbitrum One** | `0x619FeeF5986b9ed8E75D7CFD67AdB575355b9F80` |
+
+> [!CAUTION]
+> This address accepts **USDC on the Arbitrum One network only**. Do not send other tokens, and do not send from Ethereum mainnet or any other chain: funds sent on the wrong network may be lost. Before confirming, check that the address in your wallet matches the one above character for character.
 
 ## 📄 License
 
