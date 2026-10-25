@@ -32,7 +32,7 @@ if ([string]::IsNullOrWhiteSpace($targetRoot)) {
 $configExecutable = Join-Path $targetRoot "$CargoTarget\debug\fcitx5-config.exe"
 
 & $CargoExecutable build --locked --manifest-path (Join-Path $repo 'Cargo.toml') `
-  -p fcitx5-config-poc --bin fcitx5-config --target $CargoTarget
+  -p fcitx5-config-app --bin fcitx5-config --target $CargoTarget
 if (-not (Test-Path -LiteralPath $configExecutable -PathType Leaf)) {
   throw "Rust Config legacy CLI executable is missing after build: $configExecutable"
 }

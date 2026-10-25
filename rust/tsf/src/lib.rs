@@ -505,9 +505,9 @@ pub fn tsf_binding_markers() -> (&'static str, usize, usize) {
     )
 }
 
-pub fn rust_tsf_poc_policy_report() -> &'static str {
+pub fn rust_tsf_policy_report() -> &'static str {
     concat!(
-        "component:fcitx5-tsf-poc;",
+        "component:fcitx5-tsf;",
         "activatable_empty_tip:true;",
         "shipping_authoritative:true;",
         "cxx_tsf_remains_authoritative:false;",
@@ -526,7 +526,7 @@ pub fn rust_tsf_poc_policy_report() -> &'static str {
 
 pub fn tsf_profile_identity_report() -> String {
     format!(
-        "{{\"format_version\":1,\"product_display_name\":\"{}\",\"profile_display_name\":\"{}\",\"text_service_clsid\":\"3a21b9e2-4f47-4c36-8bfa-91d7d3b3e901\",\"language_profile_guid\":\"6c2ac726-7703-4b65-89af-a77e9e0da102\",\"windows_profile_count\":1,\"dynamic_profile_registration\":false,\"shipping_cxx_authoritative\":false,\"rust_poc_registers_profile\":true,\"rust_shipping_authoritative\":true,\"release_identity_source\":\"cmake/release_identity.h.in\"}}",
+        "{{\"format_version\":1,\"product_display_name\":\"{}\",\"profile_display_name\":\"{}\",\"text_service_clsid\":\"3a21b9e2-4f47-4c36-8bfa-91d7d3b3e901\",\"language_profile_guid\":\"6c2ac726-7703-4b65-89af-a77e9e0da102\",\"windows_profile_count\":1,\"dynamic_profile_registration\":false,\"shipping_cxx_authoritative\":false,\"rust_registers_profile\":true,\"rust_shipping_authoritative\":true,\"release_identity_source\":\"cmake/release_identity.h.in\"}}",
         FCITX5_PRODUCT_DISPLAY_NAME, FCITX5_PROFILE_DISPLAY_NAME
     )
 }
@@ -593,7 +593,7 @@ pub fn tsf_composition_transcript_report() -> String {
 
 pub fn tsf_differential_summary_report() -> String {
     format!(
-        "{{\"format_version\":1,\"component\":\"fcitx5-tsf-poc\",\"shipping_cxx_authoritative\":false,\"rust_shipping_authoritative\":true,\"same_corpus_case_count\":{},\"same_corpus_rust_passes\":{},\"cpp_baseline_ctest\":\"tsf-key-commit-e2e\",\"abi_reports\":{{\"behavior\":true,\"profile_identity\":true,\"ipc_boundary\":true,\"composition_transcript\":true}},\"artifact_audit_ctest\":\"rust-tsf-poc-artifact-audit\",\"x64_x86_export_smoke_required\":true,\"arm64_ci_artifact_green\":true,\"real_host_matrix_pending\":true,\"product_decision\":\"shipping_rust_cutover\"}}",
+        "{{\"format_version\":1,\"component\":\"fcitx5-tsf\",\"shipping_cxx_authoritative\":false,\"rust_shipping_authoritative\":true,\"same_corpus_case_count\":{},\"same_corpus_rust_passes\":{},\"cpp_baseline_ctest\":\"tsf-key-commit-e2e\",\"abi_reports\":{{\"behavior\":true,\"profile_identity\":true,\"ipc_boundary\":true,\"composition_transcript\":true}},\"artifact_audit_ctest\":\"rust-tsf-artifact-audit\",\"x64_x86_export_smoke_required\":true,\"arm64_ci_artifact_green\":true,\"real_host_matrix_pending\":true,\"product_decision\":\"shipping_rust_cutover\"}}",
         REQUIRED_TSF_BEHAVIOR_CASES.len(),
         REQUIRED_TSF_BEHAVIOR_CASES
             .iter()
@@ -732,7 +732,7 @@ impl EditSessionTranscript {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct TsfPocBehaviorState {
+pub struct TsfBehaviorState {
     active: bool,
     thread_manager_sink_advised: bool,
     thread_focus_sink_advised: bool,
@@ -752,7 +752,7 @@ pub struct TsfPocBehaviorState {
     preedit: String,
 }
 
-impl TsfPocBehaviorState {
+impl TsfBehaviorState {
     pub fn activate(&mut self) {
         self.active = true;
         self.thread_manager_sink_advised = true;
@@ -857,7 +857,7 @@ pub fn tsf_behavior_corpus_report() -> String {
 }
 
 fn evaluate_behavior_case(case_id: &str) -> bool {
-    let mut state = TsfPocBehaviorState::default();
+    let mut state = TsfBehaviorState::default();
     match case_id {
         "activate_advises_sinks" => {
             state.activate();
@@ -2762,7 +2762,7 @@ impl IClassFactory_Impl for Fcitx5TsfClassFactory_Impl {
     ITfKeyEventSink
 )]
 struct Fcitx5TsfService {
-    state: RefCell<TsfPocBehaviorState>,
+    state: RefCell<TsfBehaviorState>,
     runtime: RefCell<TsfRuntimeState>,
     composition_sink: ITfCompositionSink,
 }
@@ -2783,7 +2783,7 @@ impl Fcitx5TsfService {
     }
 
     #[cfg(test)]
-    fn lifecycle_state_for_test(&self) -> TsfPocBehaviorState {
+    fn lifecycle_state_for_test(&self) -> TsfBehaviorState {
         self.state.borrow().clone()
     }
 
@@ -3677,7 +3677,7 @@ pub unsafe extern "system" fn DllCanUnloadNow() -> HRESULT {
 /// # Safety
 ///
 /// `class_id`, `interface_id`, and `object` are raw COM ABI pointers supplied
-/// by the host. This PoC only writes a null object pointer after validating that
+/// by the host. This only writes a null object pointer after validating that
 /// `object` is non-null, returns `HRESULT` on every failure, and must never
 /// unwind across the DLL boundary.
 // SAFETY: The COM loader owns the raw GUID and out-pointer arguments and keeps
@@ -3739,7 +3739,7 @@ pub unsafe extern "system" fn Fcitx5TsfCurrentUserProfileStatus() -> HRESULT {
 /// the DLL is unloaded.
 // SAFETY: A non-null `length` must be writable for one `usize` until return;
 // the returned bytes are module-owned and not mutable through this API.
-pub unsafe extern "system" fn Fcitx5TsfPocBehaviorReport(length: *mut usize) -> *const u8 {
+pub unsafe extern "system" fn Fcitx5TsfBehaviorReport(length: *mut usize) -> *const u8 {
     match catch_unwind(|| {
         let report = BEHAVIOR_REPORT.get_or_init(tsf_behavior_differential_report);
         if !length.is_null() {
@@ -3773,7 +3773,7 @@ pub unsafe extern "system" fn Fcitx5TsfPocBehaviorReport(length: *mut usize) -> 
 /// the DLL is unloaded.
 // SAFETY: A non-null `length` must be writable for one `usize` until return;
 // the returned bytes are module-owned and not mutable through this API.
-pub unsafe extern "system" fn Fcitx5TsfPocProfileIdentityReport(length: *mut usize) -> *const u8 {
+pub unsafe extern "system" fn Fcitx5TsfProfileIdentityReport(length: *mut usize) -> *const u8 {
     match catch_unwind(|| {
         let report = PROFILE_IDENTITY_REPORT.get_or_init(tsf_profile_identity_report);
         if !length.is_null() {
@@ -3807,7 +3807,7 @@ pub unsafe extern "system" fn Fcitx5TsfPocProfileIdentityReport(length: *mut usi
 /// the DLL is unloaded.
 // SAFETY: A non-null `length` must be writable for one `usize` until return;
 // the returned bytes are module-owned and not mutable through this API.
-pub unsafe extern "system" fn Fcitx5TsfPocIpcBoundaryReport(length: *mut usize) -> *const u8 {
+pub unsafe extern "system" fn Fcitx5TsfIpcBoundaryReport(length: *mut usize) -> *const u8 {
     match catch_unwind(|| {
         let report = IPC_BOUNDARY_REPORT.get_or_init(tsf_ipc_boundary_report);
         if !length.is_null() {
@@ -3841,7 +3841,7 @@ pub unsafe extern "system" fn Fcitx5TsfPocIpcBoundaryReport(length: *mut usize) 
 /// the DLL is unloaded.
 // SAFETY: A non-null `length` must be writable for one `usize` until return;
 // the returned bytes are module-owned and not mutable through this API.
-pub unsafe extern "system" fn Fcitx5TsfPocCompositionTranscriptReport(
+pub unsafe extern "system" fn Fcitx5TsfCompositionTranscriptReport(
     length: *mut usize,
 ) -> *const u8 {
     match catch_unwind(|| {
@@ -3877,9 +3877,7 @@ pub unsafe extern "system" fn Fcitx5TsfPocCompositionTranscriptReport(
 /// the DLL is unloaded.
 // SAFETY: A non-null `length` must be writable for one `usize` until return;
 // the returned bytes are module-owned and not mutable through this API.
-pub unsafe extern "system" fn Fcitx5TsfPocDifferentialSummaryReport(
-    length: *mut usize,
-) -> *const u8 {
+pub unsafe extern "system" fn Fcitx5TsfDifferentialSummaryReport(length: *mut usize) -> *const u8 {
     match catch_unwind(|| {
         let report = DIFFERENTIAL_SUMMARY_REPORT.get_or_init(tsf_differential_summary_report);
         if !length.is_null() {
@@ -3908,12 +3906,12 @@ pub unsafe extern "system" fn Fcitx5TsfPocDifferentialSummaryReport(
 #[no_mangle]
 /// # Safety
 ///
-/// Test-only PoC export used by the artifact smoke to prove that a forced
+/// Test-only export used by the artifact smoke to prove that a forced
 /// internal panic is converted to `HRESULT` across the DLL ABI.
 // SAFETY: This test export accepts no raw pointers; the forced panic remains
 // inside `panic_to_hresult` and cannot cross the Windows system-call boundary.
-pub unsafe extern "system" fn Fcitx5TsfPocForcedFailureForTest() -> HRESULT {
-    panic_to_hresult(|| panic!("forced Rust TSF PoC ABI panic regression"))
+pub unsafe extern "system" fn Fcitx5TsfForcedFailureForTest() -> HRESULT {
+    panic_to_hresult(|| panic!("forced Rust TSF ABI panic regression"))
 }
 
 #[cfg(test)]
@@ -3926,7 +3924,7 @@ mod tests {
 
     #[test]
     fn panic_boundary_converts_unwind_to_hresult() {
-        let result = panic_to_hresult(|| panic!("forced TSF PoC panic boundary regression"));
+        let result = panic_to_hresult(|| panic!("forced TSF panic boundary regression"));
         assert_eq!(result, E_UNEXPECTED);
     }
 
@@ -4066,7 +4064,7 @@ mod tests {
         let service: ITfTextInputProcessorEx = unsafe {
             factory
                 .CreateInstance(None)
-                .expect("Rust TSF PoC factory should create empty service")
+                .expect("Rust TSF factory should create empty service")
         };
         let key_sink: ITfKeyEventSink = service.cast().expect("key sink should be queryable");
         let thread_sink: ITfThreadMgrEventSink = service
@@ -4082,7 +4080,7 @@ mod tests {
 
     #[test]
     fn policy_report_documents_prohibited_capabilities_absent() {
-        let report = rust_tsf_poc_policy_report();
+        let report = rust_tsf_policy_report();
         assert!(report.contains("windows_rs:true"));
         assert!(report.contains("activatable_empty_tip:true"));
         assert!(report.contains("ITfTextInputProcessorEx:binding-marker"));
@@ -4130,7 +4128,7 @@ mod tests {
         let mut length = 0usize;
         // SAFETY: `length` is a unique aligned out-pointer that remains live
         // for the duration of this synchronous export call.
-        let pointer = unsafe { Fcitx5TsfPocBehaviorReport(&mut length) };
+        let pointer = unsafe { Fcitx5TsfBehaviorReport(&mut length) };
         assert!(!pointer.is_null());
         assert!(length > 0);
         // SAFETY: the export returned a non-null pointer and initialized length
@@ -4144,7 +4142,7 @@ mod tests {
     #[test]
     fn forced_failure_export_converts_panic_to_hresult() {
         // SAFETY: this test-only export has no arguments and owns no caller memory.
-        assert_eq!(unsafe { Fcitx5TsfPocForcedFailureForTest() }, E_UNEXPECTED);
+        assert_eq!(unsafe { Fcitx5TsfForcedFailureForTest() }, E_UNEXPECTED);
     }
 
     #[test]
@@ -4181,7 +4179,7 @@ mod tests {
 
     #[test]
     fn behavior_model_matches_activation_and_sink_corpus() {
-        let mut state = TsfPocBehaviorState::default();
+        let mut state = TsfBehaviorState::default();
         state.activate();
         assert!(state.active);
         assert!(state.thread_manager_sink_advised);
@@ -4193,7 +4191,7 @@ mod tests {
 
     #[test]
     fn behavior_model_applies_commit_and_preedit_corpus() {
-        let mut commit_state = TsfPocBehaviorState::default();
+        let mut commit_state = TsfBehaviorState::default();
         commit_state.activate();
         commit_state.key_down(EngineResult::ok(true, "你", ""));
         assert!(commit_state.eaten);
@@ -4202,7 +4200,7 @@ mod tests {
         assert!(!commit_state.composition_active);
         assert!(!commit_state.fail_open);
 
-        let mut preedit_state = TsfPocBehaviorState::default();
+        let mut preedit_state = TsfBehaviorState::default();
         preedit_state.activate();
         preedit_state.key_down(EngineResult::ok(true, "", "ni"));
         assert!(preedit_state.eaten);
@@ -4214,7 +4212,7 @@ mod tests {
 
     #[test]
     fn behavior_model_routes_key_up_without_eating() {
-        let mut state = TsfPocBehaviorState::default();
+        let mut state = TsfBehaviorState::default();
         state.activate();
         state.key_up();
         assert!(state.release_routed);
@@ -4224,7 +4222,7 @@ mod tests {
 
     #[test]
     fn behavior_model_fails_open_on_timeout_and_malformed_ipc() {
-        let mut timeout_state = TsfPocBehaviorState::default();
+        let mut timeout_state = TsfBehaviorState::default();
         timeout_state.activate();
         timeout_state.key_down(EngineResult::timeout());
         assert!(timeout_state.fail_open);
@@ -4233,7 +4231,7 @@ mod tests {
         assert_eq!(timeout_state.preedit, "");
         assert!(!timeout_state.composition_active);
 
-        let mut malformed_state = TsfPocBehaviorState::default();
+        let mut malformed_state = TsfBehaviorState::default();
         malformed_state.activate();
         malformed_state.key_down(EngineResult::malformed());
         assert!(malformed_state.fail_open);
@@ -4242,7 +4240,7 @@ mod tests {
         assert_eq!(malformed_state.preedit, "");
         assert!(!malformed_state.composition_active);
 
-        let mut generation_state = TsfPocBehaviorState::default();
+        let mut generation_state = TsfBehaviorState::default();
         generation_state.activate();
         generation_state.key_down(EngineResult::generation_mismatch());
         assert!(generation_state.fail_open);
@@ -4254,7 +4252,7 @@ mod tests {
 
     #[test]
     fn behavior_model_deactivate_unadvises_and_clears_composition() {
-        let mut state = TsfPocBehaviorState::default();
+        let mut state = TsfBehaviorState::default();
         state.activate();
         state.key_down(EngineResult::ok(true, "", "ni"));
         assert!(state.composition_active);
@@ -4271,7 +4269,7 @@ mod tests {
 
     #[test]
     fn behavior_model_preserves_uiless_candidate_metadata() {
-        let mut state = TsfPocBehaviorState::default();
+        let mut state = TsfBehaviorState::default();
         state.activate();
         state.candidate_begin_ui_element(false);
         assert!(state.candidate_metadata_available);
@@ -4282,7 +4280,7 @@ mod tests {
 
     #[test]
     fn behavior_model_defers_focus_change_during_key_callback() {
-        let mut state = TsfPocBehaviorState::default();
+        let mut state = TsfBehaviorState::default();
         state.activate();
         state.key_down(EngineResult::ok(true, "", "ni"));
         state.begin_key_callback();
@@ -4295,7 +4293,7 @@ mod tests {
 
     #[test]
     fn behavior_model_uses_single_edit_session_for_commit_preedit() {
-        let mut state = TsfPocBehaviorState::default();
+        let mut state = TsfBehaviorState::default();
         state.activate();
         state.single_edit_session_update(EngineResult::ok(true, "你", "hao"));
         assert!(state.single_edit_session);
@@ -4321,7 +4319,7 @@ mod tests {
         assert!(report.contains("\"windows_profile_count\":1"));
         assert!(report.contains("\"dynamic_profile_registration\":false"));
         assert!(report.contains("\"shipping_cxx_authoritative\":false"));
-        assert!(report.contains("\"rust_poc_registers_profile\":true"));
+        assert!(report.contains("\"rust_registers_profile\":true"));
         assert!(report.contains("\"rust_shipping_authoritative\":true"));
     }
 
@@ -4330,7 +4328,7 @@ mod tests {
         let mut length = 0usize;
         // SAFETY: `length` is a unique aligned out-pointer that remains live
         // for the duration of this synchronous export call.
-        let pointer = unsafe { Fcitx5TsfPocProfileIdentityReport(&mut length) };
+        let pointer = unsafe { Fcitx5TsfProfileIdentityReport(&mut length) };
         assert!(!pointer.is_null());
         assert!(length > 0);
         // SAFETY: the export returned a non-null pointer and initialized length
@@ -4403,7 +4401,7 @@ mod tests {
         let mut length = 0usize;
         // SAFETY: `length` is a unique aligned out-pointer that remains live
         // for the duration of this synchronous export call.
-        let pointer = unsafe { Fcitx5TsfPocIpcBoundaryReport(&mut length) };
+        let pointer = unsafe { Fcitx5TsfIpcBoundaryReport(&mut length) };
         assert!(!pointer.is_null());
         assert!(length > 0);
         // SAFETY: the export returned a non-null pointer and initialized length
@@ -4442,7 +4440,7 @@ mod tests {
         let mut length = 0usize;
         // SAFETY: `length` is a unique aligned out-pointer that remains live
         // for the duration of this synchronous export call.
-        let pointer = unsafe { Fcitx5TsfPocCompositionTranscriptReport(&mut length) };
+        let pointer = unsafe { Fcitx5TsfCompositionTranscriptReport(&mut length) };
         assert!(!pointer.is_null());
         assert!(length > 0);
         // SAFETY: the export returned a non-null pointer and initialized length
@@ -4465,20 +4463,20 @@ mod tests {
         let mut length = 0usize;
         // SAFETY: `length` is a unique aligned out-pointer that remains live
         // for the duration of this synchronous export call.
-        let pointer = unsafe { Fcitx5TsfPocDifferentialSummaryReport(&mut length) };
+        let pointer = unsafe { Fcitx5TsfDifferentialSummaryReport(&mut length) };
         assert!(!pointer.is_null());
         assert!(length > 0);
         // SAFETY: the export returned a non-null pointer and initialized length
         // for its static report, which remains immutable during this read.
         let bytes = unsafe { std::slice::from_raw_parts(pointer, length) };
         let report = std::str::from_utf8(bytes).expect("differential summary should be utf8");
-        assert!(report.contains("\"component\":\"fcitx5-tsf-poc\""));
+        assert!(report.contains("\"component\":\"fcitx5-tsf\""));
         assert!(report.contains("\"same_corpus_case_count\":10"));
         assert!(report.contains("\"same_corpus_rust_passes\":10"));
         assert!(report.contains("\"profile_identity\":true"));
         assert!(report.contains("\"ipc_boundary\":true"));
         assert!(report.contains("\"composition_transcript\":true"));
-        assert!(report.contains("\"artifact_audit_ctest\":\"rust-tsf-poc-artifact-audit\""));
+        assert!(report.contains("\"artifact_audit_ctest\":\"rust-tsf-artifact-audit\""));
         assert!(report.contains("\"arm64_ci_artifact_green\":true"));
         assert!(report.contains("\"real_host_matrix_pending\":true"));
         assert!(report.contains("\"product_decision\":\"shipping_rust_cutover\""));

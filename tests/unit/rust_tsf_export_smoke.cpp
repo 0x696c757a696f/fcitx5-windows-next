@@ -34,7 +34,7 @@ Function resolveProcAddress(HMODULE module, const char* name) noexcept {
 
 int wmain(int argc, wchar_t** argv) {
     if (argc != 2) {
-        std::cerr << "Rust TSF PoC DLL argument required\n";
+        std::cerr << "Rust TSF DLL argument required\n";
         return 1;
     }
     HMODULE module = LoadLibraryExW(argv[1], nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
@@ -55,28 +55,28 @@ int wmain(int argc, wchar_t** argv) {
     const auto getClassObject = resolveProcAddress<GetClassObject>(module, "DllGetClassObject");
     const auto canUnloadNow = resolveProcAddress<CanUnloadNow>(module, "DllCanUnloadNow");
     const auto behaviorReport =
-        resolveProcAddress<BehaviorReport>(module, "Fcitx5TsfPocBehaviorReport");
+        resolveProcAddress<BehaviorReport>(module, "Fcitx5TsfBehaviorReport");
     const auto profileIdentityReport = resolveProcAddress<ProfileIdentityReport>(
-        module, "Fcitx5TsfPocProfileIdentityReport");
+        module, "Fcitx5TsfProfileIdentityReport");
     const auto ipcBoundaryReport =
-        resolveProcAddress<IpcBoundaryReport>(module, "Fcitx5TsfPocIpcBoundaryReport");
+        resolveProcAddress<IpcBoundaryReport>(module, "Fcitx5TsfIpcBoundaryReport");
     const auto compositionTranscriptReport = resolveProcAddress<CompositionTranscriptReport>(
-        module, "Fcitx5TsfPocCompositionTranscriptReport");
+        module, "Fcitx5TsfCompositionTranscriptReport");
     const auto differentialSummaryReport = resolveProcAddress<DifferentialSummaryReport>(
-        module, "Fcitx5TsfPocDifferentialSummaryReport");
+        module, "Fcitx5TsfDifferentialSummaryReport");
     const auto currentUserProfileStatus = resolveProcAddress<CurrentUserProfileStatus>(
         module, "Fcitx5TsfCurrentUserProfileStatus");
     const auto forcedFailure =
-        resolveProcAddress<ForcedFailure>(module, "Fcitx5TsfPocForcedFailureForTest");
+        resolveProcAddress<ForcedFailure>(module, "Fcitx5TsfForcedFailureForTest");
     if (!getClassObject || !canUnloadNow || !behaviorReport || !profileIdentityReport ||
         !ipcBoundaryReport || !compositionTranscriptReport || !differentialSummaryReport ||
         !currentUserProfileStatus || !forcedFailure) {
-        std::cerr << "Rust TSF PoC exports missing\n";
+        std::cerr << "Rust TSF exports missing\n";
         FreeLibrary(module);
         return 1;
     }
     if (forcedFailure() != E_UNEXPECTED) {
-        std::cerr << "Rust TSF PoC forced internal failure should convert panic to HRESULT\n";
+        std::cerr << "Rust TSF forced internal failure should convert panic to HRESULT\n";
         FreeLibrary(module);
         return 1;
     }
@@ -96,7 +96,7 @@ int wmain(int argc, wchar_t** argv) {
         report.find("\"cpp_baseline_consumes_same_corpus\":true") == std::string::npos ||
         report.find("\"full_host_differential_pending\":true") == std::string::npos ||
         report.find("\"report_export\":\"panic_contained\"") == std::string::npos) {
-        std::cerr << "Rust TSF PoC behavior report should expose same-corpus case results\n";
+        std::cerr << "Rust TSF behavior report should expose same-corpus case results\n";
         FreeLibrary(module);
         return 1;
     }
@@ -116,12 +116,12 @@ int wmain(int argc, wchar_t** argv) {
             std::string::npos ||
         profileReport.find("\"windows_profile_count\":1") == std::string::npos ||
         profileReport.find("\"dynamic_profile_registration\":false") == std::string::npos ||
-        profileReport.find("\"rust_poc_registers_profile\":true") == std::string::npos ||
+        profileReport.find("\"rust_registers_profile\":true") == std::string::npos ||
         profileReport.find("\"shipping_cxx_authoritative\":false") == std::string::npos ||
         profileReport.find("\"rust_shipping_authoritative\":true") == std::string::npos ||
         profileReport.find("\"release_identity_source\":\"cmake/release_identity.h.in\"") ==
             std::string::npos) {
-        std::cerr << "Rust TSF PoC profile identity report should match stable release identity\n";
+        std::cerr << "Rust TSF profile identity report should match stable release identity\n";
         FreeLibrary(module);
         return 1;
     }
@@ -139,7 +139,7 @@ int wmain(int argc, wchar_t** argv) {
         ipcReport.find("\"host_blocking_call\":false") == std::string::npos ||
         ipcReport.find("\"shipping_cxx_authoritative\":false") == std::string::npos ||
         ipcReport.find("\"rust_shipping_authoritative\":true") == std::string::npos) {
-        std::cerr << "Rust TSF PoC IPC boundary report should fail open for slow or invalid engine replies\n";
+        std::cerr << "Rust TSF IPC boundary report should fail open for slow or invalid engine replies\n";
         FreeLibrary(module);
         return 1;
     }
@@ -159,7 +159,7 @@ int wmain(int argc, wchar_t** argv) {
         compositionReport.find("\"host_differential_pending\":true") == std::string::npos ||
         compositionReport.find("\"shipping_cxx_authoritative\":false") == std::string::npos ||
         compositionReport.find("\"rust_shipping_authoritative\":true") == std::string::npos) {
-        std::cerr << "Rust TSF PoC composition transcript should preserve single edit-session operation order\n";
+        std::cerr << "Rust TSF composition transcript should preserve single edit-session operation order\n";
         FreeLibrary(module);
         return 1;
     }
@@ -169,24 +169,24 @@ int wmain(int argc, wchar_t** argv) {
         summaryReportBytes && summaryReportLength > 0
             ? std::string(summaryReportBytes, summaryReportLength)
             : std::string();
-    if (summaryReport.find("\"component\":\"fcitx5-tsf-poc\"") == std::string::npos ||
+    if (summaryReport.find("\"component\":\"fcitx5-tsf\"") == std::string::npos ||
         summaryReport.find("\"same_corpus_case_count\":10") == std::string::npos ||
         summaryReport.find("\"same_corpus_rust_passes\":10") == std::string::npos ||
         summaryReport.find("\"profile_identity\":true") == std::string::npos ||
         summaryReport.find("\"ipc_boundary\":true") == std::string::npos ||
         summaryReport.find("\"composition_transcript\":true") == std::string::npos ||
-        summaryReport.find("\"artifact_audit_ctest\":\"rust-tsf-poc-artifact-audit\"") ==
+        summaryReport.find("\"artifact_audit_ctest\":\"rust-tsf-artifact-audit\"") ==
             std::string::npos ||
         summaryReport.find("\"arm64_ci_artifact_green\":true") == std::string::npos ||
         summaryReport.find("\"real_host_matrix_pending\":true") == std::string::npos ||
         summaryReport.find("\"product_decision\":\"shipping_rust_cutover\"") ==
             std::string::npos) {
-        std::cerr << "Rust TSF PoC differential summary should list green and pending evidence\n";
+        std::cerr << "Rust TSF differential summary should list green and pending evidence\n";
         FreeLibrary(module);
         return 1;
     }
     if (canUnloadNow() != S_OK) {
-        std::cerr << "Rust TSF PoC should be unloadable before activation\n";
+        std::cerr << "Rust TSF should be unloadable before activation\n";
         FreeLibrary(module);
         return 1;
     }
@@ -201,12 +201,12 @@ int wmain(int argc, wchar_t** argv) {
     result = getClassObject(kTextServiceClsid, IID_IClassFactory,
                             reinterpret_cast<void**>(&factory));
     if (FAILED(result) || !factory) {
-        std::cerr << "Rust TSF PoC should expose an IClassFactory\n";
+        std::cerr << "Rust TSF should expose an IClassFactory\n";
         FreeLibrary(module);
         return 1;
     }
     if (canUnloadNow() != S_FALSE) {
-        std::cerr << "Rust TSF PoC should not unload while factory is alive\n";
+        std::cerr << "Rust TSF should not unload while factory is alive\n";
         factory->Release();
         FreeLibrary(module);
         return 1;
@@ -222,13 +222,13 @@ int wmain(int argc, wchar_t** argv) {
     result = factory->CreateInstance(nullptr, IID_ITfTextInputProcessorEx,
                                      reinterpret_cast<void**>(&textService));
     if (FAILED(result) || !textService) {
-        std::cerr << "Rust TSF PoC factory should create an empty ITfTextInputProcessorEx\n";
+        std::cerr << "Rust TSF factory should create an empty ITfTextInputProcessorEx\n";
         factory->Release();
         FreeLibrary(module);
         return 1;
     }
     if (canUnloadNow() != S_FALSE) {
-        std::cerr << "Rust TSF PoC should not unload while service is alive\n";
+        std::cerr << "Rust TSF should not unload while service is alive\n";
         textService->Release();
         factory->Release();
         FreeLibrary(module);
@@ -243,7 +243,7 @@ int wmain(int argc, wchar_t** argv) {
                                            reinterpret_cast<void**>(&threadSink))) ||
         FAILED(textService->QueryInterface(IID_ITfThreadFocusSink,
                                            reinterpret_cast<void**>(&focusSink)))) {
-        std::cerr << "Rust TSF PoC service should expose key/thread/focus sinks\n";
+        std::cerr << "Rust TSF service should expose key/thread/focus sinks\n";
         if (keySink) keySink->Release();
         if (threadSink) threadSink->Release();
         if (focusSink) focusSink->Release();
@@ -254,7 +254,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (FAILED(textService->ActivateEx(nullptr, 42, TF_TMF_UIELEMENTENABLEDONLY)) ||
         FAILED(textService->Deactivate())) {
-        std::cerr << "Rust TSF PoC should fail open for minimal ActivateEx/Deactivate callbacks\n";
+        std::cerr << "Rust TSF should fail open for minimal ActivateEx/Deactivate callbacks\n";
         keySink->Release();
         threadSink->Release();
         focusSink->Release();
@@ -272,7 +272,7 @@ int wmain(int argc, wchar_t** argv) {
         FAILED(keySink->OnTestKeyUp(nullptr, 'A', 0, &testUpEaten)) ||
         FAILED(keySink->OnKeyUp(nullptr, 'A', 0, &keyUpEaten)) || testDownEaten ||
         keyDownEaten || testUpEaten || keyUpEaten) {
-        std::cerr << "Rust TSF PoC key callbacks should fail open on unexpected COM state\n";
+        std::cerr << "Rust TSF key callbacks should fail open on unexpected COM state\n";
         keySink->Release();
         threadSink->Release();
         focusSink->Release();
@@ -287,7 +287,7 @@ int wmain(int argc, wchar_t** argv) {
     textService->Release();
     factory->Release();
     if (canUnloadNow() != S_OK) {
-        std::cerr << "Rust TSF PoC should unload after all COM objects are released\n";
+        std::cerr << "Rust TSF should unload after all COM objects are released\n";
         FreeLibrary(module);
         return 1;
     }

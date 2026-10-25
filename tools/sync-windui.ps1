@@ -20,7 +20,7 @@ param(
 #                the path dependency builds the library, which needs neither.
 #
 # The pin is recorded in third_party/dependencies.json and in the constant
-# WIND_UI_RUST_REFERENCE_COMMIT in rust/config-poc/src/main.rs.
+# WIND_UI_RUST_REFERENCE_COMMIT in rust/config-app/src/main.rs.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -31,7 +31,7 @@ $repoRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $vendorDir = Join-Path $repoRoot 'third_party/wind-ui-rust'
 $patchDir = Join-Path $repoRoot 'third_party/patches/wind-ui-rust'
 $depsFile = Join-Path $repoRoot 'third_party/dependencies.json'
-$configPocMain = Join-Path $repoRoot 'rust/config-poc/src/main.rs'
+$configAppMain = Join-Path $repoRoot 'rust/config-app/src/main.rs'
 $tempParent = Join-Path $repoRoot 'out/tmp'
 New-Item -ItemType Directory -Force -Path $tempParent | Out-Null
 $stamp = [System.Guid]::NewGuid().ToString('N')
@@ -249,7 +249,7 @@ try {
 
   # Update the reference-commit constant (any prior pin) to the new commit,
   # preserving the existing formatting.
-  $configText = [System.IO.File]::ReadAllText($configPocMain)
+  $configText = [System.IO.File]::ReadAllText($configAppMain)
   $configText = $configText -replace
     'WIND_UI_RUST_REFERENCE_COMMIT: &str = "[0-9a-f]{40}"',
     "WIND_UI_RUST_REFERENCE_COMMIT: &str = `"$Commit`""
@@ -264,16 +264,16 @@ try {
   $configText = $configText -replace
     '("\\"windui_reference_commit\\":\\")[0-9a-f]{40}(\\")',
     ('${1}' + $Commit + '${2}')
-  [System.IO.File]::WriteAllText($configPocMain, $configText,
+  [System.IO.File]::WriteAllText($configAppMain, $configText,
     [System.Text.UTF8Encoding]::new($false))
 
   # Run the affected consumer tests.
   Invoke-Checked -FilePath $cargo -Arguments @('+1.99.1', 'update',
     '--package', 'windui') -Name 'cargo update windui lockfile'
   Invoke-Checked -FilePath $cargo -Arguments @('+1.99.1', 'test', '--locked',
-    '-p', 'fcitx5-config-poc', '-p', 'fcitx5-config-qa',
+    '-p', 'fcitx5-config-app', '-p', 'fcitx5-config-qa',
     '--target', 'x86_64-pc-windows-msvc') -Name 'cargo test config consumers'
-  Write-Output 'config-poc/config-qa tests passed.'
+  Write-Output 'config-app/config-qa tests passed.'
   Write-Output "wind-ui-rust synced to $Commit (upstream version $upstreamVersion)."
   Write-Output "Full sync log: $script:SyncLogPath"
 

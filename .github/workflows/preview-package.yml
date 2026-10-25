@@ -158,12 +158,18 @@ jobs:
             & $sccache.Source --show-stats
           }
 
-      - name: Upload installer and portable ZIP
+      - name: Upload installer
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: fcitx5-windows-preview-${{ github.sha }}
-          path: |
-            out/package/artifacts/*-setup.exe
-            out/package/artifacts/*-portable.zip
+          name: fcitx5-windows-setup-${{ github.sha }}
+          path: out/package/artifacts/*-setup.exe
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload portable ZIP
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: fcitx5-windows-portable-${{ github.sha }}
+          path: out/package/artifacts/*-portable.zip
           retention-days: 14
           if-no-files-found: error

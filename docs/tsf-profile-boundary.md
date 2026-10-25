@@ -17,7 +17,7 @@ Bamboo are Fcitx/addon state inside the product. They must not become separate W
 
 ## Ownership
 
-- `rust/tsf-poc/src/lib.rs` owns COM registration, TSF profile registration,
+- `rust/tsf/src/lib.rs` owns COM registration, TSF profile registration,
   single-profile identity, and best-effort cleanup of obsolete profile GUIDs.
 - `rust/register-core/src/lib.rs` owns product TSF DLL path, operation, elevation,
   registry-status, and registration-export policy only. It must not enumerate

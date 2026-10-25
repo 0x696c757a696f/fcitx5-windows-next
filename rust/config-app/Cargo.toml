@@ -1,11 +1,8 @@
 [package]
-name = "fcitx5-config-poc"
+name = "fcitx5-config-app"
 version = "0.1.0"
 edition = "2021"
-
-[[bin]]
-name = "fcitx5-config-poc"
-path = "src/main.rs"
+autobins = false
 
 [[bin]]
 name = "fcitx5-config"

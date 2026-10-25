@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
 
-use fcitx5_candidate_core::run_candidate_poc_self_check;
+use fcitx5_candidate_core::run_candidate_self_check;
 use fcitx5_config_core::{
     CandidateOrientation as CoreCandidateOrientation, ConfigCommand, ConfigCore, ConfigEdit,
     ConfigField, ConfigSnapshot, FileStore, OverflowBehavior as CoreOverflowBehavior,
@@ -33,7 +33,7 @@ use windui::prelude::{
     WindowButtonKind as WindUiWindowButtonKind,
 };
 
-const CONFIG_POC_COMPONENT: &str = "fcitx5-config-poc";
+const CONFIG_DEV_COMPONENT: &str = "fcitx5-config-dev";
 const CONFIG_RETIRED_SIDE_BY_SIDE_COMPONENT: &str = "none";
 const CONFIG_SHIPPING_COMPONENT: &str = "fcitx5-config";
 const CONFIG_SHIPPING_BINARY_NAME: &str = "fcitx5-config.exe";
@@ -121,7 +121,7 @@ struct PageModel {
 }
 
 #[derive(Clone, Debug)]
-struct ConfigPocModel {
+struct ConfigModel {
     product_name: &'static str,
     languages: Vec<&'static str>,
     pages: Vec<PageModel>,
@@ -3970,7 +3970,7 @@ pub(crate) fn main() {
         RunMode::Interactive
     } else {
         eprintln!(
-            "usage: fcitx5-config-poc [--self-check | --window-smoke | --screenshot PATH | --self-test | --check-i18n | --check-resources | --ui-contract-test | --ui-visual-contract-test | --ui-live-preview-contract-test | --ui-interaction-test] [--report PATH]"
+            "usage: fcitx5-config [--self-check | --window-smoke | --screenshot PATH | --self-test | --check-i18n | --check-resources | --ui-contract-test | --ui-visual-contract-test | --ui-live-preview-contract-test | --ui-interaction-test] [--report PATH]"
         );
         std::process::exit(2);
     };
@@ -3993,7 +3993,7 @@ pub(crate) fn main() {
         Ok(output) => {
             if let Some(path) = report {
                 write_report(&path, &output);
-                println!("config-poc-report={} result=PASS", path.display());
+                println!("config-report={} result=PASS", path.display());
             } else {
                 println!("{output}");
             }
@@ -4166,13 +4166,13 @@ fn current_component_name() -> &'static str {
         .ok()
         .and_then(|path| path.file_stem().map(|stem| stem.to_owned()))
     else {
-        return CONFIG_POC_COMPONENT;
+        return CONFIG_DEV_COMPONENT;
     };
     let stem = stem.to_string_lossy();
     if stem.eq_ignore_ascii_case(CONFIG_SHIPPING_COMPONENT) {
         CONFIG_SHIPPING_COMPONENT
     } else {
-        CONFIG_POC_COMPONENT
+        CONFIG_DEV_COMPONENT
     }
 }
 
@@ -4292,7 +4292,7 @@ fn run_window_smoke() -> Result<String, String> {
     let _boundaries = validate_typed_boundaries()?;
     let windui = validate_windui_rust_adoption()?;
     Ok(format!(
-        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-windui-settings-shell-smoke\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":{},\n  \"side_by_side_executable_name\":\"{}\",\n  \"rust_shipping_target_name\":\"{}\",\n  \"real_window\":false,\n  \"windui_settings_shell_constructed\":{},\n  \"default_interactive_window_uses_windui\":{},\n  \"legacy_preview_env_switch\":false,\n  \"legacy_win32_preview_host_deleted\":{},\n  \"legacy_navigation_control_ids_deleted\":true,\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-windui-settings-shell-smoke\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":{},\n  \"side_by_side_executable_name\":\"{}\",\n  \"rust_shipping_target_name\":\"{}\",\n  \"real_window\":false,\n  \"windui_settings_shell_constructed\":{},\n  \"default_interactive_window_uses_windui\":{},\n  \"legacy_preview_env_switch\":false,\n  \"legacy_win32_preview_host_deleted\":{},\n  \"legacy_navigation_control_ids_deleted\":true,\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"send_input\":false,\n  \"global_hooks\":false,\n  \"process_injection\":false,\n  \"result\":\"PASS\"\n}}",
         current_component_name(),
         json_escape(model.product_name),
         shipping_config_replaced(),
@@ -4374,8 +4374,8 @@ fn run_windui_settings_window(
     Err("Rust wind-ui Settings Shell requires Windows".to_owned())
 }
 
-fn frozen_settings_model() -> ConfigPocModel {
-    ConfigPocModel {
+fn frozen_settings_model() -> ConfigModel {
+    ConfigModel {
         product_name: "Fcitx5 for Windows Next",
         languages: vec![
             "system", "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "vi-VN", "th-TH", "si-LK",
@@ -4451,9 +4451,9 @@ fn frozen_settings_model() -> ConfigPocModel {
     }
 }
 
-fn validate_model(model: &ConfigPocModel) -> Result<(), String> {
+fn validate_model(model: &ConfigModel) -> Result<(), String> {
     if model.product_name != "Fcitx5 for Windows Next" {
-        return Err("Config PoC product name must be unified".to_owned());
+        return Err("Config product name must be unified".to_owned());
     }
     require_languages(model)?;
     require_pages(model)?;
@@ -4463,18 +4463,18 @@ fn validate_model(model: &ConfigPocModel) -> Result<(), String> {
         || !model.candidate_preview_current_theme
         || !model.candidate_preview_not_external_window
     {
-        return Err("Config PoC candidate preview must be embedded and current-theme".to_owned());
+        return Err("Config candidate preview must be embedded and current-theme".to_owned());
     }
     if !model.localized_dialogs {
-        return Err("Config PoC dialogs must be localized".to_owned());
+        return Err("Config dialogs must be localized".to_owned());
     }
     if !model.no_shell_out {
-        return Err("Config PoC must not shell out for Settings actions".to_owned());
+        return Err("Config must not shell out for Settings actions".to_owned());
     }
     Ok(())
 }
 
-fn require_languages(model: &ConfigPocModel) -> Result<(), String> {
+fn require_languages(model: &ConfigModel) -> Result<(), String> {
     for required in [
         "system", "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "vi-VN", "th-TH", "si-LK",
     ] {
@@ -4485,7 +4485,7 @@ fn require_languages(model: &ConfigPocModel) -> Result<(), String> {
     Ok(())
 }
 
-fn require_pages(model: &ConfigPocModel) -> Result<(), String> {
+fn require_pages(model: &ConfigModel) -> Result<(), String> {
     for required in [
         PageId::InputMethods,
         PageId::Appearance,
@@ -4501,7 +4501,7 @@ fn require_pages(model: &ConfigPocModel) -> Result<(), String> {
     Ok(())
 }
 
-fn require_actions(model: &ConfigPocModel) -> Result<(), String> {
+fn require_actions(model: &ConfigModel) -> Result<(), String> {
     for required in [
         ActionKind::SelectLanguage,
         ActionKind::SelectCandidateFont,
@@ -4527,7 +4527,7 @@ fn require_actions(model: &ConfigPocModel) -> Result<(), String> {
     Ok(())
 }
 
-fn require_package_states(model: &ConfigPocModel) -> Result<(), String> {
+fn require_package_states(model: &ConfigModel) -> Result<(), String> {
     for required in [
         PackageState::OfficialAvailable,
         PackageState::InstalledEnabled,
@@ -4542,7 +4542,7 @@ fn require_package_states(model: &ConfigPocModel) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_layout(model: &ConfigPocModel) -> Result<LayoutEvidence, String> {
+fn validate_layout(model: &ConfigModel) -> Result<LayoutEvidence, String> {
     const DPI_SCALE_PERCENTS: [u16; 5] = [100, 125, 150, 200, 300];
     let tokens = design_tokens();
 
@@ -5494,11 +5494,11 @@ fn validate_candidate_preview_host(
     layout: &LayoutEvidence,
     theme_library: &ThemeLibraryEvidence,
 ) -> Result<CandidatePreviewHostEvidence, String> {
-    let candidate_core_report = run_candidate_poc_self_check()
+    let candidate_core_report = run_candidate_self_check()
         .map_err(|error| format!("candidate preview host cannot run candidate core: {error}"))?;
     let candidate_core_self_check_passed = candidate_core_report.contains("\"result\":\"PASS\"")
-        && candidate_core_report.contains("\"component\":\"fcitx5-candidate-poc\"")
-        && candidate_core_report.contains("\"kind\":\"rust-out-of-process-headless-poc\"")
+        && candidate_core_report.contains("\"component\":\"fcitx5-candidate-self-check\"")
+        && candidate_core_report.contains("\"kind\":\"rust-out-of-process-headless-self-check\"")
         && candidate_core_report.contains("\"send_input\":false")
         && candidate_core_report.contains("\"global_hooks\":false")
         && candidate_core_report.contains("\"process_injection\":false");
@@ -5821,7 +5821,7 @@ fn validate_typed_boundaries() -> Result<BoundaryEvidence, String> {
         || !typed_control_diagnostics_commands_present
         || !typed_control_package_network_owner
     {
-        return Err("Config PoC typed Control command boundary is incomplete".to_owned());
+        return Err("Config typed Control command boundary is incomplete".to_owned());
     }
 
     let trusted_keys =
@@ -5830,9 +5830,9 @@ fn validate_typed_boundaries() -> Result<BoundaryEvidence, String> {
     let trusted_key = trusted_keys
         .iter()
         .find(|key| key.id().as_str() == "official-2026-mldsa65" && !key.revoked())
-        .ok_or_else(|| "official trusted key is unavailable to Config PoC".to_owned())?;
+        .ok_or_else(|| "official trusted key is unavailable to Config".to_owned())?;
 
-    let manifest = parse_manifest(CONFIG_POC_PACKAGE_MANIFEST_JSON)
+    let manifest = parse_manifest(CONFIG_FIXTURE_PACKAGE_MANIFEST_JSON)
         .map_err(|error| format!("manifest parse failed: {error}"))?;
     validate_manifest_compatibility(&manifest, "x64")
         .map_err(|error| format!("manifest compatibility failed: {error}"))?;
@@ -5840,7 +5840,7 @@ fn validate_typed_boundaries() -> Result<BoundaryEvidence, String> {
         || manifest.package_type().as_str() != "addon"
         || manifest.key_id().as_str() != trusted_key.id().as_str()
     {
-        return Err("Config PoC manifest identity does not match package UI state".to_owned());
+        return Err("Config manifest identity does not match package UI state".to_owned());
     }
 
     let repository_policy = RepositoryVerificationPolicy::new(
@@ -5849,19 +5849,21 @@ fn validate_typed_boundaries() -> Result<BoundaryEvidence, String> {
         "official",
         1_788_048_000,
     );
-    let repository =
-        parse_repository_index_with_policy(CONFIG_POC_REPOSITORY_INDEX_JSON, &repository_policy)
-            .map_err(|error| format!("repository parse failed: {error}"))?;
+    let repository = parse_repository_index_with_policy(
+        CONFIG_FIXTURE_REPOSITORY_INDEX_JSON,
+        &repository_policy,
+    )
+    .map_err(|error| format!("repository parse failed: {error}"))?;
     let entry = find_repository_package(&repository, "fcitx5-rime", "x64")
         .ok_or_else(|| "repository entry for fcitx5-rime x64 is missing".to_owned())?;
     if repository.key_id() != trusted_key.id().as_str()
         || entry.package_type().as_str() != "addon"
         || entry.version() != "1.1.0"
     {
-        return Err("Config PoC repository package state is not trusted/typed".to_owned());
+        return Err("Config repository package state is not trusted/typed".to_owned());
     }
 
-    let mut lock = parse_lockfile(CONFIG_POC_LOCKFILE_JSON)
+    let mut lock = parse_lockfile(CONFIG_FIXTURE_LOCKFILE_JSON)
         .map_err(|error| format!("lockfile parse failed: {error}"))?;
     set_package_state_entries(&mut lock, "fcitx5-rime", PackageLifecycleState::Disabled)
         .map_err(|error| format!("disable lifecycle failed: {error}"))?;
@@ -5871,7 +5873,7 @@ fn validate_typed_boundaries() -> Result<BoundaryEvidence, String> {
         .map(|entry| entry.state())
         != Some(&PackageLifecycleState::Disabled)
     {
-        return Err("Config PoC disable state did not use package-core lockfile state".to_owned());
+        return Err("Config disable state did not use package-core lockfile state".to_owned());
     }
     set_package_state_entries(&mut lock, "fcitx5-rime", PackageLifecycleState::Enabled)
         .map_err(|error| format!("enable lifecycle failed: {error}"))?;
@@ -5883,7 +5885,7 @@ fn validate_typed_boundaries() -> Result<BoundaryEvidence, String> {
         .iter()
         .any(|entry| entry.id().as_str() == "fcitx5-rime")
     {
-        return Err("Config PoC finalize-remove did not remove lockfile entry".to_owned());
+        return Err("Config finalize-remove did not remove lockfile entry".to_owned());
     }
 
     Ok(BoundaryEvidence {
@@ -5915,7 +5917,7 @@ fn validate_config_rust_cutover_plan(
         "config-ui-visual-contract",
         "config-ui-live-preview-contract",
         "config-ui-interaction-coverage",
-        "rust-config-poc-contract",
+        "rust-config-self-check",
     ];
     for required in [100, 125, 150, 200, 300] {
         if !layout.checked_dpi_scale_percents.contains(&required) {
@@ -5989,7 +5991,7 @@ fn validate_config_rust_cutover_plan(
     })
 }
 
-const CONFIG_POC_PACKAGE_MANIFEST_JSON: &str = concat!(
+const CONFIG_FIXTURE_PACKAGE_MANIFEST_JSON: &str = concat!(
     r#"{"format_version":2,"id":"fcitx5-rime","version":"1.0.0","type":"addon","#,
     r#""architecture":"x64","min_os":"10.0","core_api":"1","addon_abi":"1","#,
     r#""dependencies":[],"license":"LGPL-2.1-or-later","source_commit":"0123456789abcdef","#,
@@ -6003,7 +6005,7 @@ const CONFIG_POC_PACKAGE_MANIFEST_JSON: &str = concat!(
     r#"]}"#
 );
 
-const CONFIG_POC_REPOSITORY_INDEX_JSON: &str = concat!(
+const CONFIG_FIXTURE_REPOSITORY_INDEX_JSON: &str = concat!(
     r#"{"format_version":1,"repository_id":"fcitx5-windows-next","channel":"stable","#,
     r#""mirror_id":"official","sequence":2,"generated_at":"2026-08-28T00:00:00Z","expires_at":"2026-09-01T00:00:00Z","#,
     r#""key_id":"official-2026-mldsa65","targets":{"count":1,"sha256":"a4c2dfe432367402b14f15ed84e30ef894ac81ad3f76e49ed7fa17935ca53a00"},"packages":[{"id":"fcitx5-rime","title":"Rime","#,
@@ -6013,14 +6015,14 @@ const CONFIG_POC_REPOSITORY_INDEX_JSON: &str = concat!(
     r#""dependencies":[]}]}"#
 );
 
-const CONFIG_POC_LOCKFILE_JSON: &str = concat!(
+const CONFIG_FIXTURE_LOCKFILE_JSON: &str = concat!(
     r#"{"format_version":1,"packages":[{"id":"fcitx5-rime","version":"1.0.0","#,
     r#""manifest_sha256":"0000000000000000000000000000000000000000000000000000000000000000","#,
     r#""state":"enabled"}]}"#
 );
 
 struct RenderReportInput<'a> {
-    model: &'a ConfigPocModel,
+    model: &'a ConfigModel,
     layout: &'a LayoutEvidence,
     operations: &'a OperationEvidence,
     boundaries: &'a BoundaryEvidence,
@@ -6084,7 +6086,7 @@ fn render_report(input: RenderReportInput<'_>) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-poc-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":{},\n  \"config_rust_cutover_plan\":true,\n  \"frozen_corpus_from_config_ux_009\":{},\n  \"frozen_corpus_sources\":[{}],\n  \"rust_shipping_target_name\":\"{}\",\n  \"side_by_side_executable_name\":\"{}\",\n  \"side_by_side_executable_target_declared\":{},\n  \"side_by_side_uses_frozen_corpus\":{},\n  \"preserves_product_binary_name\":{},\n  \"side_by_side_differential_required\":{},\n  \"permanent_runtime_selector\":{},\n  \"typed_control_only\":{},\n  \"no_input_hot_path_access\":{},\n  \"no_arbitrary_shell\":{},\n  \"accessibility_gate_required\":{},\n  \"package_smoke_required_after_cutover\":{},\n  \"old_cxx_shell_deletion_required\":{},\n  \"window_effects_adapter_contract\":\"{}\",\n  \"window_effects_fake_os_scenarios\":{},\n  \"window_effects_native_baseline\":{},\n  \"window_effects_win7_compatible_startup\":{},\n  \"window_effects_win10_dark_titlebar\":{},\n  \"window_effects_win11_corner_preference\":{},\n  \"window_effects_system_backdrop_mica\":{},\n  \"window_effects_high_contrast_disables_decorative_effects\":{},\n  \"window_effects_fail_soft_without_dwm\":{},\n  \"window_effects_dwm_runtime_guarded\":{},\n  \"window_effects_no_winui_wpf_webview_dependency\":{},\n  \"settings_surface_contract\":\"{}\",\n  \"settings_surface_checked_pages\":{},\n  \"settings_surface_component_count\":{},\n  \"settings_surface_navigation_items\":{},\n  \"settings_surface_section_cards\":{},\n  \"settings_surface_setting_rows\":{},\n  \"settings_surface_banner_rows\":{},\n  \"settings_surface_preview_surfaces\":{},\n  \"settings_surface_clears_every_custom_area\":{},\n  \"settings_surface_bounded_components_only\":{},\n  \"settings_surface_native_hwnd_controls_preserved\":{},\n  \"settings_surface_device_loss_fail_soft\":{},\n  \"settings_surface_no_product_owned_generic_ui_framework\":{},\n  \"settings_surface_no_surface_overlap\":{},\n  \"windui_crate_name\":\"{}\",\n  \"windui_reference_commit\":\"{}\",\n  \"windui_license\":\"{}\",\n  \"windui_vendored_path_dependency\":{},\n  \"windui_role_palette_consumed\":{},\n  \"windui_theme_row_height_consumed\":{},\n  \"windui_element_builder_tree_constructed\":{},\n  \"windui_setting_row_constructed\":{},\n  \"windui_segmented_control_constructed\":{},\n  \"windui_nav_list_pattern_used\":{},\n  \"windui_preview_first_appearance_layout\":{},\n  \"windui_engineering_dip_labels_removed_from_first_screen\":{},\n  \"windui_settings_shell_constructed\":{},\n  \"windui_settings_input_visual_baseline\":{},\n  \"windui_default_interactive_window_uses_windui\":{},\n  \"legacy_win32_preview_host_deleted\":{},\n  \"stage4_config_qa_gate_frozen\":{},\n  \"stage4_automated_keyboard_tab_order\":{},\n  \"stage4_automated_focus_visibility\":{},\n  \"stage4_automated_page_navigation\":{},\n  \"stage4_automated_no_overlap\":{},\n  \"stage4_automated_high_dpi_geometry\":{},\n  \"stage4_automated_high_contrast_fallback_markers\":{},\n  \"stage4_automated_embedded_candidate_preview_bounds\":{},\n  \"stage4_manual_narrator_nvda_pending\":{},\n  \"stage4_manual_real_win7_host_pending\":{},\n  \"stage4_manual_real_win10_host_pending\":{},\n  \"stage4_manual_real_win11_host_pending\":{},\n  \"stage4_rust_config_cutover_complete_claimed\":{},\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"{}\",\n  \"candidate_preview_host_kind\":\"{}\",\n  \"candidate_preview_window_ownership\":\"{}\",\n  \"candidate_preview_theme_snapshot_source\":\"{}\",\n  \"candidate_preview_model_contract\":\"{}\",\n  \"candidate_preview_sample_source\":\"{}\",\n  \"candidate_preview_embedded_child_surface\":{},\n  \"candidate_preview_not_external_popup_window\":{},\n  \"candidate_preview_settings_only_fake_renderer\":{},\n  \"candidate_preview_static_screenshot_preview\":{},\n  \"candidate_preview_uses_shipping_candidate_renderer_path\":{},\n  \"candidate_preview_consumes_candidate_model_layout_render_contract\":{},\n  \"candidate_preview_uses_resolved_theme_snapshot\":{},\n  \"candidate_preview_layout_driven_paint\":{},\n  \"candidate_preview_final_pixels_from_renderer_path\":{},\n  \"candidate_preview_candidate_core_self_check\":{},\n  \"candidate_preview_candidate_core_scenarios\":{},\n  \"candidate_preview_candidate_core_color_font_scenario_present\":{},\n  \"candidate_preview_candidate_core_uiless_scenario_present\":{},\n  \"candidate_preview_layout_rects_inside_window\":{},\n  \"candidate_preview_layout_rects_non_overlapping\":{},\n  \"candidate_preview_dpi_parity_scale_percents\":[{}],\n  \"candidate_preview_font_fallback_parity\":{},\n  \"candidate_preview_emoji_color_render_path_parity\":{},\n  \"candidate_preview_sample_input_only_synthetic\":{},\n  \"candidate_preview_send_input\":{},\n  \"candidate_preview_global_hooks\":{},\n  \"candidate_preview_process_injection\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection_persists_after_reopen\":{},\n  \"persisted_font_refreshes_embedded_preview\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"numeric_appearance_inputs\":{},\n  \"numeric_font_size_valid_entry\":{},\n  \"numeric_invalid_text_rejected\":{},\n  \"numeric_paste_out_of_range_rejected\":{},\n  \"numeric_ime_cancellation_keeps_last_valid\":{},\n  \"numeric_min_max_bounds_checked\":{},\n  \"numeric_localized_error_text\":{},\n  \"numeric_rollback_keeps_last_valid\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
+        "{{\n  \"component\":\"{}\",\n  \"kind\":\"rust-config-self-check\",\n  \"product_name\":\"{}\",\n  \"normal_user_exe\":true,\n  \"shipping_config_replaced\":{},\n  \"config_rust_cutover_plan\":true,\n  \"frozen_corpus_from_config_ux_009\":{},\n  \"frozen_corpus_sources\":[{}],\n  \"rust_shipping_target_name\":\"{}\",\n  \"side_by_side_executable_name\":\"{}\",\n  \"side_by_side_executable_target_declared\":{},\n  \"side_by_side_uses_frozen_corpus\":{},\n  \"preserves_product_binary_name\":{},\n  \"side_by_side_differential_required\":{},\n  \"permanent_runtime_selector\":{},\n  \"typed_control_only\":{},\n  \"no_input_hot_path_access\":{},\n  \"no_arbitrary_shell\":{},\n  \"accessibility_gate_required\":{},\n  \"package_smoke_required_after_cutover\":{},\n  \"old_cxx_shell_deletion_required\":{},\n  \"window_effects_adapter_contract\":\"{}\",\n  \"window_effects_fake_os_scenarios\":{},\n  \"window_effects_native_baseline\":{},\n  \"window_effects_win7_compatible_startup\":{},\n  \"window_effects_win10_dark_titlebar\":{},\n  \"window_effects_win11_corner_preference\":{},\n  \"window_effects_system_backdrop_mica\":{},\n  \"window_effects_high_contrast_disables_decorative_effects\":{},\n  \"window_effects_fail_soft_without_dwm\":{},\n  \"window_effects_dwm_runtime_guarded\":{},\n  \"window_effects_no_winui_wpf_webview_dependency\":{},\n  \"settings_surface_contract\":\"{}\",\n  \"settings_surface_checked_pages\":{},\n  \"settings_surface_component_count\":{},\n  \"settings_surface_navigation_items\":{},\n  \"settings_surface_section_cards\":{},\n  \"settings_surface_setting_rows\":{},\n  \"settings_surface_banner_rows\":{},\n  \"settings_surface_preview_surfaces\":{},\n  \"settings_surface_clears_every_custom_area\":{},\n  \"settings_surface_bounded_components_only\":{},\n  \"settings_surface_native_hwnd_controls_preserved\":{},\n  \"settings_surface_device_loss_fail_soft\":{},\n  \"settings_surface_no_product_owned_generic_ui_framework\":{},\n  \"settings_surface_no_surface_overlap\":{},\n  \"windui_crate_name\":\"{}\",\n  \"windui_reference_commit\":\"{}\",\n  \"windui_license\":\"{}\",\n  \"windui_vendored_path_dependency\":{},\n  \"windui_role_palette_consumed\":{},\n  \"windui_theme_row_height_consumed\":{},\n  \"windui_element_builder_tree_constructed\":{},\n  \"windui_setting_row_constructed\":{},\n  \"windui_segmented_control_constructed\":{},\n  \"windui_nav_list_pattern_used\":{},\n  \"windui_preview_first_appearance_layout\":{},\n  \"windui_engineering_dip_labels_removed_from_first_screen\":{},\n  \"windui_settings_shell_constructed\":{},\n  \"windui_settings_input_visual_baseline\":{},\n  \"windui_default_interactive_window_uses_windui\":{},\n  \"legacy_win32_preview_host_deleted\":{},\n  \"stage4_config_qa_gate_frozen\":{},\n  \"stage4_automated_keyboard_tab_order\":{},\n  \"stage4_automated_focus_visibility\":{},\n  \"stage4_automated_page_navigation\":{},\n  \"stage4_automated_no_overlap\":{},\n  \"stage4_automated_high_dpi_geometry\":{},\n  \"stage4_automated_high_contrast_fallback_markers\":{},\n  \"stage4_automated_embedded_candidate_preview_bounds\":{},\n  \"stage4_manual_narrator_nvda_pending\":{},\n  \"stage4_manual_real_win7_host_pending\":{},\n  \"stage4_manual_real_win10_host_pending\":{},\n  \"stage4_manual_real_win11_host_pending\":{},\n  \"stage4_rust_config_cutover_complete_claimed\":{},\n  \"no_shell_out\":{},\n  \"pages\":[{}],\n  \"title_keys\":[{}],\n  \"language_selector\":true,\n  \"localized_dialogs\":{},\n  \"candidate_preview_embedded\":{},\n  \"candidate_preview_current_theme\":{},\n  \"candidate_preview_not_external_window\":{},\n  \"candidate_preview_embedded_in_config_content\":{},\n  \"candidate_preview_uses_real_theme_contract\":{},\n  \"candidate_preview_renderer_contract\":\"{}\",\n  \"candidate_preview_host_kind\":\"{}\",\n  \"candidate_preview_window_ownership\":\"{}\",\n  \"candidate_preview_theme_snapshot_source\":\"{}\",\n  \"candidate_preview_model_contract\":\"{}\",\n  \"candidate_preview_sample_source\":\"{}\",\n  \"candidate_preview_embedded_child_surface\":{},\n  \"candidate_preview_not_external_popup_window\":{},\n  \"candidate_preview_settings_only_fake_renderer\":{},\n  \"candidate_preview_static_screenshot_preview\":{},\n  \"candidate_preview_uses_shipping_candidate_renderer_path\":{},\n  \"candidate_preview_consumes_candidate_model_layout_render_contract\":{},\n  \"candidate_preview_uses_resolved_theme_snapshot\":{},\n  \"candidate_preview_layout_driven_paint\":{},\n  \"candidate_preview_final_pixels_from_renderer_path\":{},\n  \"candidate_preview_candidate_core_self_check\":{},\n  \"candidate_preview_candidate_core_scenarios\":{},\n  \"candidate_preview_candidate_core_color_font_scenario_present\":{},\n  \"candidate_preview_candidate_core_uiless_scenario_present\":{},\n  \"candidate_preview_layout_rects_inside_window\":{},\n  \"candidate_preview_layout_rects_non_overlapping\":{},\n  \"candidate_preview_dpi_parity_scale_percents\":[{}],\n  \"candidate_preview_font_fallback_parity\":{},\n  \"candidate_preview_emoji_color_render_path_parity\":{},\n  \"candidate_preview_sample_input_only_synthetic\":{},\n  \"candidate_preview_send_input\":{},\n  \"candidate_preview_global_hooks\":{},\n  \"candidate_preview_process_injection\":{},\n  \"candidate_preview_rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\n  \"theme_library_model_rust_owned\":{},\n  \"theme_inventory_sources\":[{}],\n  \"theme_metadata_visible\":{},\n  \"built_in_theme_delete_blocked\":{},\n  \"user_theme_delete_allowed\":{},\n  \"package_theme_provenance_visible\":{},\n  \"theme_import_staging_rejects_path_traversal\":{},\n  \"theme_import_staging_rejects_remote_assets\":{},\n  \"theme_import_staging_rejects_script_hooks\":{},\n  \"theme_import_staging_rejects_missing_base\":{},\n  \"theme_import_staging_rejects_invalid_toml\":{},\n  \"theme_import_staging_rejects_cyclic_base\":{},\n  \"live_preview_draft_state\":{},\n  \"live_preview_revision_after_changes\":{},\n  \"preview_uses_production_renderer_contract\":{},\n  \"preview_samples_cover_chinese_latin_punctuation_emoji\":{},\n  \"emoji_color_fallback_required\":{},\n  \"high_dpi_scaling_automatic\":{},\n  \"preview_150_percent_font_px\":{},\n  \"label_suffix_parity\":{},\n  \"font_selection_persists_after_reopen\":{},\n  \"persisted_font_refreshes_embedded_preview\":{},\n  \"font_selection\":true,\n  \"advanced_appearance_controls\":true,\n  \"input_method_list\":true,\n  \"settings_operation_state_machine\":true,\n  \"setting_transition_count\":{},\n  \"theme_action_state_machine\":true,\n  \"theme_transition_count\":{},\n  \"theme_select_transition_checked\":{},\n  \"theme_duplicate_affordance_present\":{},\n  \"theme_import_export_affordance_present\":{},\n  \"theme_delete_readonly_blocked\":{},\n  \"theme_operations_backend_live\":{},\n  \"numeric_appearance_inputs\":{},\n  \"numeric_font_size_valid_entry\":{},\n  \"numeric_invalid_text_rejected\":{},\n  \"numeric_paste_out_of_range_rejected\":{},\n  \"numeric_ime_cancellation_keeps_last_valid\":{},\n  \"numeric_min_max_bounds_checked\":{},\n  \"numeric_localized_error_text\":{},\n  \"numeric_rollback_keeps_last_valid\":{},\n  \"typed_control_schema_consumed\":{},\n  \"typed_control_package_commands_present\":{},\n  \"typed_control_diagnostics_commands_present\":{},\n  \"typed_control_package_network_owner\":{},\n  \"package_core_manifest_parsed\":{},\n  \"package_core_manifest_compatible\":{},\n  \"package_core_repository_index_parsed\":{},\n  \"package_core_repository_entry_found\":{},\n  \"package_core_trusted_keyring_parsed\":{},\n  \"package_core_repository_key_trusted\":{},\n  \"package_core_lockfile_parsed\":{},\n  \"package_core_lifecycle_disable_enable_checked\":{},\n  \"package_core_lifecycle_remove_checked\":{},\n  \"package_action_state_machine\":true,\n  \"signed_repository_required_for_install\":{},\n  \"unconfigured_repository_install_blocked\":{},\n  \"addon_install\":true,\n  \"addon_update\":true,\n  \"addon_uninstall\":true,\n  \"addon_enable\":true,\n  \"addon_disable\":true,\n  \"addon_install_transition_checked\":{},\n  \"addon_update_transition_checked\":{},\n  \"addon_uninstall_transition_checked\":{},\n  \"addon_enable_transition_checked\":{},\n  \"addon_disable_transition_checked\":{},\n  \"package_transition_count\":{},\n  \"addon_action_row_rects\":{},\n  \"update_states\":true,\n  \"update_refresh_transition_checked\":{},\n  \"update_transition_count\":{},\n  \"localized_operation_errors\":{},\n  \"no_unsafe_commands_for_package_actions\":{},\n  \"diagnostics_actions\":true,\n  \"minimum_window_dip\":{{\"width\":{},\"height\":{}}},\n  \"checked_dpi_scale_percents\":[{}],\n  \"checked_pages\":{},\n  \"checked_layout_scenarios\":{},\n  \"checked_layout_elements\":{},\n  \"layout_rects_inside_window\":{},\n  \"layout_rects_non_overlapping\":{},\n  \"result\":\"PASS\"\n}}",
         current_component_name(),
         json_escape(model.product_name),
         shipping_config_replaced(),
@@ -6317,7 +6319,7 @@ mod tests {
                 })
                 .collect::<String>();
             let path = std::env::temp_dir().join(format!(
-                "fcitx5-config-poc-{name}-{}-{}",
+                "fcitx5-config-{name}-{}-{}",
                 std::process::id(),
                 thread_name
             ));
@@ -6894,7 +6896,7 @@ mod tests {
     #[test]
     fn self_check_covers_frozen_settings_operations() {
         let report = run_self_check().expect("self-check should pass");
-        assert!(report.contains("\"component\":\"fcitx5-config-poc\""));
+        assert!(report.contains("\"component\":\"fcitx5-config-dev\""));
         assert!(report.contains("\"config_rust_cutover_plan\":true"));
         assert!(report.contains("\"frozen_corpus_from_config_ux_009\":true"));
         assert!(
