@@ -36,8 +36,8 @@ foreach ($root in @($sources, $buildRoot, $stage)) {
 }
 
 $sourcePins = @(
-  @{ Name = 'fcitx5'; Url = 'https://github.com/fcitx/fcitx5.git'; Commit = '456ff901705de75a979fa4b75b4be35edc73aeb9' },
-  @{ Name = 'libime'; Url = 'https://github.com/fcitx/libime.git'; Commit = '9ed13b335b560b838b77ed9eab5330598dbc021e' },
+  @{ Name = 'fcitx5'; Url = 'https://github.com/fcitx/fcitx5.git'; Commit = 'c3f37dbb7db8f92c5a810858c5223deba1ba6753' },
+  @{ Name = 'libime'; Url = 'https://github.com/fcitx/libime.git'; Commit = '5be1300ea00e899b3f2c46d1e9f6bca21139cdeb' },
   @{ Name = 'fcitx5-chinese-addons'; Url = 'https://github.com/fcitx/fcitx5-chinese-addons.git'; Commit = 'e8d930f402e359cfd76a101ee3e46815d1331d83' },
   @{ Name = 'fcitx5-rime'; Url = 'https://github.com/fcitx/fcitx5-rime.git'; Commit = 'f5048611ea60e53955d5f013f608551e85d38f09' },
   @{ Name = 'fcitx5-lua'; Url = 'https://github.com/fcitx/fcitx5-lua.git'; Commit = '9bf8d3dd2c6240d8e3e194d09547acbfa6a81204' },
