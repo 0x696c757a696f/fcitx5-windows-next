@@ -173,7 +173,7 @@ fn decode_base64(value: &str) -> Result<Vec<u8>, Box<dyn Error>> {
         return Err("expected public key is not base64".into());
     }
     let mut output = Vec::with_capacity(value.len() / 4 * 3);
-    for (index, chunk) in value.as_bytes().chunks_exact(4).enumerate() {
+    for (index, chunk) in value.as_bytes().as_chunks::<4>().0.iter().enumerate() {
         let last = index + 1 == value.len() / 4;
         let first = base64_value(chunk[0]).ok_or("expected public key is not base64")?;
         let second = base64_value(chunk[1]).ok_or("expected public key is not base64")?;

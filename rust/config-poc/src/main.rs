@@ -1351,7 +1351,7 @@ fn windui_plugins_page(
 ) -> WindUiElement {
     let selected = windui_signal("fcitx5-chinese-addons".to_owned());
     let rows_locale = locale.clone();
-    let rows = snapshot.map(move |state| plugin_catalog_rows(&state, &rows_locale));
+    let rows = snapshot.map(move |state| plugin_catalog_rows(state, &rows_locale));
     let repository_locale = locale.clone();
     let repository = snapshot.map(move |state| {
         if !state.loaded {
@@ -1673,7 +1673,7 @@ fn windui_settings_root(
                     ))
                     .child(WindUiElement::setting_row_desc(
                         locale.text("general.input_method"),
-                        &locale.text("settings.input.profile_hint"),
+                        locale.text("settings.input.profile_hint"),
                         WindUiElement::dropdown(
                             ["wubi", "pinyin", "rime", "mozc"]
                                 .map(|name| locale.text(&format!("settings.input.engine.{name}")))
@@ -1780,7 +1780,7 @@ fn windui_settings_root(
                     ))
                     .child(WindUiElement::setting_row_desc(
                         locale.text("appearance.mode"),
-                        &locale.text("settings.appearance.mode_hint"),
+                        locale.text("settings.appearance.mode_hint"),
                         windui_appearance_mode_controls(
                             candidate_adapter,
                             candidate_status,
@@ -1788,8 +1788,8 @@ fn windui_settings_root(
                         ),
                     ))
                     .child(WindUiElement::setting_row_desc(
-                        &locale.text("settings.theme.accent"),
-                        &locale.text("settings.theme.accent_hint"),
+                        locale.text("settings.theme.accent"),
+                        locale.text("settings.theme.accent_hint"),
                         WindUiElement::dropdown(
                             ["wechat_green", "bamboo", "dark_green"]
                                 .map(|name| locale.text(&format!("settings.accent.{name}")))
@@ -1811,17 +1811,17 @@ fn windui_settings_root(
                         &locale.text("settings.typography.section"),
                     ))
                     .child(WindUiElement::setting_row_desc(
-                        &locale.text("settings.typography.font_size"),
-                        &locale.text("settings.typography.font_size_hint"),
+                        locale.text("settings.typography.font_size"),
+                        locale.text("settings.typography.font_size_hint"),
                         WindUiElement::stepper(ui_font_size, 11.0, 20.0, 1.0),
                     ))
                     .child(WindUiElement::setting_row_desc(
-                        &locale.text("settings.typography.scale"),
-                        &locale.text("settings.typography.scale_hint"),
+                        locale.text("settings.typography.scale"),
+                        locale.text("settings.typography.scale_hint"),
                         WindUiElement::slider(ui_scale).width(180),
                     ))
                     .child(WindUiElement::setting_row(
-                        &locale.text("settings.typography.compact"),
+                        locale.text("settings.typography.compact"),
                         WindUiElement::switch(compact),
                     )),
             )),
@@ -2693,8 +2693,8 @@ fn windui_config_core_candidate_layout_controls(
                 )),
         )
         .child(WindUiElement::col().child(WindUiElement::setting_row_desc(
-            &locale.text("candidate.page_size"),
-            &locale.text("settings.candidate.page_size_hint"),
+            locale.text("candidate.page_size"),
+            locale.text("settings.candidate.page_size_hint"),
             page_sizes,
         )))
         .child(
