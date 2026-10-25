@@ -69,6 +69,7 @@ fn run(args: Vec<OsString>) -> i32 {
             error_box("Administrator approval is required to repair both TSF architectures.");
             return result;
         }
+        materialize_portable_runtime(&root);
         if !win32::launch_detached(
             &root.join("bin").join("fcitx5-launcher.exe"),
             "--background",
@@ -137,6 +138,7 @@ fn run(args: Vec<OsString>) -> i32 {
                     return registration;
                 }
             }
+            materialize_portable_runtime(&root);
             if !win32::launch_detached(
                 &root.join("bin").join("fcitx5-launcher.exe"),
                 "--background",
@@ -250,6 +252,20 @@ fn inferred_action(executable: &Path) -> Action {
     } else {
         Action::Start
     }
+}
+
+/// Portable archives ship the runtime payload once, at the top level. Create
+/// the current runtime generation from it before the service starts. The
+/// launcher falls back to the top-level `bin` if this fails, so it is not fatal.
+fn materialize_portable_runtime(root: &Path) {
+    if !root.join("portable.flag").is_file() {
+        return;
+    }
+    let _ = win32::launch_and_wait(
+        &root.join("bin").join("fcitx5-updater.exe"),
+        &format!("--materialize-runtime-generation {}", quote(root)),
+        300_000,
+    );
 }
 
 fn quote(path: &Path) -> String {

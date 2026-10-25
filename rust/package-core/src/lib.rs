@@ -5563,6 +5563,7 @@ pub mod update {
     fn stage_runtime_payload(
         verified_payload_root: &Path,
         destination: &Path,
+        include_data: bool,
     ) -> Result<(), String> {
         if !verified_payload_root.is_dir() {
             return Err("runtime generation payload is incomplete".to_owned());
@@ -5577,10 +5578,15 @@ pub mod update {
             &verified_payload_root.join("themes"),
             &destination.join("themes"),
         )?;
-        copy_directory_tree(
-            &verified_payload_root.join("data"),
-            &destination.join("data"),
-        )?;
+        if include_data {
+            copy_directory_tree(
+                &verified_payload_root.join("data"),
+                &destination.join("data"),
+            )?;
+        } else {
+            fs::create_dir_all(destination.join("data"))
+                .map_err(|_| "runtime destination directory creation failed".to_owned())?;
+        }
         copy_optional_file(
             &verified_payload_root.join("portable.flag"),
             &destination.join("portable.flag"),
@@ -5616,6 +5622,7 @@ pub mod update {
     fn publish_runtime_directory(
         verified_payload_root: &Path,
         destination: &Path,
+        include_data: bool,
     ) -> Result<(), String> {
         let mut temporary_name = OsString::from(destination.as_os_str());
         temporary_name.push(format!(
@@ -5626,7 +5633,7 @@ pub mod update {
         let temporary = PathBuf::from(temporary_name);
         let _ = fs::remove_dir_all(&temporary);
         let published = (|| {
-            stage_runtime_payload(verified_payload_root, &temporary)?;
+            stage_runtime_payload(verified_payload_root, &temporary, include_data)?;
             fs::create_dir_all(
                 destination
                     .parent()
@@ -5663,7 +5670,7 @@ pub mod update {
                         }
                         let _ = fs::remove_dir_all(destination);
                     }
-                    match stage_runtime_payload(&temporary, destination) {
+                    match stage_runtime_payload(&temporary, destination, include_data) {
                         Ok(()) => {
                             let _ = fs::remove_dir_all(&temporary);
                             return Ok(());
@@ -5707,7 +5714,7 @@ pub mod update {
         if !write_wide_path(&mut result.generation_directory, &generation_directory) {
             return Err("runtime generation directory path is too long".to_owned());
         }
-        publish_runtime_directory(verified_payload_root, &generation_directory)?;
+        publish_runtime_directory(verified_payload_root, &generation_directory, true)?;
         result.runtime_installed = 1;
         let incoming_x64 = verified_payload_root
             .join("tsf")
@@ -5738,6 +5745,30 @@ pub mod update {
         publish_runtime_generation(root, generation, build_id)?;
         result.current_published = 1;
         Ok(result)
+    }
+
+    /// Creates the current runtime generation from the top-level payload when
+    /// it is missing. Portable archives ship that payload only once; the
+    /// portable user data under `data` stays at the top level and is not copied.
+    pub fn materialize_runtime_generation(root: &Path) -> Result<bool, String> {
+        if !root.is_absolute() || path_contains_reparse_component(root).unwrap_or(true) {
+            return Err("runtime generation root is invalid".to_owned());
+        }
+        let state = read_runtime_generation_state(root)?;
+        let generation = ascii_from_buffer(&state.current_generation)?;
+        let generation_directory = runtime_generation_directory(root, &generation)?;
+        if runtime_payload_complete(&generation_directory) {
+            return Ok(false);
+        }
+        if !runtime_payload_complete(root) {
+            return Err("runtime generation payload is incomplete".to_owned());
+        }
+        if generation_directory.exists() {
+            fs::remove_dir_all(&generation_directory)
+                .map_err(|_| "incomplete runtime generation removal failed".to_owned())?;
+        }
+        publish_runtime_directory(root, &generation_directory, false)?;
+        Ok(true)
     }
 
     fn ascii_from_buffer(buffer: &[u8]) -> Result<String, String> {

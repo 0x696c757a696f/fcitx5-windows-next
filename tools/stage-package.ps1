@@ -186,7 +186,14 @@ $currentGeneration = [ordered]@{
 [IO.File]::WriteAllText((Join-Path $root 'current.json'),
   (($currentGeneration | ConvertTo-Json -Depth 3) + "`n"), [Text.UTF8Encoding]::new($false))
 
-$files = Get-ChildItem -LiteralPath $root -File -Recurse | Sort-Object FullName | ForEach-Object {
+# The runtime generation is a derived copy of the top-level payload: the
+# installer stores it once and portable copies create it on first start, so
+# the manifest lists only the top-level files.
+$runtimeParent = Join-Path $root 'runtime'
+$runtimePrefix = $runtimeParent + [IO.Path]::DirectorySeparatorChar
+$files = Get-ChildItem -LiteralPath $root -File -Recurse |
+  Where-Object { -not $_.FullName.StartsWith($runtimePrefix, [StringComparison]::OrdinalIgnoreCase) } |
+  Sort-Object FullName | ForEach-Object {
   [ordered]@{
     path = [IO.Path]::GetRelativePath($root, $_.FullName).Replace('\', '/')
     size = $_.Length
@@ -232,7 +239,15 @@ Write-PayloadSizeReport $root
 
 $artifactSuffix = if ($Channel -eq 'stable') { '' } else { "-$Channel" }
 $portable = Join-Path $artifacts "fcitx5-windows-$Version$artifactSuffix-portable.zip"
-Compress-Archive -Path $root -DestinationPath $portable -CompressionLevel Optimal -Force
+# Portable archives leave the runtime generation out; "Start Fcitx5.exe"
+# creates it from the top-level payload on first start.
+$heldRuntime = Join-Path $work 'runtime-held'
+Move-Item -LiteralPath $runtimeParent -Destination $heldRuntime
+try {
+  Compress-Archive -Path $root -DestinationPath $portable -CompressionLevel Optimal -Force
+} finally {
+  Move-Item -LiteralPath $heldRuntime -Destination $runtimeParent
+}
 if (-not $SkipInstaller) {
   & (Join-Path $PSScriptRoot 'prepare-package-toolchains.ps1')
   $iscc = Join-Path $repoRoot 'out/toolchains/inno-7.0.2/ISCC.exe'

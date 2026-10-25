@@ -86,6 +86,32 @@ try {
         throw "Portable entry point self-test failed at $location location: $entry"
       }
     }
+    if ($location -eq 'first') {
+      # The archive ships the runtime payload once; the first start creates
+      # the runtime generation from the top-level files.
+      $generation = (Get-Content -LiteralPath (Join-Path $app 'current.json') -Raw |
+        ConvertFrom-Json).current_generation
+      $runtime = Join-Path $app "runtime/$generation"
+      if (Test-Path -LiteralPath (Join-Path $app 'runtime')) {
+        throw 'Portable ZIP must not ship the runtime generation.'
+      }
+      $updater = Join-Path $app 'bin/fcitx5-updater.exe'
+      foreach ($expected in @('runtime_created=true', 'runtime_created=false')) {
+        $output = @(& $updater --materialize-runtime-generation $app)
+        if ($LASTEXITCODE -ne 0 -or $output -notcontains $expected) {
+          throw "Portable runtime materialization failed: expected $expected, got $($output -join ' ')"
+        }
+      }
+      foreach ($relative in @('bin/fcitx5-engine.exe', 'bin/fcitx5-ui.exe',
+                              'lib/libime/zh_CN.lm', 'portable.flag')) {
+        $source = Join-Path $app $relative
+        $copy = Join-Path $runtime $relative
+        if (-not (Test-Path -LiteralPath $copy -PathType Leaf) -or
+            (Get-FileHash -LiteralPath $copy).Hash -ne (Get-FileHash -LiteralPath $source).Hash) {
+          throw "Portable runtime generation does not mirror $relative"
+        }
+      }
+    }
     $config = Start-Process -FilePath (Join-Path $app 'bin/fcitx5-config.exe') `
       -ArgumentList '--self-test' -Wait -PassThru -WindowStyle Hidden
     if ($config.ExitCode -ne 0) { throw "Config self-test failed at $location location." }
