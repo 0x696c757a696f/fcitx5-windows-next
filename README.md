@@ -199,12 +199,18 @@ The declared Windows compatibility matrix is not yet release-qualified across th
 
 If this project is useful to you, donations help cover build machines, test devices and development time.
 
-| Channel | Address |
-| --- | --- |
-| **USDC on Arbitrum One** | `0x619FeeF5986b9ed8E75D7CFD67AdB575355b9F80` |
+| Network | Assets | Address |
+| --- | --- | --- |
+| **Ethereum and EVM chains**<br><sub>Ethereum, Arbitrum One, Base, Optimism, Polygon, BNB Smart Chain</sub> | ETH or the chain's native coin, USDC, USDT | `0x619FeeF5986b9ed8E75D7CFD67AdB575355b9F80` |
+| **Bitcoin · Taproot** | BTC | `bc1p7jf7pzep76cld4pd6xmtfjckpn6qamdqc2rhjus64re2cvuc72sqdwszqc` |
+| **Bitcoin · Native SegWit** | BTC | `bc1q4rp3ag5lmnyy8eqwjm9s4xx62uulfr6n43ycvc` |
+| **Bitcoin · Nested SegWit** | BTC | `3Lu1yzQYfNZLpvh2dt6T6NuRbtwQkJHmT6` |
+| **Bitcoin · Legacy** | BTC | `123mpbi91xQitVkh9oosY4VczFqJB9kjDQ` |
+| **TRON (TRC-20)** | USDT | `TBHXcP2ReM5sqpRDTyrL1UWtcSmYeyrmnB` |
+| **Solana (SPL)** | USDT | `4s6uaauKCgwSNVzb5Lq1kxUe9dpm8V64D6FPw7hTwrQ6` |
 
 > [!CAUTION]
-> This address accepts **USDC on the Arbitrum One network only**. Do not send other tokens, and do not send from Ethereum mainnet or any other chain: funds sent on the wrong network may be lost. Before confirming, check that the address in your wallet matches the one above character for character.
+> The EVM address is the same on every chain listed in its row; each other address only works on its own network. Pick the same network in your wallet or exchange before sending: assets sent on any other network may be lost. Any of the four Bitcoin addresses can receive BTC; use whichever format your wallet supports. Check that the address matches character for character before confirming.
 
 ## 📄 License
 
