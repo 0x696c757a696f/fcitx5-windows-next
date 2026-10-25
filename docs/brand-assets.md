@@ -26,5 +26,6 @@ provenance is recorded here so future upstream synchronization does not replace
 the approved visual authority with a procedural or unrelated icon.
 
 `docs/assets/banner.svg` is the README banner. It embeds a downscaled, alpha-trimmed
-copy of the same approved master and draws an illustrative candidate window; it is
+copy of the same approved master and draws an inline composition plus a candidate
+window in the built-in default dark theme colors and geometry; it is
 documentation artwork, not a screenshot or shipping resource.
