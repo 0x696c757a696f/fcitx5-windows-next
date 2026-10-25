@@ -277,9 +277,11 @@ pub fn frame_update(
 
     // 5. Visual build with scroll-label reservations.
     let presentation_output = state.presentation.output();
-    let selected_index = (presentation_output.has_selected != 0)
-        .then_some(presentation_output.selected)
-        .unwrap_or(0);
+    let selected_index = if presentation_output.has_selected != 0 {
+        presentation_output.selected
+    } else {
+        0
+    };
     let configured_labels: &[String] = state.configured_labels;
     let mut build_inputs = Vec::with_capacity(current.candidates.len());
     for (index, candidate) in current.candidates.iter().enumerate() {

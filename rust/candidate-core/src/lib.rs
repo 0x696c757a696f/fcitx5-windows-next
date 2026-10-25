@@ -653,8 +653,6 @@ fn readable_selected_text(selected_text: [u8; 3], selected_background: [u8; 3]) 
 
 /// Resolves the eight paint colors from config colors and the high-contrast
 /// policy, mirroring the frozen shipping `paintOnceToDC` color mapping.
-/// Resolved eight paint colors (Rust-native form of
-/// [`fcitx5_candidate_resolve_paint_colors`]).
 #[must_use]
 pub fn resolve_paint_colors(
     background: Fcitx5CandidateConfigColor,
@@ -681,36 +679,6 @@ pub fn resolve_paint_colors(
         border: resolve_rgb(border, hc, COLOR_WINDOWTEXT_COLORREF_BGR),
         preedit_text: resolve_rgb(preedit_text, hc, COLOR_WINDOWTEXT_COLORREF_BGR),
     }
-}
-
-#[no_mangle]
-pub extern "C" fn fcitx5_candidate_resolve_paint_colors(
-    background: Fcitx5CandidateConfigColor,
-    candidate_text: Fcitx5CandidateConfigColor,
-    selected_background: Fcitx5CandidateConfigColor,
-    selected_text: Fcitx5CandidateConfigColor,
-    comment_text: Fcitx5CandidateConfigColor,
-    border: Fcitx5CandidateConfigColor,
-    preedit_text: Fcitx5CandidateConfigColor,
-    high_contrast: u8,
-    out: *mut Fcitx5CandidateResolvedColors,
-) -> u8 {
-    if out.is_null() {
-        return 0;
-    }
-    let resolved = resolve_paint_colors(
-        background,
-        candidate_text,
-        selected_background,
-        selected_text,
-        comment_text,
-        border,
-        preedit_text,
-        high_contrast != 0,
-    );
-    // SAFETY: non-null checked above; caller provides writable output storage.
-    unsafe { *out = resolved };
-    1
 }
 
 /// Computes the scroll-label reservation for one candidate.
@@ -2051,8 +2019,7 @@ mod candidate_paint_color_tests {
 
     #[test]
     fn paint_colors_clamp_and_scale_config_colors() {
-        let mut resolved = Fcitx5CandidateResolvedColors::default();
-        let ok = fcitx5_candidate_resolve_paint_colors(
+        let resolved = resolve_paint_colors(
             color(0.97, 0.98, 0.98),
             color(0.13, 0.13, 0.14),
             color(0.027, 0.757, 0.376),
@@ -2060,10 +2027,8 @@ mod candidate_paint_color_tests {
             color(0.13, 0.13, 0.14),
             color(0.82, 0.82, 0.82),
             color(0.13, 0.13, 0.14),
-            0,
-            &mut resolved,
+            false,
         );
-        assert_eq!(ok, 1);
         assert_eq!(resolved.background, [247, 250, 250]);
         assert_eq!(resolved.selected_background, [7, 193, 96]);
         assert_eq!(resolved.selected_text, [255, 255, 255]);
@@ -2088,8 +2053,7 @@ mod candidate_paint_color_tests {
 
     #[test]
     fn high_contrast_maps_colors_to_system_palette() {
-        let mut resolved = Fcitx5CandidateResolvedColors::default();
-        let ok = fcitx5_candidate_resolve_paint_colors(
+        let resolved = resolve_paint_colors(
             color(0.0, 0.0, 0.0),
             color(0.0, 0.0, 0.0),
             color(0.0, 0.0, 0.0),
@@ -2097,10 +2061,8 @@ mod candidate_paint_color_tests {
             color(0.0, 0.0, 0.0),
             color(0.0, 0.0, 0.0),
             color(0.0, 0.0, 0.0),
-            1,
-            &mut resolved,
+            true,
         );
-        assert_eq!(ok, 1);
         assert_eq!(resolved.background, COLOR_WINDOW_COLORREF_BGR);
         assert_eq!(resolved.text, COLOR_WINDOWTEXT_COLORREF_BGR);
         assert_eq!(
@@ -3564,10 +3526,7 @@ mod tests {
         uiless.popup_allowed = false;
         uiless.selected = Some(1);
         assert_eq!(model.apply(uiless), 0);
-        assert_eq!(
-            model.current.as_ref().expect("current").popup_allowed,
-            false
-        );
+        assert!(!model.current.as_ref().expect("current").popup_allowed);
         assert_eq!(model.current.as_ref().expect("current").candidates.len(), 2);
         assert_eq!(model.current.as_ref().expect("current").selected, Some(1));
 
@@ -4478,7 +4437,7 @@ mod axis_layout_ffi_tests {
     #[test]
     fn axis_layout_ffi_paging_vertical_returns_page_capped_rects() {
         let input = axis_input(1, 0, 0, 5);
-        let items = vec![item_size(60.0, 24.0); 8];
+        let items = [item_size(60.0, 24.0); 8];
         let mut out_items = vec![Fcitx5CandidateAxisLayoutItemOutput::default(); items.len()];
         let mut output = Fcitx5CandidateAxisLayoutOutput::default();
         assert_eq!(
@@ -4513,7 +4472,7 @@ mod axis_layout_ffi_tests {
     fn axis_layout_ffi_rejects_invalid_dpi_and_bad_capacity() {
         let mut input = axis_input(0, 0, 0, 0);
         input.dpi_scale = 8.0;
-        let items = vec![item_size(60.0, 24.0); 2];
+        let items = [item_size(60.0, 24.0); 2];
         let mut out_items = vec![Fcitx5CandidateAxisLayoutItemOutput::default(); items.len()];
         let mut output = Fcitx5CandidateAxisLayoutOutput::default();
         assert_eq!(

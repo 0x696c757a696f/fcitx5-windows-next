@@ -8,7 +8,7 @@
 //! complete BGRA window bitmap through the windui tiny-skia canvas and the
 //! DirectWrite text engine. Draw order mirrors the legacy C++ `paintOnce`
 //! (survey docs/tasks/081-ui-survey.md §paintOnce): background → preedit text
-//! + divider → per-candidate label/text/comment → selection rounded rect →
+//! and divider → per-candidate label/text/comment → selection rounded rect →
 //! scrollbar → outer rounded border.
 //!
 //! All geometry here is window-local: `axis_result.window` may sit anywhere
@@ -597,12 +597,14 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+type MeasuredTexts = Vec<(String, (f32, f32))>;
+
 #[derive(Default)]
 struct TextMeasurementCache {
     // DirectWrite layout creation is the expensive part of a paint. Keep a
     // tiny per-frame cache keyed by normalized font size; the active render
     // has one family/style, so the text is the remaining key.
-    by_size: HashMap<u32, Vec<(String, (f32, f32))>>,
+    by_size: HashMap<u32, MeasuredTexts>,
 }
 
 impl TextMeasurementCache {
@@ -676,7 +678,7 @@ pub fn render_candidate_window(input: &RenderWindowInput<'_>) -> RenderWindowOut
     // from one paint to the next.
     let mut engine = PAINT_ENGINE
         .with(|slot| slot.borrow_mut().take())
-        .unwrap_or_else(DWriteEngine::new);
+        .unwrap_or_default();
     engine.set_scale(scale);
     let mut canvas = SkiaCanvas::with_text(&mut pixmap, &mut engine, scale);
     let mut measurement_cache = TextMeasurementCache::default();
@@ -703,7 +705,7 @@ pub fn render_candidate_window(input: &RenderWindowInput<'_>) -> RenderWindowOut
     // When preedit is present, offset all candidate rows below the preedit panel.
     let y_offset = preedit_offset;
     let scroll_label_slot_width = if input.geometry.scroll_mode {
-        horizontal_scroll_label_slot_width(&input.candidates, |value| {
+        horizontal_scroll_label_slot_width(input.candidates, |value| {
             measurement_cache
                 .measure(
                     &mut canvas,
@@ -838,7 +840,7 @@ pub(crate) fn render_pixel_extent(
 /// `SetDIBitsToDevice` / tests consume straight BGRA.
 fn pixmap_to_bgra(pixmap: &Pixmap) -> Vec<u8> {
     let mut out = Vec::with_capacity(pixmap.data().len());
-    for pixel in pixmap.data().chunks_exact(4) {
+    for pixel in pixmap.data().as_chunks::<4>().0 {
         let alpha = pixel[3];
         let un = |channel: u8| {
             if alpha == 0 {
@@ -1494,7 +1496,6 @@ mod tests {
             selected: 1,
             scroll_override: None,
             placement: crate::Placement::Below,
-            ..AxisLayoutInput::default()
         }
     }
 

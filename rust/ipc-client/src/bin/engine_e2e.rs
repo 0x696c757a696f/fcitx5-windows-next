@@ -588,7 +588,7 @@ fn run_candidate_ui_and_navigation(
 
 /// Engine-side switch hotkeys through the routing layer (every scenario).
 fn run_hotkeys(client: &mut EngineClient) -> Result<(), String> {
-    let hotkey_context = 0x484F_544B_4559_53_u64;
+    let hotkey_context = 0x0048_4F54_4B45_5953_u64;
     let ctrl = KEY_FLAG_CONTROL;
     let ctrl_release = ctrl | KEY_FLAG_RELEASE;
     let toggle = client
@@ -1141,7 +1141,7 @@ fn run_dispatch_late(
     env::remove_var("FCITX5_TEST_DISPATCH_DELAY_MS");
     let mut late = late_start.map_err(|_| "late-engine start failed".to_owned())?;
     let mut late_client = connect_engine(identity, engine_path)?;
-    let late_context = 0x4C41_5445_4B45_59_u64;
+    let late_context = 0x004C_4154_454B_4559_u64;
     let late_first = late_client.process_key(late_context, b'N' as u32, 0, 0);
     if late_first.is_some() {
         return Err("stalled dispatcher task did not time out the client".to_owned());

@@ -274,13 +274,10 @@ pub unsafe extern "C" fn fcitx5_candidate_presentation_serve(
         let Some(peer) = listener.verified_client(&identity) else {
             continue;
         };
-        if !engine_peer_matches(&peer.executable_path, &engine_path.as_os_str()) {
+        if !engine_peer_matches(&peer.executable_path, engine_path.as_os_str()) {
             continue;
         }
-        loop {
-            let Some(response) = read_presentation_frame(&listener, READ_DEADLINE_TICKS) else {
-                break;
-            };
+        while let Some(response) = read_presentation_frame(&listener, READ_DEADLINE_TICKS) {
             let snapshot = FlatFrameResponse::build(&response);
             // SAFETY: `user` ownership belongs to the host callback contract.
             unsafe { on_frame(user, snapshot.as_response()) };

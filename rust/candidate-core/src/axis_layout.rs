@@ -15,9 +15,10 @@ use crate::{Orientation, Placement, Point, Rect, Size};
 
 /// What happens when candidates exceed the visible space (mirror of
 /// `fcitx5_config_core::OverflowBehavior`).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub enum OverflowBehavior {
     /// A page holds at most `page_size` candidates; navigation pages.
+    #[default]
     Paging,
     /// A fixed-size viewport scrolls; the highlighted candidate stays visible.
     Scrolling,
@@ -26,28 +27,17 @@ pub enum OverflowBehavior {
     Wrapping,
 }
 
-impl Default for OverflowBehavior {
-    fn default() -> Self {
-        Self::Paging
-    }
-}
-
 /// The candidate text's own direction, independent of item arrangement
 /// (mirror of `fcitx5_config_core::WritingMode`).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub enum WritingMode {
     /// Horizontal glyph runs left-to-right.
+    #[default]
     Horizontal,
     /// Vertical typesetting with columns ordered right-to-left.
     VerticalRl,
     /// Vertical typesetting with columns ordered left-to-right.
     VerticalLr,
-}
-
-impl Default for WritingMode {
-    fn default() -> Self {
-        Self::Horizontal
-    }
 }
 
 /// The unified three-axis layout model consumed by the geometry engine

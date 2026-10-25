@@ -221,7 +221,7 @@ unsafe fn window_user_data(window: Hwnd) -> isize {
     #[cfg(target_pointer_width = "64")]
     {
         // SAFETY: window and GWL_USERDATA are passed directly to user32.
-        return unsafe { GetWindowLongPtrW(window, GWL_USERDATA) };
+        unsafe { GetWindowLongPtrW(window, GWL_USERDATA) }
     }
     #[cfg(target_pointer_width = "32")]
     {
@@ -424,12 +424,16 @@ pub unsafe extern "C" fn fcitx5_candidate_window_create(
 }
 
 /// Destroys a Candidate HWND created by [`fcitx5_candidate_window_create`].
+///
+/// # Safety
+///
+/// `window` must be null or an HWND returned by
+/// [`fcitx5_candidate_window_create`] that has not been destroyed yet.
 #[no_mangle]
-pub extern "C" fn fcitx5_candidate_window_destroy(window: Hwnd) {
+pub unsafe extern "C" fn fcitx5_candidate_window_destroy(window: Hwnd) {
     if !window.is_null() {
-        // SAFETY: caller supplies an HWND created by this host; Windows runs
-        // WM_NCDESTROY, which releases the associated WindowHost.
-        // SAFETY: this host owns the valid HWND and its WM_NCDESTROY releases associated state.
+        // SAFETY: the caller supplies a live HWND created by this host; Windows
+        // runs WM_NCDESTROY, which releases the associated WindowHost.
         unsafe { DestroyWindow(window) };
     }
 }
@@ -481,8 +485,8 @@ pub unsafe extern "C" fn fcitx5_candidate_window_blit_bgra(
     }
     if pixel_stride == 0
         || pixel_byte_len == 0
-        || pixel_stride % 4 != 0
-        || pixel_byte_len % pixel_stride != 0
+        || !pixel_stride.is_multiple_of(4)
+        || !pixel_byte_len.is_multiple_of(pixel_stride)
     {
         return 0;
     }
@@ -625,8 +629,8 @@ pub(crate) unsafe fn blit_bgra_to_dc(
     }
     if pixel_stride == 0
         || pixel_byte_len == 0
-        || pixel_stride % 4 != 0
-        || pixel_byte_len % pixel_stride != 0
+        || !pixel_stride.is_multiple_of(4)
+        || !pixel_byte_len.is_multiple_of(pixel_stride)
     {
         return 0;
     }

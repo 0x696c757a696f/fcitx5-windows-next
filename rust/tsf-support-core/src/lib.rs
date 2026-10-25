@@ -281,8 +281,13 @@ pub extern "C" fn fcitx5_tsf_activation_guard_marker_path(
         .unwrap_or_default()
 }
 
+/// # Safety
+///
+/// `data_root` must point to `data_root_len` UTF-16 units, `reason_out` to
+/// `reason_capacity` writable bytes, and `reason_len` must be null or point to
+/// one writable `usize`, all valid for this call.
 #[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_tsf_activation_guard_status(
+pub unsafe extern "C" fn fcitx5_tsf_activation_guard_status(
     data_root: *const u16,
     data_root_len: usize,
     reason_out: *mut u8,

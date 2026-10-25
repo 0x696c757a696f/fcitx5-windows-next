@@ -1166,9 +1166,10 @@ fn host_message_callback(
         m if m == registered_message(CANDIDATE_DISMISS_NAME) => {
             let source_context = lparam as u64;
             let same_context = source_context == 0
-                || host.model.semantic_snapshot().map_or(false, |current| {
-                    source_context == current.identity.context_id
-                });
+                || host
+                    .model
+                    .semantic_snapshot()
+                    .is_some_and(|current| source_context == current.identity.context_id);
             if (wparam == 0 || wparam == host.focus_target_process_id() as usize) && same_context {
                 host.dismiss_presentation();
             }
@@ -1189,7 +1190,7 @@ fn host_message_callback(
         }
         WM_LBUTTONDOWN => {
             let x = ((lparam as usize) & 0xFFFF) as u16 as i16 as f32;
-            let y = ((lparam as isize >> 16) & 0xFFFF) as u16 as i16 as f32;
+            let y = ((lparam >> 16) & 0xFFFF) as u16 as i16 as f32;
             let pressed = hit_test_candidate(&host.item_rects, x, y);
             host.pointer.press(pressed);
             if pressed.is_some() {
@@ -1200,7 +1201,7 @@ fn host_message_callback(
         }
         WM_LBUTTONUP => {
             let x = ((lparam as usize) & 0xFFFF) as u16 as i16 as f32;
-            let y = ((lparam as isize >> 16) & 0xFFFF) as u16 as i16 as f32;
+            let y = ((lparam >> 16) & 0xFFFF) as u16 as i16 as f32;
             let released = hit_test_candidate(&host.item_rects, x, y);
             let selected = host.pointer.release(released);
             // SAFETY: window is valid.
@@ -1836,9 +1837,7 @@ fn run_candidate_ux_fuzz_stage(host: &mut Host) -> bool {
                     };
                     let comment = if stress {
                         "这是一段很长的注释 annotation 用于自动布局压力回归"
-                    } else if mode.name == "automatic" {
-                        ""
-                    } else if mode.name == "paging-horizontal" {
+                    } else if mode.name == "automatic" || mode.name == "paging-horizontal" {
                         ""
                     } else {
                         match index % 4 {
@@ -1949,7 +1948,7 @@ fn run_candidate_ux_fuzz_stage(host: &mut Host) -> bool {
                 FrameOrientation::Automatic => None,
             };
             let direction_ok =
-                expected_horizontal.map_or(true, |expected| host.resolved_horizontal == expected);
+                expected_horizontal.is_none_or(|expected| host.resolved_horizontal == expected);
             let presentation = host.presentation.output();
             if presentation.has_selected == 0
                 || presentation.selected != expected_selected
@@ -2549,7 +2548,7 @@ fn run_uiless_presentation_self_test(host: &mut Host) -> bool {
     let visible =
         // SAFETY: window is a valid HWND.
         unsafe { IsWindowVisible(host.window) } != 0;
-    if visible || !uiless_matches(&host, Some(10), Some(0), Some(false)) {
+    if visible || !uiless_matches(host, Some(10), Some(0), Some(false)) {
         eprintln!("REG-UILESS-001 hidden popup lost candidate state");
         return false;
     }
@@ -2558,7 +2557,7 @@ fn run_uiless_presentation_self_test(host: &mut Host) -> bool {
     host.update(&context_a);
     // SAFETY: host owns a live HWND throughout this self-test.
     if unsafe { IsWindowVisible(host.window) } != 0
-        || !uiless_matches(&host, Some(10), Some(1), Some(false))
+        || !uiless_matches(host, Some(10), Some(1), Some(false))
     {
         eprintln!("REG-UILESS-001 hidden selection update failed");
         return false;
@@ -2567,7 +2566,7 @@ fn run_uiless_presentation_self_test(host: &mut Host) -> bool {
     host.update(&make_uiless_response(1, 20, 200, 1, true, 0));
     // SAFETY: host owns a live HWND throughout this self-test.
     if unsafe { IsWindowVisible(host.window) } == 0
-        || !uiless_matches(&host, Some(20), Some(0), Some(true))
+        || !uiless_matches(host, Some(20), Some(0), Some(true))
     {
         eprintln!("REG-UILESS-001 policy leaked into normal context");
         return false;
@@ -2577,7 +2576,7 @@ fn run_uiless_presentation_self_test(host: &mut Host) -> bool {
     host.update(&context_a);
     // SAFETY: host owns a live HWND throughout this self-test.
     if unsafe { IsWindowVisible(host.window) } != 0
-        || !uiless_matches(&host, Some(10), None, Some(false))
+        || !uiless_matches(host, Some(10), None, Some(false))
     {
         eprintln!("REG-UILESS-001 context return resurrected popup");
         return false;
@@ -2604,7 +2603,7 @@ fn run_uiless_presentation_self_test(host: &mut Host) -> bool {
     host.update(&reconnected);
     // SAFETY: host owns a live HWND throughout this self-test.
     if unsafe { IsWindowVisible(host.window) } != 0
-        || !uiless_matches(&host, Some(10), Some(1), Some(false))
+        || !uiless_matches(host, Some(10), Some(1), Some(false))
     {
         eprintln!("REG-UILESS-001 reconnect ignored authoritative policy");
         return false;
@@ -2764,9 +2763,9 @@ fn run_interaction_self_test(host: &mut Host) -> bool {
         // SAFETY: window is a valid HWND.
         unsafe { KillTimer(host.window, K_CLICK_GUARD_TIMER) };
         if !host.dispatch_candidate(1)
-            || !host.captured_test_intent.map_or(false, |intent| {
-                selection_intent_valid(intent) && intent.candidate_id == 2
-            })
+            || !host
+                .captured_test_intent
+                .is_some_and(|intent| selection_intent_valid(intent) && intent.candidate_id == 2)
         {
             eprintln!("interaction self-test did not capture candidate 2");
             return false;
@@ -2874,7 +2873,7 @@ fn post_exe_command_line() -> Vec<u16> {
             out.push(' ' as u16);
         }
         let units: Vec<u16> = argument.encode_wide().collect();
-        if units.iter().any(|&unit| unit == ' ' as u16) {
+        if units.contains(&(' ' as u16)) {
             out.push('"' as u16);
             out.extend(units);
             out.push('"' as u16);
@@ -2897,7 +2896,7 @@ fn main() -> std::process::ExitCode {
     }
     if parsed.candidate_select_mode != 0 {
         if parsed.candidate_select_mode != 1 {
-            return std::process::ExitCode::from(parsed.candidate_select_mode as u8);
+            return std::process::ExitCode::from(parsed.candidate_select_mode);
         }
         return std::process::ExitCode::from(
             run_candidate_selection_test(&parsed, &candidate_peer) as u8,
@@ -2990,7 +2989,8 @@ fn main() -> std::process::ExitCode {
     start_serve_thread(host.window, parsed.test_once != 0);
     let exit = fcitx5_candidate_window_run_message_loop();
     if !host.window.is_null() {
-        fcitx5_candidate_window_destroy(host.window);
+        // SAFETY: the HWND came from fcitx5_candidate_window_create on this thread.
+        unsafe { fcitx5_candidate_window_destroy(host.window) };
     }
     std::process::ExitCode::from((exit & 0xFF) as u8)
 }

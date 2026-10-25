@@ -452,6 +452,95 @@ fn measurement_from_ffi(value: &Fcitx5CandidateUiMeasurement) -> Option<Candidat
     ))
 }
 
+fn finite(value: f32) -> Option<f32> {
+    value.is_finite().then_some(value)
+}
+
+fn finite_nonnegative(value: f32) -> Option<f32> {
+    (value.is_finite() && value >= 0.0).then_some(value)
+}
+
+fn rect_from_ffi(value: Fcitx5CandidateLayoutRect) -> Option<Rect> {
+    let rect = Rect {
+        left: finite(value.left)?,
+        top: finite(value.top)?,
+        right: finite(value.right)?,
+        bottom: finite(value.bottom)?,
+    };
+    (rect.right > rect.left && rect.bottom > rect.top).then_some(rect)
+}
+
+fn ffi_utf8(value: &str) -> Fcitx5CandidateUtf8 {
+    Fcitx5CandidateUtf8 {
+        ptr: value.as_ptr(),
+        len: value.len(),
+    }
+}
+
+fn rect_to_ffi(value: Rect) -> Fcitx5CandidateLayoutRect {
+    Fcitx5CandidateLayoutRect {
+        left: value.left,
+        top: value.top,
+        right: value.right,
+        bottom: value.bottom,
+    }
+}
+
+fn color_to_ffi(value: CandidateUiColor) -> Fcitx5CandidateUiColor {
+    Fcitx5CandidateUiColor {
+        red: value.red,
+        green: value.green,
+        blue: value.blue,
+        alpha: value.alpha,
+    }
+}
+
+fn plan_output(
+    plan: &CandidateUiPlan,
+    identity: CandidateSnapshotIdentity,
+) -> Fcitx5CandidateUiPlanOutput {
+    Fcitx5CandidateUiPlanOutput {
+        engine_epoch: identity.engine_epoch,
+        context_id: identity.context_id,
+        composition_id: identity.composition_id,
+        revision: identity.revision,
+        popup_visible: u8::from(plan.popup_visible),
+        orientation: match plan.orientation {
+            Orientation::Vertical => 0,
+            Orientation::Horizontal => 1,
+        },
+        placement: match plan.placement {
+            crate::Placement::Unlocked => 0,
+            crate::Placement::Below => 1,
+            crate::Placement::Above => 2,
+        },
+        window: rect_to_ffi(plan.window),
+        preedit: ffi_utf8(&plan.preedit),
+        preedit_rect: plan
+            .preedit_rect
+            .map_or_else(Fcitx5CandidateLayoutRect::default, rect_to_ffi),
+        has_preedit_rect: u8::from(plan.preedit_rect.is_some()),
+        background: color_to_ffi(plan.colors.background),
+        border: color_to_ffi(plan.colors.border),
+        text: color_to_ffi(plan.colors.text),
+        annotation: color_to_ffi(plan.colors.annotation),
+        label: color_to_ffi(plan.colors.label),
+        selected_background: color_to_ffi(plan.colors.selected_background),
+        selected_text: color_to_ffi(plan.colors.selected_text),
+        scrollbar: color_to_ffi(plan.colors.scrollbar),
+        opacity: plan.opacity,
+        scrollbar_track: plan
+            .scrollbar_track
+            .map_or_else(Fcitx5CandidateLayoutRect::default, rect_to_ffi),
+        scrollbar_thumb: plan
+            .scrollbar_thumb
+            .map_or_else(Fcitx5CandidateLayoutRect::default, rect_to_ffi),
+        has_scrollbar: u8::from(plan.scrollbar_track.is_some() && plan.scrollbar_thumb.is_some()),
+        item_count: plan.items.len(),
+        uia_item_count: plan.uia.items.len(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -584,94 +673,5 @@ mod tests {
         );
         // SAFETY: this test destroys its unique opaque handle exactly once.
         unsafe { fcitx5_candidate_ui_destroy(state) };
-    }
-}
-
-fn finite(value: f32) -> Option<f32> {
-    value.is_finite().then_some(value)
-}
-
-fn finite_nonnegative(value: f32) -> Option<f32> {
-    (value.is_finite() && value >= 0.0).then_some(value)
-}
-
-fn rect_from_ffi(value: Fcitx5CandidateLayoutRect) -> Option<Rect> {
-    let rect = Rect {
-        left: finite(value.left)?,
-        top: finite(value.top)?,
-        right: finite(value.right)?,
-        bottom: finite(value.bottom)?,
-    };
-    (rect.right > rect.left && rect.bottom > rect.top).then_some(rect)
-}
-
-fn ffi_utf8(value: &str) -> Fcitx5CandidateUtf8 {
-    Fcitx5CandidateUtf8 {
-        ptr: value.as_ptr(),
-        len: value.len(),
-    }
-}
-
-fn rect_to_ffi(value: Rect) -> Fcitx5CandidateLayoutRect {
-    Fcitx5CandidateLayoutRect {
-        left: value.left,
-        top: value.top,
-        right: value.right,
-        bottom: value.bottom,
-    }
-}
-
-fn color_to_ffi(value: CandidateUiColor) -> Fcitx5CandidateUiColor {
-    Fcitx5CandidateUiColor {
-        red: value.red,
-        green: value.green,
-        blue: value.blue,
-        alpha: value.alpha,
-    }
-}
-
-fn plan_output(
-    plan: &CandidateUiPlan,
-    identity: CandidateSnapshotIdentity,
-) -> Fcitx5CandidateUiPlanOutput {
-    Fcitx5CandidateUiPlanOutput {
-        engine_epoch: identity.engine_epoch,
-        context_id: identity.context_id,
-        composition_id: identity.composition_id,
-        revision: identity.revision,
-        popup_visible: u8::from(plan.popup_visible),
-        orientation: match plan.orientation {
-            Orientation::Vertical => 0,
-            Orientation::Horizontal => 1,
-        },
-        placement: match plan.placement {
-            crate::Placement::Unlocked => 0,
-            crate::Placement::Below => 1,
-            crate::Placement::Above => 2,
-        },
-        window: rect_to_ffi(plan.window),
-        preedit: ffi_utf8(&plan.preedit),
-        preedit_rect: plan
-            .preedit_rect
-            .map_or_else(Fcitx5CandidateLayoutRect::default, rect_to_ffi),
-        has_preedit_rect: u8::from(plan.preedit_rect.is_some()),
-        background: color_to_ffi(plan.colors.background),
-        border: color_to_ffi(plan.colors.border),
-        text: color_to_ffi(plan.colors.text),
-        annotation: color_to_ffi(plan.colors.annotation),
-        label: color_to_ffi(plan.colors.label),
-        selected_background: color_to_ffi(plan.colors.selected_background),
-        selected_text: color_to_ffi(plan.colors.selected_text),
-        scrollbar: color_to_ffi(plan.colors.scrollbar),
-        opacity: plan.opacity,
-        scrollbar_track: plan
-            .scrollbar_track
-            .map_or_else(Fcitx5CandidateLayoutRect::default, rect_to_ffi),
-        scrollbar_thumb: plan
-            .scrollbar_thumb
-            .map_or_else(Fcitx5CandidateLayoutRect::default, rect_to_ffi),
-        has_scrollbar: u8::from(plan.scrollbar_track.is_some() && plan.scrollbar_thumb.is_some()),
-        item_count: plan.items.len(),
-        uia_item_count: plan.uia.items.len(),
     }
 }
