@@ -196,6 +196,29 @@ $manifest = [ordered]@{
 [IO.File]::WriteAllText((Join-Path $root 'manifest.json'),
   (($manifest | ConvertTo-Json -Depth 5) + "`n"), [Text.UTF8Encoding]::new($false))
 
+function Write-PayloadSizeReport([string] $payloadRoot) {
+  $all = @(Get-ChildItem -LiteralPath $payloadRoot -File -Recurse)
+  $total = ($all | Measure-Object -Property Length -Sum).Sum
+  Write-Host ('Payload: {0} files, {1:N1} MiB' -f $all.Count, ($total / 1MB))
+  $all | Group-Object {
+    $parts = [IO.Path]::GetRelativePath($payloadRoot, $_.FullName).Replace('\', '/').Split('/')
+    if ($parts.Count -gt 2) { $parts[0] + '/' + $parts[1] } else { $parts[0] }
+  } | ForEach-Object {
+    [pscustomobject]@{
+      Directory = $_.Name
+      Files = $_.Count
+      MiB = [math]::Round((($_.Group | Measure-Object -Property Length -Sum).Sum / 1MB), 2)
+    }
+  } | Sort-Object MiB -Descending | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+  $all | Sort-Object Length -Descending | Select-Object -First 40 | ForEach-Object {
+    [pscustomobject]@{
+      Path = [IO.Path]::GetRelativePath($payloadRoot, $_.FullName).Replace('\', '/')
+      MiB = [math]::Round($_.Length / 1MB, 2)
+    }
+  } | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+}
+Write-PayloadSizeReport $root
+
 $artifactSuffix = if ($Channel -eq 'stable') { '' } else { "-$Channel" }
 $portable = Join-Path $artifacts "fcitx5-windows-$Version$artifactSuffix-portable.zip"
 Compress-Archive -Path $root -DestinationPath $portable -CompressionLevel Optimal -Force
@@ -228,4 +251,7 @@ if (-not $SkipInstaller) {
 }
 [IO.File]::WriteAllText((Join-Path $outRoot 'current-stage.txt'), $root,
   [Text.UTF8Encoding]::new($false))
+Get-ChildItem -LiteralPath $artifacts -File | ForEach-Object {
+  Write-Host ('{0}: {1:N1} MiB' -f $_.Name, ($_.Length / 1MB))
+}
 Write-Host "Package artifacts staged from one build: $artifacts"
