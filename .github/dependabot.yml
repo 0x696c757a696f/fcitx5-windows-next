@@ -1,7 +1,13 @@
 version: 2
 updates:
+  # Rust crates and the toolchain are updated by
+  # .github/workflows/update-dependencies.yml, which also keeps the crate
+  # inventory in third_party/dependencies.json in step with Cargo.lock.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      github-actions:
+        patterns: ['*']
     open-pull-requests-limit: 3

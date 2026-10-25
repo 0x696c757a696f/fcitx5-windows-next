@@ -1,0 +1,65 @@
+name: Auto-merge dependency updates
+
+# Merges the bot-authored update PRs (Dependabot, update-dependencies.yml and
+# sync-upstream.yml) once their checks pass on the exact head commit. Nothing
+# from the PR branch is checked out or executed here.
+on:
+  workflow_run:
+    workflows: [Core, Preview Package]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: auto-merge-${{ github.event.workflow_run.head_branch }}
+
+jobs:
+  merge:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      (startsWith(github.event.workflow_run.head_branch, 'automation/') ||
+       startsWith(github.event.workflow_run.head_branch, 'upstream/') ||
+       startsWith(github.event.workflow_run.head_branch, 'dependabot/'))
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BRANCH: ${{ github.event.workflow_run.head_branch }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Merge when every required workflow passed
+        run: |
+          set -euo pipefail
+          pr=$(gh pr list --head "$BRANCH" --base main --state open \
+            --json number,headRefOid,author \
+            --jq '.[] | select(.author.is_bot) |
+                  select(.author.login == "app/dependabot" or .author.login == "app/github-actions") |
+                  select(.headRefOid == env.SHA) | .number')
+          if [ -z "$pr" ]; then
+            echo "No open bot PR for $BRANCH at $SHA."
+            exit 0
+          fi
+
+          # Fcitx pin bumps change the patched native sources, which only the
+          # package build exercises.
+          required=(core.yml)
+          if [ "$BRANCH" = upstream/fcitx5-pins ]; then
+            required+=(preview-package.yml)
+          fi
+          for workflow in "${required[@]}"; do
+            conclusion=$(gh run list --workflow "$workflow" --commit "$SHA" \
+              --json conclusion,status \
+              --jq '[.[] | select(.status == "completed")][0].conclusion // ""')
+            if [ "$conclusion" != success ]; then
+              echo "$workflow has not passed on $SHA yet (${conclusion:-pending})."
+              exit 0
+            fi
+          done
+
+          gh pr merge "$pr" --squash --delete-branch --match-head-commit "$SHA"
+          # The merge push is made with GITHUB_TOKEN and starts no workflows.
+          gh workflow run preview-package.yml --ref main

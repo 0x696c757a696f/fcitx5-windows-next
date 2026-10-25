@@ -9,6 +9,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write
 
 defaults:
   run:
@@ -22,16 +23,32 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
+      - name: Prepare toolchains
+        shell: pwsh
+        run: |
+          ./tools/prepare-fast-toolchain.ps1 -InstallForCI
+          ./tools/prepare-rust.ps1
+          ./tools/prepare-package-dependencies.ps1
+
       - name: Sync wind-ui-rust to upstream HEAD
         shell: pwsh
         run: |
           & ./tools/sync-windui.ps1 -Latest
+          python tools/update-rust-dependencies.py --skip-toolchain --skip-cargo-update
+          if ($LASTEXITCODE -ne 0) { throw 'crate inventory sync failed' }
+
+      - name: Show sync log
+        if: failure()
+        shell: pwsh
+        run: Get-Content out/tmp/wind-ui-sync-*.log -ErrorAction SilentlyContinue
 
       - name: Detect windui change and open PR
+        id: pr
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: upstream/wind-ui-rust
+          delete-branch: true
           commit-message: 'chore(vendor): sync wind-ui-rust to upstream HEAD'
           title: 'chore(vendor): sync wind-ui-rust to upstream HEAD'
           body: |
@@ -40,7 +57,15 @@ jobs:
             patches (fail-closed) and updates the pin in `dependencies.json`
             and the config-poc reference-commit constant.
 
-            Do not merge without the Core CI passing on this branch.
+            Merged automatically once Core passes on this commit.
+
+      - name: Run Core on the PR head
+        if: steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        # Pushes made with GITHUB_TOKEN do not start pull_request workflows.
+        run: gh workflow run core.yml --ref upstream/wind-ui-rust
 
   fcitx:
     name: Sync fcitx5 core and addon pins
@@ -55,10 +80,12 @@ jobs:
           & ./tools/sync-fcitx-pins.ps1 -Latest
 
       - name: Open PR for pin bumps
+        id: pr
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: upstream/fcitx5-pins
+          delete-branch: true
           commit-message: 'chore(pins): bump fcitx5 core/addon upstream pins'
           title: 'chore(pins): bump fcitx5 core/addon upstream pins'
           body: |
@@ -66,6 +93,16 @@ jobs:
             in `tools/bootstrap-fcitx.ps1` `$sourcePins`. This only updates the
             pinned commits; it does NOT verify the patch queue still applies.
 
-            Patch compatibility must be confirmed by running
-            `tools/bootstrap-fcitx.ps1 -VerifyPatchesOnly` against the new
-            checkouts (or by the release/package gate) before merging.
+            Patch compatibility is checked by the Preview Package build of
+            this branch; the PR is merged automatically once both Core and
+            Preview Package pass on this commit.
+
+      - name: Run Core and Preview Package on the PR head
+        if: steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        # Pushes made with GITHUB_TOKEN do not start pull_request workflows.
+        run: |
+          gh workflow run core.yml --ref upstream/fcitx5-pins
+          gh workflow run preview-package.yml --ref upstream/fcitx5-pins

@@ -51,15 +51,15 @@ jobs:
       - name: Install sccache compiler cache
         uses: Mozilla-Actions/sccache-action@v0.0.11
         with:
-          version: v0.17.0
+          version: v0.19.0
 
       - name: Restore fast Windows toolchain cache
         uses: actions/cache@v6
         with:
           path: out/toolchains/fast
-          key: ${{ runner.os }}-fast-toolchain-llvm-22.1.8-cmake-3.31.8-ninja-1.13.2-sccache-0.17.0-${{ hashFiles('tools/prepare-fast-toolchain.ps1') }}
+          key: ${{ runner.os }}-fast-toolchain-llvm-22.1.8-cmake-3.31.8-ninja-1.13.2-sccache-0.19.0-${{ hashFiles('tools/prepare-fast-toolchain.ps1') }}
           restore-keys: |
-            ${{ runner.os }}-fast-toolchain-llvm-22.1.8-cmake-3.31.8-ninja-1.13.2-sccache-0.17.0-
+            ${{ runner.os }}-fast-toolchain-llvm-22.1.8-cmake-3.31.8-ninja-1.13.2-sccache-0.19.0-
             ${{ runner.os }}-fast-toolchain-
 
       - name: Prepare fast Windows toolchain

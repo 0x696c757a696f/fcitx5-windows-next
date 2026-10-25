@@ -15,11 +15,11 @@ if (-not (Test-Path -LiteralPath $cmake -PathType Leaf)) {
 $cargo = 'D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\rust\cargo-home\bin\cargo.exe'
 $cargoHome = 'D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\rust\cargo-home'
 $rustupHome = 'D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\rust\rustup-home'
-$sccache = 'D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast\sccache-0.17.0\sccache-v0.17.0-x86_64-pc-windows-msvc\sccache.exe'
+$sccache = 'D:\Documents\GitHub\fcitx5-windows-next\out\toolchains\fast\sccache-0.19.0\sccache-v0.19.0-x86_64-pc-windows-msvc\sccache.exe'
 $cargoTarget = Join-Path $repoRoot 'out/cargo-target'
 $env:CARGO_HOME = $cargoHome
 $env:RUSTUP_HOME = $rustupHome
-$env:RUSTUP_TOOLCHAIN = '1.98.0-x86_64-pc-windows-msvc'
+$env:RUSTUP_TOOLCHAIN = '1.99.1-x86_64-pc-windows-msvc'
 $env:RUSTUP_IO_THREADS = '1'
 $env:CARGO_TARGET_DIR = $cargoTarget
 $env:RUSTC_WRAPPER = $sccache

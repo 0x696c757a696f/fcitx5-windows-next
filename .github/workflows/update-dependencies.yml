@@ -1,0 +1,62 @@
+name: Update dependencies
+
+# Weekly bump of the pinned Rust toolchain (latest stable) and the Cargo.lock
+# crates, with the third_party/dependencies.json crate inventory kept in step.
+# The PR is merged by auto-merge.yml once Core passes on its head commit.
+on:
+  schedule:
+    # Weekly, Monday 02:00 UTC.
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: update-dependencies
+
+jobs:
+  rust:
+    name: Rust toolchain and crates
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Update toolchain, Cargo.lock and crate inventory
+        id: update
+        run: |
+          {
+            echo 'summary<<EOF'
+            python3 tools/update-rust-dependencies.py
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the PR
+        id: pr
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: automation/rust-dependencies
+          delete-branch: true
+          commit-message: 'chore(deps): update Rust toolchain and crates'
+          title: 'chore(deps): update Rust toolchain and crates'
+          body: |
+            Weekly update from `tools/update-rust-dependencies.py`.
+
+            ```
+            ${{ steps.update.outputs.summary }}
+            ```
+
+            Merged automatically once Core passes on this commit.
+
+      - name: Run Core on the PR head
+        if: steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        # Pushes made with GITHUB_TOKEN do not start pull_request workflows,
+        # so start Core on the branch explicitly.
+        run: gh workflow run core.yml --ref automation/rust-dependencies
