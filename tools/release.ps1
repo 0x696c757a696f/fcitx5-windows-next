@@ -2,7 +2,10 @@
 param(
   [Parameter(Mandatory)] [string] $Version,
   [ValidateSet('stable', 'beta', 'nightly')] [string] $Channel = 'stable',
-  [Parameter(Mandatory)] [string] $CertificateThumbprint,
+  [string] $CertificateThumbprint = '',
+  # Publish without Authenticode signatures while no code signing certificate is available.
+  # Packages, the plugin index and updates are still ML-DSA signed.
+  [switch] $WithoutAuthenticode,
   [Parameter(Mandatory)] [string] $TrustedKeyring,
   [Parameter(Mandatory)] [string] $PluginSigningKey,
   [Parameter(Mandatory)] [ValidateRange(1, [UInt64]::MaxValue)] [UInt64] $PluginReleaseSequence,
@@ -11,6 +14,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+if ($WithoutAuthenticode -eq [bool]$CertificateThumbprint) {
+  throw 'Pass either -CertificateThumbprint or -WithoutAuthenticode, not both or neither.'
+}
+$authenticode = -not $WithoutAuthenticode
 $repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $dirty = @(git -C $repoRoot status --porcelain=v1 --untracked-files=all)
 if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) {
@@ -49,8 +56,10 @@ $runtimePrefix = $runtimeRoot.TrimEnd('\') + '\'
 $peFiles = @(Get-ChildItem -LiteralPath $stage -File -Recurse -Include *.exe,*.dll |
   Select-Object -ExpandProperty FullName |
   Where-Object { -not $_.StartsWith($runtimePrefix, [StringComparison]::OrdinalIgnoreCase) })
-& (Join-Path $PSScriptRoot 'sign-release.ps1') -Paths $peFiles `
-  -CertificateThumbprint $CertificateThumbprint -TimestampUrl $TimestampUrl
+if ($authenticode) {
+  & (Join-Path $PSScriptRoot 'sign-release.ps1') -Paths $peFiles `
+    -CertificateThumbprint $CertificateThumbprint -TimestampUrl $TimestampUrl
+}
 foreach ($path in $peFiles) {
   $relative = [IO.Path]::GetRelativePath($stage, $path)
   $mirror = Join-Path $runtimeRoot $relative
@@ -64,7 +73,7 @@ $forkPluginRoot = Join-Path $outRoot 'fork-plugins'
 # so every DLL a user installs carries the same publisher signature.
 $forkPluginPe = @(Get-ChildItem -LiteralPath $forkPluginRoot -File -Recurse -Include *.exe,*.dll |
   Select-Object -ExpandProperty FullName)
-if ($forkPluginPe.Count -gt 0) {
+if ($authenticode -and $forkPluginPe.Count -gt 0) {
   & (Join-Path $PSScriptRoot 'sign-release.ps1') -Paths $forkPluginPe `
     -CertificateThumbprint $CertificateThumbprint -TimestampUrl $TimestampUrl
 }
@@ -96,22 +105,28 @@ try {
 }
 & (Join-Path $PSScriptRoot 'prepare-package-toolchains.ps1')
 $iscc = Join-Path $repoRoot 'out/toolchains/inno-7.0.2/ISCC.exe'
-$kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
-$signtool = Get-ChildItem -LiteralPath $kits -Filter signtool.exe -File -Recurse |
-  Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
-  Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
-if (-not $signtool) { throw 'SignTool was not found.' }
-$thumbprint = $CertificateThumbprint.Replace(' ', '').ToUpperInvariant()
-$uninstallerSign = "`$q$signtool`$q sign /sha1 $thumbprint /fd SHA256"
-if ($TimestampUrl) { $uninstallerSign += " /tr $TimestampUrl /td SHA256" }
-$uninstallerSign += ' $f'
-& $iscc "/Sfcitx5sign=$uninstallerSign" '/DSignToolName=fcitx5sign' `
+$isccSigning = @()
+if ($authenticode) {
+  $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+  $signtool = Get-ChildItem -LiteralPath $kits -Filter signtool.exe -File -Recurse |
+    Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+    Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+  if (-not $signtool) { throw 'SignTool was not found.' }
+  $thumbprint = $CertificateThumbprint.Replace(' ', '').ToUpperInvariant()
+  $uninstallerSign = "`$q$signtool`$q sign /sha1 $thumbprint /fd SHA256"
+  if ($TimestampUrl) { $uninstallerSign += " /tr $TimestampUrl /td SHA256" }
+  $uninstallerSign += ' $f'
+  $isccSigning = @("/Sfcitx5sign=$uninstallerSign", '/DSignToolName=fcitx5sign')
+}
+& $iscc @isccSigning `
   "/DProductVersion=$Version" "/DReleaseChannel=$Channel" `
   "/DReleaseGeneration=$generation" "/DStageDir=$stage" "/DArtifactDir=$artifacts" (Join-Path $repoRoot 'installer/fcitx5-windows.iss')
 if ($LASTEXITCODE -ne 0) { throw 'Release installer packaging failed.' }
 $installer = Join-Path $artifacts "fcitx5-windows-$Version$suffix-setup.exe"
-& (Join-Path $PSScriptRoot 'sign-release.ps1') -Paths @($installer) `
-  -CertificateThumbprint $CertificateThumbprint -TimestampUrl $TimestampUrl
+if ($authenticode) {
+  & (Join-Path $PSScriptRoot 'sign-release.ps1') -Paths @($installer) `
+    -CertificateThumbprint $CertificateThumbprint -TimestampUrl $TimestampUrl
+}
 & (Join-Path $PSScriptRoot 'test-installer.ps1') -Version $Version `
   -InstallerPath $installer -Elevated
 $sbom = Join-Path $artifacts "fcitx5-windows-$Version$suffix.spdx.json"
@@ -133,13 +148,15 @@ $releaseManifest = [ordered]@{ format_version = 1; product = 'fcitx5-windows-nex
 $releaseManifestPath = Join-Path $artifacts "release-manifest-$Version$suffix.json"
 [IO.File]::WriteAllText($releaseManifestPath, (($releaseManifest | ConvertTo-Json -Depth 8) + "`n"),
   [Text.UTF8Encoding]::new($false))
-Add-Type -AssemblyName System.Security.Cryptography.Pkcs
-$cert = Get-Item "Cert:\CurrentUser\My\$($CertificateThumbprint.Replace(' ',''))" -ErrorAction Stop
-$content = [IO.File]::ReadAllBytes($releaseManifestPath)
-$cms = [Security.Cryptography.Pkcs.SignedCms]::new(
-  [Security.Cryptography.Pkcs.ContentInfo]::new($content), $true)
-$cms.ComputeSignature([Security.Cryptography.Pkcs.CmsSigner]::new($cert))
-[IO.File]::WriteAllBytes($releaseManifestPath + '.p7s', $cms.Encode())
+if ($authenticode) {
+  Add-Type -AssemblyName System.Security.Cryptography.Pkcs
+  $cert = Get-Item "Cert:\CurrentUser\My\$($CertificateThumbprint.Replace(' ',''))" -ErrorAction Stop
+  $content = [IO.File]::ReadAllBytes($releaseManifestPath)
+  $cms = [Security.Cryptography.Pkcs.SignedCms]::new(
+    [Security.Cryptography.Pkcs.ContentInfo]::new($content), $true)
+  $cms.ComputeSignature([Security.Cryptography.Pkcs.CmsSigner]::new($cert))
+  [IO.File]::WriteAllBytes($releaseManifestPath + '.p7s', $cms.Encode())
+}
 & (Join-Path $PSScriptRoot 'generate-system-packages.ps1') `
   -ReleaseManifest $releaseManifestPath `
   -BaseUrl "https://github.com/0x696c757a696f/fcitx5-windows-next/releases/download/v$Version" `
@@ -152,5 +169,6 @@ $provenance = [ordered]@{ _type = 'https://in-toto.io/Statement/v1';
 [IO.File]::WriteAllText((Join-Path $artifacts "provenance-$Version$suffix.json"),
   (($provenance | ConvertTo-Json -Depth 12) + "`n"), [Text.UTF8Encoding]::new($false))
 & (Join-Path $PSScriptRoot 'test-release-artifacts.ps1') `
-  -ArtifactDirectory $artifacts -ReleaseManifest $releaseManifestPath
+  -ArtifactDirectory $artifacts -ReleaseManifest $releaseManifestPath `
+  -WithoutAuthenticode:$WithoutAuthenticode
 Write-Host "Signed release gate passed without rebuilding source: $artifacts"
