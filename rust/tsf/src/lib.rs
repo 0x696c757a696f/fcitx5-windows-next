@@ -1001,6 +1001,8 @@ const TF_CLIENTID_NULL: u32 = 0;
 const TF_INVALID_UIELEMENTID: u32 = u32::MAX;
 const COLD_LAUNCH_DEADLINE_MILLISECONDS: u32 = 20000;
 const INPUT_DEADLINE_MILLISECONDS: u32 = 250;
+const ENGINE_RETRY_BASE_MILLISECONDS: u64 = 1000;
+const ENGINE_RETRY_MAX_MILLISECONDS: u64 = 30000;
 const SURROUNDING_LIMIT_UTF16: i32 = 128;
 const PEER_POLICY_EXACT_EXECUTABLE: u32 = 0;
 const PEER_POLICY_DEVELOPMENT_SAME_USER_SESSION: u32 = 1;
@@ -1356,6 +1358,9 @@ struct EngineClient {
     handshake_complete: bool,
     engine_epoch: u64,
     contexts: HashMap<u64, EngineContextState>,
+    module_path: Vec<u16>,
+    failure_streak: u32,
+    retry_at: u64,
 }
 
 impl EngineClient {
@@ -1410,8 +1415,65 @@ impl EngineClient {
             expected_engine_path,
             expected_launcher_path,
             identity,
+            module_path: module_path.to_vec(),
             ..Self::default()
         })
+    }
+
+    /// An update publishes a new generation while hosts keep the old DLL
+    /// loaded. Follow it once the old engine is gone instead of reviving the
+    /// old launcher next to the new one.
+    fn follow_current_generation(&mut self) {
+        let Some(current) = Self::new_for_current_module(&self.module_path) else {
+            return;
+        };
+        if current.generation != self.generation {
+            trace_wide_event("engine_client_generation_changed", &current.generation);
+            *self = Self {
+                failure_streak: self.failure_streak,
+                retry_at: self.retry_at,
+                ..current
+            };
+        }
+    }
+
+    /// Connects for one request and returns its deadline. After a failure the
+    /// client fails open without waiting until the back-off expires, and later
+    /// attempts only get the input budget, so a missing or stuck engine can
+    /// never block the host's UI thread on every key.
+    fn begin_request(&mut self, cold_start: bool) -> Option<u64> {
+        if self.failure_streak > 0
+            && common::fcitx5_windows_common_tick_milliseconds() < self.retry_at
+        {
+            return None;
+        }
+        if self.pipe.is_none() {
+            self.follow_current_generation();
+        }
+        let budget = if cold_start && self.failure_streak == 0 {
+            COLD_LAUNCH_DEADLINE_MILLISECONDS
+        } else {
+            INPUT_DEADLINE_MILLISECONDS
+        };
+        let deadline = common::fcitx5_windows_common_deadline_after_milliseconds(budget);
+        if self.ensure_engine_available(deadline) && self.handshake(deadline) {
+            self.failure_streak = 0;
+            return Some(deadline);
+        }
+        self.disconnect();
+        self.record_failure();
+        None
+    }
+
+    fn record_failure(&mut self) {
+        self.failure_streak = self.failure_streak.saturating_add(1);
+        let backoff = (ENGINE_RETRY_BASE_MILLISECONDS << (self.failure_streak - 1).min(5))
+            .min(ENGINE_RETRY_MAX_MILLISECONDS);
+        self.retry_at = common::fcitx5_windows_common_tick_milliseconds().saturating_add(backoff);
+        trace_event(&format!(
+            "engine_client_backoff streak={} milliseconds={backoff}",
+            self.failure_streak
+        ));
     }
 
     fn endpoint_name(
@@ -1818,15 +1880,7 @@ impl EngineClient {
                 .map(|state| state.revision)
                 .unwrap_or_default()
         ));
-        let deadline = common::fcitx5_windows_common_deadline_after_milliseconds(if new_context {
-            COLD_LAUNCH_DEADLINE_MILLISECONDS
-        } else {
-            INPUT_DEADLINE_MILLISECONDS
-        });
-        if !self.ensure_engine_available(deadline) || !self.handshake(deadline) {
-            self.disconnect();
-            return None;
-        }
+        let deadline = self.begin_request(new_context)?;
         let request_id = common::fcitx5_windows_common_next_pipe_client_request_id();
         let mut context_state = self.contexts.get(&context_id).cloned().unwrap_or_default();
         let request = protocol::KeyRequest {
@@ -1864,7 +1918,10 @@ impl EngineClient {
             self.disconnect();
             return None;
         };
-        let response_bytes = self.transact(request, deadline)?;
+        let Some(response_bytes) = self.transact(request, deadline) else {
+            self.record_failure();
+            return None;
+        };
         let Some(frame) = protocol::decode_frame(&response_bytes) else {
             self.disconnect();
             return None;
@@ -1944,12 +2001,7 @@ impl EngineClient {
 
     fn poll_state(&mut self, context_id: u64) -> Option<EngineKeyResult> {
         let context_state = self.contexts.get(&context_id).cloned()?;
-        let deadline =
-            common::fcitx5_windows_common_deadline_after_milliseconds(INPUT_DEADLINE_MILLISECONDS);
-        if !self.ensure_engine_available(deadline) || !self.handshake(deadline) {
-            self.disconnect();
-            return None;
-        }
+        let deadline = self.begin_request(false)?;
         let request_id = common::fcitx5_windows_common_next_pipe_client_request_id();
         let request = protocol::StateRequest {
             metadata: protocol::Metadata {
@@ -4524,6 +4576,24 @@ mod tests {
         assert!(report.contains("\"arm64_ci_artifact_green\":true"));
         assert!(report.contains("\"real_host_matrix_pending\":true"));
         assert!(report.contains("\"product_decision\":\"shipping_rust_cutover\""));
+    }
+
+    #[test]
+    fn engine_failures_back_off_without_blocking_the_next_key() {
+        let mut client = EngineClient::default();
+        let mut previous = 0;
+        for _ in 0..8 {
+            let before = common::fcitx5_windows_common_tick_milliseconds();
+            client.record_failure();
+            let backoff = client.retry_at - before;
+            assert!(backoff >= previous.min(ENGINE_RETRY_MAX_MILLISECONDS));
+            assert!(backoff <= ENGINE_RETRY_MAX_MILLISECONDS + 100);
+            previous = backoff;
+        }
+        assert!(previous >= ENGINE_RETRY_MAX_MILLISECONDS);
+        let started = common::fcitx5_windows_common_tick_milliseconds();
+        assert!(client.begin_request(true).is_none());
+        assert!(common::fcitx5_windows_common_tick_milliseconds() - started < 100);
     }
 
     #[test]

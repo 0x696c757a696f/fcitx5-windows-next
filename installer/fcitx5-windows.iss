@@ -50,6 +50,12 @@ ChangesEnvironment=no
 CloseApplications=no
 RestartApplications=no
 SetupLogging=yes
+#ifdef SignToolName
+; Release builds sign the uninstaller as well; an unsigned uninstaller left in
+; Program Files is a common source of antivirus warnings.
+SignTool={#SignToolName}
+SignedUninstaller=yes
+#endif
 
 #define RuntimeStageDir StageDir + "\runtime\" + ReleaseGeneration
 
@@ -83,9 +89,32 @@ Filename: "{app}\bin\fcitx5-register-x86.exe"; Parameters: "--unregister --dll "
 Filename: "{app}\bin\fcitx5-register.exe"; Parameters: "--unregister --dll ""{app}\tsf\x64\fcitx5-tsf.dll"""; Flags: runhidden waituntilterminated; RunOnceId: "unregister-x64-tsf"
 
 [Code]
+var
+  RestartFcitxAfterInstall: Boolean;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Control: String;
+  ResultCode: Integer;
+begin
+  Result := '';
+  { An update replaces bin while the user's launcher, engine and UI may still
+    run. Stop them first: applications that keep the old TSF DLL loaded then
+    follow the new generation instead of talking to a second engine. }
+  Control := ExpandConstant('{app}\bin\fcitx5-control.exe');
+  if FileExists(Control) and
+     ExecAsOriginalUser(Control, '--shutdown', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and
+     (ResultCode = 0) then
+  begin
+    RestartFcitxAfterInstall := True;
+    Sleep(2000);
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Owner: String;
+  ResultCode: Integer;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -98,5 +127,8 @@ begin
     SaveStringToFile(ExpandConstant('{app}\install-ownership.json'),
       '{"format_version":1,"machine_artifacts":"installer","system_registration":"register-helper","per_user_startup":"user-plane","per_user_session":"user-plane","per_user_config":"user-plane"}' + #10,
       False);
+    if RestartFcitxAfterInstall then
+      ExecAsOriginalUser(ExpandConstant('{app}\bin\fcitx5-launcher.exe'), '--background', '',
+        SW_HIDE, ewNoWait, ResultCode);
   end;
 end;
