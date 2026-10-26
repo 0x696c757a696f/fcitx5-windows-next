@@ -83,9 +83,22 @@ if ($packageCli.IndexOf('--write-signature-envelope-v2', [StringComparison]::Ord
 $workflow = Get-Content -LiteralPath (Join-Path $repoRoot '.github/workflows/release.yml') -Raw
 foreach ($required in @('PQC_SIGNING_SECRET_KEY_BASE64', 'RUNNER_TEMP',
     'FCITX_RELEASE_PLUGIN_SEQUENCE', 'Enforce monotonic official plugin sequence',
-    'gh release download', '--verify-repository-v2')) {
+    'gh release download')) {
   if ($workflow.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
     throw "Release workflow is missing protected plugin signing contract: $required"
+  }
+}
+$refreshWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot '.github/workflows/refresh-plugin-index.yml') -Raw
+foreach ($required in @('environment: release', 'PQC_SIGNING_SECRET_KEY_BASE64', 'RUNNER_TEMP',
+    'refresh-plugin-index.ps1')) {
+  if ($refreshWorkflow.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
+    throw "Plugin index refresh workflow is missing protected signing contract: $required"
+  }
+}
+$refreshScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'refresh-plugin-index.ps1') -Raw
+foreach ($required in @('--sign', '--write-signature-envelope-v2', '--verify-repository-v2')) {
+  if ($refreshScript.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
+    throw "Plugin index refresh is missing signing step: $required"
   }
 }
 $tracked = & git -C $repoRoot ls-files --cached

@@ -1,0 +1,142 @@
+name: Refresh Plugin Index
+
+# A repository index is valid for seven days, and clients read the index of
+# their own release. Re-sign the newest release's index of each channel daily
+# so the plugin list keeps refreshing between releases.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: refresh-plugin-index
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  refresh:
+    runs-on: windows-2022
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Find the indexes to refresh
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $pages = & gh api --paginate --slurp "repos/${{ github.repository }}/releases?per_page=100" |
+            ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read the release list.' }
+          $releases = @($pages | ForEach-Object { $_ }) |
+            Where-Object { -not $_.draft } |
+            Sort-Object { [DateTimeOffset] $_.published_at } -Descending
+          $root = Join-Path $env:RUNNER_TEMP 'plugin-indexes'
+          $seen = @{}
+          $targets = @()
+          foreach ($release in $releases) {
+            $assets = @($release.assets | ForEach-Object name)
+            if ($assets -notcontains 'index.json' -or $assets -notcontains 'index.sig.json') { continue }
+            $directory = Join-Path $root ([string]$release.id)
+            New-Item -ItemType Directory -Force -Path $directory | Out-Null
+            & gh release download $release.tag_name -R '${{ github.repository }}' -p index.json `
+              -p index.sig.json -D $directory --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Could not download the index of $($release.tag_name)." }
+            $channel = (Get-Content -LiteralPath (Join-Path $directory 'index.json') -Raw |
+              ConvertFrom-Json).channel
+            if ($seen.ContainsKey($channel)) { continue }
+            $seen[$channel] = $true
+            $targets += [ordered]@{ tag = $release.tag_name; directory = $directory }
+          }
+          $targets | ConvertTo-Json -Depth 3 -AsArray | Set-Content -LiteralPath "$root/targets.json"
+          "count=$($targets.Count)" >> $env:GITHUB_OUTPUT
+          Write-Host "Indexes to refresh: $(@($targets | ForEach-Object tag) -join ', ')"
+
+      - name: Check out source
+        if: steps.find.outputs.count != '0'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Restore Rust toolchain cache
+        if: steps.find.outputs.count != '0'
+        uses: actions/cache@v6
+        with:
+          path: |
+            out/toolchains/rust/rustup-home
+            out/toolchains/rust/cargo-home/registry
+            out/toolchains/rust/cargo-home/git
+            out/toolchains/rust/cargo-home/bin
+          key: ${{ runner.os }}-index-rust-msvc-${{ hashFiles('Cargo.lock', 'tools/prepare-rust.ps1') }}
+          restore-keys: |
+            ${{ runner.os }}-index-rust-msvc-
+            ${{ runner.os }}-rust-msvc-
+
+      - name: Restore fast Windows toolchain cache
+        if: steps.find.outputs.count != '0'
+        uses: actions/cache@v6
+        with:
+          path: out/toolchains/fast
+          key: ${{ runner.os }}-release-fast-toolchain-llvm-22.1.8-cmake-3.31.8-ninja-1.13.2-sccache-0.19.0-${{ hashFiles('tools/prepare-fast-toolchain.ps1') }}
+          restore-keys: |
+            ${{ runner.os }}-release-fast-toolchain-llvm-22.1.8-cmake-3.31.8-ninja-1.13.2-sccache-0.19.0-
+            ${{ runner.os }}-fast-toolchain-
+
+      - name: Build the signer and package CLI
+        if: steps.find.outputs.count != '0'
+        run: |
+          ./tools/prepare-fast-toolchain.ps1 -InstallForCI
+          ./tools/prepare-rust.ps1
+          ./tools/prepare-package-dependencies.ps1
+          $env:RUSTUP_HOME = Join-Path $PWD 'out/toolchains/rust/rustup-home'
+          $env:CARGO_HOME = Join-Path $PWD 'out/toolchains/rust/cargo-home'
+          $env:RUSTC_WRAPPER = ''
+          $env:FCITX_MLDSA_NATIVE_SOURCE_DIR = Join-Path $PWD 'out/toolchains/mldsa-native-2.0.0/mldsa-native-2.0.0'
+          $env:FCITX_MINIZ_SOURCE_DIR = Join-Path $PWD 'out/toolchains/miniz-3.1.2'
+          $cargo = Join-Path $env:RUSTUP_HOME 'toolchains/1.99.1-x86_64-pc-windows-msvc/bin/cargo.exe'
+          & $cargo build --locked --release --target x86_64-pc-windows-msvc `
+            -p fcitx5-release-pqc-signer --bin fcitx5-release-pqc-signer `
+            -p fcitx5-package-core --bin fcitx5-package-core
+          if ($LASTEXITCODE -ne 0) { throw 'Building the release tools failed.' }
+
+      - name: Re-sign and publish the indexes
+        if: steps.find.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPDATE_KEYRING_BASE64: ${{ secrets.UPDATE_KEYRING_BASE64 }}
+          PQC_SIGNING_SECRET_KEY_BASE64: ${{ secrets.PQC_SIGNING_SECRET_KEY_BASE64 }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PQC_SIGNING_SECRET_KEY_BASE64) -or
+              [string]::IsNullOrWhiteSpace($env:UPDATE_KEYRING_BASE64)) {
+            throw 'The release signing secrets are not configured.'
+          }
+          $keyring = Join-Path $env:RUNNER_TEMP 'trusted-keys.json'
+          $key = Join-Path $env:RUNNER_TEMP 'fcitx5-release-mldsa65.key'
+          [IO.File]::WriteAllBytes($keyring, [Convert]::FromBase64String($env:UPDATE_KEYRING_BASE64))
+          [IO.File]::WriteAllBytes($key, [Convert]::FromBase64String($env:PQC_SIGNING_SECRET_KEY_BASE64))
+          try {
+            $bin = 'target/x86_64-pc-windows-msvc/release'
+            $targets = Get-Content -LiteralPath "$env:RUNNER_TEMP/plugin-indexes/targets.json" -Raw |
+              ConvertFrom-Json
+            foreach ($target in @($targets)) {
+              $index = Join-Path $target.directory 'index.json'
+              $signature = Join-Path $target.directory 'index.sig.json'
+              ./tools/refresh-plugin-index.ps1 -IndexPath $index -SignaturePath $signature `
+                -TrustedKeyring $keyring -SigningKey $key `
+                -Signer "$bin/fcitx5-release-pqc-signer.exe" -PackageCli "$bin/fcitx5-package-core.exe"
+              # Upload the signature last: until it lands, clients see the old
+              # pair or reject a mismatch and retry later.
+              & gh release upload $target.tag $index -R '${{ github.repository }}' --clobber
+              if ($LASTEXITCODE -ne 0) { throw "Uploading the index of $($target.tag) failed." }
+              & gh release upload $target.tag $signature -R '${{ github.repository }}' --clobber
+              if ($LASTEXITCODE -ne 0) { throw "Uploading the signature of $($target.tag) failed." }
+            }
+          } finally {
+            Remove-Item -LiteralPath $key, $keyring -Force -ErrorAction SilentlyContinue
+          }

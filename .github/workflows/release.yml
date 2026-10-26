@@ -173,13 +173,6 @@ jobs:
               $requested -eq 0) {
             throw 'plugin_release_sequence must be a positive unsigned integer.'
           }
-          $stage = Get-ChildItem out/package -Directory -Filter 'stage-*' |
-            Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if (-not $stage) { throw 'Verified stage was not transferred.' }
-          $packageCli = Join-Path $stage.FullName 'bin/fcitx5-package.exe'
-          if (-not (Test-Path -LiteralPath $packageCli -PathType Leaf)) {
-            throw 'Verified Package CLI is missing from the build-once lineage.'
-          }
           $repository = '0x696c757a696f/fcitx5-windows-next'
           $pages = & gh api --paginate --slurp "repos/$repository/releases?per_page=100" |
             ConvertFrom-Json
@@ -200,23 +193,23 @@ jobs:
                 if ($LASTEXITCODE -ne 0) {
                   throw "Could not download signed plugin metadata for $($release.tag_name)."
                 }
-                & $packageCli --verify-repository-v2 (Join-Path $candidate 'index.json') `
-                  (Join-Path $candidate 'index.sig.json') $env:FCITX_RELEASE_TRUSTED_KEYRING `
-                  $env:FCITX_RELEASE_CHANNEL
-                if ($LASTEXITCODE -ne 0) {
-                  throw "Published plugin metadata for $($release.tag_name) did not verify."
-                }
+                # Older indexes expire and other channels' indexes do not verify
+                # against this channel, so read the history directly. Both the
+                # package sequence and the index sequence (which the scheduled
+                # refresh advances) must stay below the new release.
                 $index = Get-Content -LiteralPath (Join-Path $candidate 'index.json') -Raw |
                   ConvertFrom-Json
                 $rime = @($index.packages | Where-Object { $_.id -eq 'fcitx5-rime' })
                 if ($rime.Count -ne 1) {
                   throw "Published plugin metadata for $($release.tag_name) has no unique Rime entry."
                 }
-                [UInt64] $sequence = 0
-                if (-not [UInt64]::TryParse([string]$rime[0].release_sequence, [ref]$sequence)) {
-                  throw "Published plugin metadata for $($release.tag_name) has an invalid sequence."
+                foreach ($value in @($rime[0].release_sequence, $index.sequence)) {
+                  [UInt64] $sequence = 0
+                  if (-not [UInt64]::TryParse([string]$value, [ref]$sequence)) {
+                    throw "Published plugin metadata for $($release.tag_name) has an invalid sequence."
+                  }
+                  if ($sequence -gt $maximum) { $maximum = $sequence }
                 }
-                if ($sequence -gt $maximum) { $maximum = $sequence }
               }
             }
           } finally {
