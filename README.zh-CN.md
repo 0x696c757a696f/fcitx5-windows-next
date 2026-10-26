@@ -17,7 +17,7 @@
 
 [English](README.md) · **简体中文**
 
-[亮点](#-亮点) · [候选窗](#-候选窗) · [架构](#-架构) · [快速开始](#-快速开始) · [配置](#-配置) · [文档](#-文档) · [捐助](#-捐助)
+[亮点](#-亮点) · [候选窗](#-候选窗) · [架构](#-架构) · [快速开始](#-快速开始) · [配置](#-配置) · [文档](#-文档) · [代码签名](#-代码签名政策) · [捐助](#-捐助)
 
 </div>
 
@@ -194,6 +194,23 @@ size_dip = 18.0
 - [`SECURITY.md`](SECURITY.md)：安全模型与漏洞报告
 - [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)：依赖声明
 - [`AGENTS.md`](AGENTS.md)：贡献者说明
+
+## 🔏 代码签名政策
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).（代码签名由 SignPath.io 免费提供，证书由 SignPath Foundation 签发。）
+
+只有本仓库 GitHub Actions 发布流程从公开源码构建的文件会被签名：安装包、便携 ZIP、其中的可执行文件和 DLL，以及从[我们 fork 的 Fcitx5 插件仓库](https://github.com/0x696c757a696f/fcitx5-plugins)构建的插件包。
+
+| 角色 | 成员 |
+| --- | --- |
+| 提交者与审查者 | [@0x696c757a696f](https://github.com/0x696c757a696f) |
+| 签名批准者 | [@0x696c757a696f](https://github.com/0x696c757a696f) |
+
+每次发布的签名请求都由批准者手动批准。
+
+### 隐私
+
+除非用户或安装、使用本程序的人明确要求，本程序不会向其他联网系统传输任何信息。检查更新，或安装、更新、刷新插件时，程序会从 GitHub Releases 下载发布信息和安装包，这些请求适用 GitHub 的[隐私声明](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement)。你输入的任何内容都不会被发送出去。
 
 ## 💖 捐助
 
