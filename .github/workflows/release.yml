@@ -225,9 +225,18 @@ jobs:
           UPDATE_KEYRING_BASE64: ${{ secrets.UPDATE_KEYRING_BASE64 }}
           PQC_SIGNING_SECRET_KEY_BASE64: ${{ secrets.PQC_SIGNING_SECRET_KEY_BASE64 }}
         run: |
-          $stage = Get-ChildItem out/package -Directory -Filter 'stage-*' |
-            Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if (-not $stage) { throw 'Verified stage was not transferred.' }
+          # The build job's pointer names the verified stage; out/package also
+          # holds other stage-* directories, and downloaded timestamps are
+          # meaningless for picking between them.
+          $pointer = 'out/package/current-stage.txt'
+          if (-not (Test-Path -LiteralPath $pointer -PathType Leaf)) {
+            throw 'Verified stage pointer was not transferred.'
+          }
+          $name = Split-Path -Leaf (Get-Content -LiteralPath $pointer -Raw).Trim()
+          $stage = Get-Item -LiteralPath (Join-Path out/package $name) -ErrorAction SilentlyContinue
+          if (-not $stage -or -not $stage.PSIsContainer -or $name -notlike 'stage-*') {
+            throw 'Verified stage was not transferred.'
+          }
           [IO.File]::WriteAllText((Resolve-Path out/package/current-stage.txt),
             $stage.FullName, [Text.UTF8Encoding]::new($false))
           [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/trusted-keys.json",
