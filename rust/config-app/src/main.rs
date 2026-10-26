@@ -582,15 +582,11 @@ const FCITX5_PLUGIN_CATALOG: &[PluginCatalogEntry] = &[
         windows_package: true,
     },
     PluginCatalogEntry {
-        id: "fcitx5-table-extra",
-        windows_package: false,
-    },
-    PluginCatalogEntry {
         id: "fcitx5-chewing",
         windows_package: false,
     },
     PluginCatalogEntry {
-        id: "libime-jyutping",
+        id: "fcitx5-jyutping",
         windows_package: false,
     },
     PluginCatalogEntry {
@@ -630,7 +626,7 @@ const FCITX5_PLUGIN_CATALOG: &[PluginCatalogEntry] = &[
         windows_package: false,
     },
     PluginCatalogEntry {
-        id: "fcitx5-libthai",
+        id: "fcitx5-thai",
         windows_package: false,
     },
     PluginCatalogEntry {
@@ -647,10 +643,6 @@ const FCITX5_PLUGIN_CATALOG: &[PluginCatalogEntry] = &[
     },
     PluginCatalogEntry {
         id: "fcitx5-m17n",
-        windows_package: false,
-    },
-    PluginCatalogEntry {
-        id: "fcitx5-table-other",
         windows_package: false,
     },
     PluginCatalogEntry {
@@ -718,7 +710,7 @@ fn is_reference_plugin(id: &str) -> Option<&'static PluginCatalogEntry> {
 }
 
 fn is_plugin_package(package: &ControlPackage) -> bool {
-    package.package_type == "addon"
+    matches!(package.package_type.as_str(), "addon" | "inputmethod-data")
         || (package.package_type == "unknown" && package.installed_version.is_some())
 }
 
@@ -746,45 +738,60 @@ fn plugin_catalog_rows(
             .package(reference.id)
             .filter(|package| is_plugin_package(package))
             .cloned();
-        let (title, summary) = package
+        let (title, summary, category) = package
             .as_ref()
-            .map(|package| (package.title.clone(), package.summary.clone()))
+            .map(|package| {
+                (
+                    package.title.clone(),
+                    package.summary.clone(),
+                    plugin_row_category(locale, package),
+                )
+            })
             .unwrap_or_else(|| {
                 (
                     reference.id.to_owned(),
                     locale.text("settings.plugins.fallback_metadata"),
+                    locale.text("settings.plugins.fallback_category"),
                 )
             });
         rows.push(PluginCatalogRow {
             id: reference.id.to_owned(),
             title,
             summary,
-            category: locale.text("settings.plugins.fallback_category"),
+            category,
             package,
             loaded: snapshot.loaded,
         });
     }
 
+    // Addons first, then input method data such as tables, each by id.
     let mut extra = snapshot
         .packages
         .iter()
-        .filter(|package| {
-            package.package_type != "inputmethod-data"
-                && is_plugin_package(package)
-                && is_reference_plugin(&package.id).is_none()
-        })
+        .filter(|package| is_plugin_package(package) && is_reference_plugin(&package.id).is_none())
         .cloned()
         .collect::<Vec<_>>();
-    extra.sort_by(|left, right| left.id.cmp(&right.id));
+    extra.sort_by(|left, right| {
+        (left.package_type == "inputmethod-data", &left.id)
+            .cmp(&(right.package_type == "inputmethod-data", &right.id))
+    });
     rows.extend(extra.into_iter().map(|package| PluginCatalogRow {
         id: package.id.clone(),
         title: package.title.clone(),
         summary: package.summary.clone(),
-        category: locale.text("settings.plugins.fallback_category"),
+        category: plugin_row_category(locale, &package),
         package: Some(package),
         loaded: snapshot.loaded,
     }));
     rows
+}
+
+fn plugin_row_category(locale: &LocaleCatalog, package: &ControlPackage) -> String {
+    if package.package_type == "inputmethod-data" {
+        plugin_package_type_label(locale, &package.package_type)
+    } else {
+        locale.text("settings.plugins.fallback_category")
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -7367,7 +7374,7 @@ mod tests {
 
     #[test]
     fn pinned_plugin_catalog_is_complete_and_unique() {
-        assert_eq!(FCITX5_PLUGIN_CATALOG.len(), 21);
+        assert_eq!(FCITX5_PLUGIN_CATALOG.len(), 19);
         let mut ids = FCITX5_PLUGIN_CATALOG
             .iter()
             .map(|plugin| plugin.id)
@@ -7560,15 +7567,21 @@ mod tests {
         let ids = rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>();
         assert_eq!(
             ids.len(),
-            23,
-            "21 references plus addon and installed unknown"
+            22,
+            "19 references plus addon, installed unknown and input method data"
         );
         assert_eq!(ids.iter().filter(|id| **id == "fcitx5-rime").count(), 1);
         assert!(ids.contains(&"community-addon"));
         assert!(ids.contains(&"legacy-installed"));
         assert!(!ids.contains(&"core-package"));
         assert!(!ids.contains(&"theme-package"));
-        assert!(!ids.contains(&"community-addon-data"));
+        assert_eq!(ids.last(), Some(&"community-addon-data"));
+        let data = rows.last().expect("input method data row");
+        assert_eq!(data.category, locale.text("packages.type.input_method_data"));
+        assert_eq!(
+            plugin_operation_for(&snapshot, "community-addon-data", PluginAction::Install),
+            Some(PluginOperation::Install("community-addon-data".to_owned()))
+        );
 
         let rime = rows
             .iter()
