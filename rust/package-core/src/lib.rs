@@ -7271,9 +7271,12 @@ pub fn activate_staged_payload_tree(
     let versions = install_root.join("versions").join(manifest.id().as_str());
     fs::create_dir_all(&versions).map_err(staging_io_error)?;
     let destination = versions.join(manifest.version());
-    if destination.exists() {
-        verify_payload_root(&manifest, &destination)?;
-    } else {
+    // A version directory can survive an interrupted removal with some files already gone.
+    // Reuse it only when it still matches the manifest; otherwise publish it again.
+    if destination.exists() && verify_payload_root(&manifest, &destination).is_err() {
+        fs::remove_dir_all(&destination).map_err(staging_io_error)?;
+    }
+    if !destination.exists() {
         win32_fs_adapter::publish_directory(&staged_root.join("payload"), &destination).map_err(
             |_| staging_error("activation_failed", "unable to publish version directory"),
         )?;
@@ -7913,11 +7916,18 @@ pub fn upsert_installed_lock_entry(
             "package id or lifecycle state is invalid",
         ));
     }
+    // Updating a package the user disabled must not turn it back on.
+    let state = match lock.iter().find(|entry| entry.id() == &package_id) {
+        Some(entry) if entry.state() == &PackageLifecycleState::Disabled => {
+            PackageLifecycleState::Disabled
+        }
+        _ => PackageLifecycleState::Installed,
+    };
     let updated = LockEntry {
         id: package_id,
         version,
         manifest_sha256,
-        state: PackageLifecycleState::Installed,
+        state,
     };
     if let Some(entry) = lock.iter_mut().find(|entry| entry.id() == updated.id()) {
         *entry = updated;
@@ -13332,7 +13342,11 @@ mod tests {
         assert_eq!(lock.len(), 2);
         assert_eq!(lock[0].id().as_str(), "fcitx5-rime");
         assert_eq!(lock[0].version(), "2.0.0");
-        assert_eq!(lock[0].state(), &PackageLifecycleState::Installed);
+        assert_eq!(
+            lock[0].state(),
+            &PackageLifecycleState::Disabled,
+            "an update keeps a disabled package disabled"
+        );
         assert_eq!(lock[0].manifest_sha256().as_str(), &"b".repeat(64));
 
         upsert_installed_lock_entry(
