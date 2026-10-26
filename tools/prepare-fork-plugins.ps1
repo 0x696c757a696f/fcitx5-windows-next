@@ -180,18 +180,21 @@ function Assert-PackageImports([string] $PackageRoot, [string] $Id, $StageDlls) 
         else { $null }
       if (-not $target) {
         if (Test-Path -LiteralPath (Join-Path $SystemRoot $dll) -PathType Leaf) { continue }
-        throw "$Id/$($file.Name) imports $dll, which neither the package nor the stage ships."
+        $importErrors.Add("$Id/$($file.Name) imports $dll, which neither the package nor the stage ships.")
+        continue
       }
       $exports = Get-Exports $target
       foreach ($symbol in $image.Imports[$dll]) {
         if (-not $exports.Contains($symbol)) {
-          throw "$Id/$($file.Name) imports $symbol from $dll, which $target does not export."
+          $importErrors.Add("$Id/$($file.Name) imports $symbol from $dll, which $target does not export.")
         }
       }
     }
   }
 }
 
+# Import failures are collected across all packages so one run reports them all.
+$importErrors = [Collections.Generic.List[string]]::new()
 $onWindows = $IsWindows -or $env:OS -eq 'Windows_NT'
 $curl = if ($onWindows) { Join-Path $SystemRoot 'curl.exe' } else { 'curl' }
 $tar = if ($onWindows) { Join-Path $SystemRoot 'tar.exe' } else { 'tar' }
@@ -244,7 +247,10 @@ foreach ($plugin in @($inventory.packages)) {
   $bin = Join-Path $packageRoot 'bin'
   if (Test-Path -LiteralPath $bin -PathType Container) {
     foreach ($file in Get-ChildItem -LiteralPath $bin -File -Filter '*.dll') {
-      if ($stageDlls.ContainsKey($file.Name.ToLowerInvariant())) { Remove-Item -LiteralPath $file.FullName -Force }
+      if ($stageDlls.ContainsKey($file.Name.ToLowerInvariant())) {
+        Write-Host "  $($plugin.id) uses the stage's $($file.Name)"
+        Remove-Item -LiteralPath $file.FullName -Force
+      }
     }
   }
   $files = @(Get-ChildItem -LiteralPath $packageRoot -Recurse -Force |
@@ -265,5 +271,9 @@ foreach ($plugin in @($inventory.packages)) {
   } elseif (@($files | Where-Object { $_.Extension -in @('.dll', '.exe') }).Count -ne 0) {
     throw "Fork data package $($plugin.id) ships native code."
   }
+}
+if ($importErrors.Count -ne 0) {
+  $importErrors | ForEach-Object { Write-Host $_ }
+  throw "$($importErrors.Count) unresolved fork plugin imports."
 }
 Write-Host "Prepared $(@($inventory.packages).Count) fork plugin payloads from $($inventory.release): $OutputRoot"
