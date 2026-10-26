@@ -383,6 +383,24 @@ fn request_engine_reload() {
     }
 }
 
+/// Runs a package change that deletes files the engine may have loaded. Windows
+/// cannot delete a DLL that a running process has mapped, so the engine is stopped first and
+/// started again afterwards whether or not the change succeeded.
+fn with_engine_stopped(change: impl FnOnce() -> Result<(), Failure>) -> Result<(), Failure> {
+    let running = launcher_command(LauncherCommand::Status).is_ok();
+    if running {
+        launcher_command(LauncherCommand::UserStop)?;
+    }
+    let result = change();
+    if running
+        && (launcher_command(LauncherCommand::Resume).is_err()
+            || launcher_command(LauncherCommand::StartDemand).is_err())
+    {
+        eprintln!("warning: restart the input service to finish the package change");
+    }
+    result
+}
+
 fn run_engine_management(arguments: &[OsString]) -> Result<String, Failure> {
     let launcher_reachable = launcher_command(LauncherCommand::Status).is_ok();
     if launcher_reachable {
@@ -586,10 +604,12 @@ fn run(data_root: PathBuf, command: Command) -> Result<(), Failure> {
             request_engine_reload();
         }
         Command::PackagesRemove(id) => {
-            package_facade(&data_root)?
-                .remove_package(&id)
-                .map_err(|error| Failure::package(format!("{}: {error}", error.code())))?;
-            request_engine_reload();
+            let facade = package_facade(&data_root)?;
+            with_engine_stopped(|| {
+                facade
+                    .remove_package(&id)
+                    .map_err(|error| Failure::package(format!("{}: {error}", error.code())))
+            })?;
             println!(
                 "{}",
                 control_packages_list_json(&data_root).map_err(Failure::package)?
