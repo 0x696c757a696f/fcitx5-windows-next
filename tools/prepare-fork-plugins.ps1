@@ -195,6 +195,12 @@ function Assert-PackageImports([string] $PackageRoot, [string] $Id, $StageDlls) 
 $onWindows = $IsWindows -or $env:OS -eq 'Windows_NT'
 $curl = if ($onWindows) { Join-Path $SystemRoot 'curl.exe' } else { 'curl' }
 $tar = if ($onWindows) { Join-Path $SystemRoot 'tar.exe' } else { 'tar' }
+# The Windows tar has no built-in bzip2 and hangs piping through an external
+# one, so decompress first, as tools/bootstrap-fcitx.ps1 does for xz.
+$bzip2 = Join-Path $repoRoot 'out/toolchains/msys64/usr/bin/bzip2.exe'
+if (-not (Test-Path -LiteralPath $bzip2 -PathType Leaf)) {
+  $bzip2 = (Get-Command bzip2 -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+}
 $assetBase = $inventory.repository -replace '\.git$', ''
 $assetBase = "$assetBase/releases/download/$($inventory.release)"
 New-Item -ItemType Directory -Force -Path $CacheRoot | Out-Null
@@ -210,6 +216,8 @@ foreach ($archive in $archiveHashes.Keys) {
   if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $archiveHashes[$archive]) {
     throw "Fork plugin archive does not match its pinned SHA-256: $archive"
   }
+  & $bzip2 -d -k -f $path
+  if ($LASTEXITCODE -ne 0) { throw "Could not decompress $archive." }
 }
 
 $stageDlls = Get-DllIndex @((Join-Path $stage 'bin'))
@@ -220,14 +228,15 @@ foreach ($plugin in @($inventory.packages)) {
   $packageRoot = Join-Path $OutputRoot $plugin.id
   New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
   foreach ($archive in @($plugin.archives)) {
-    $listing = @(& $tar -tvjf (Join-Path $CacheRoot $archive))
+    $tarball = Join-Path $CacheRoot ($archive -replace '\.bz2$', '')
+    $listing = @(& $tar -tvf $tarball)
     if ($LASTEXITCODE -ne 0) { throw "Could not list $archive." }
     foreach ($entry in $listing) {
       if ($entry -notmatch '^[-d]' -or $entry -match ' (link to|->) ') {
         throw "$archive contains a link or special file: $entry"
       }
     }
-    & $tar -xjf (Join-Path $CacheRoot $archive) -C $packageRoot
+    & $tar -xf $tarball -C $packageRoot
     if ($LASTEXITCODE -ne 0) { throw "Could not extract $archive." }
   }
   $descriptor = Join-Path $packageRoot 'plugin'
