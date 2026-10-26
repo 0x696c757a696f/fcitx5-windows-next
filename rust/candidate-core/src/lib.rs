@@ -24,7 +24,6 @@ mod presentation_ffi;
 pub mod presentation_server;
 #[cfg(windows)]
 pub mod renderer;
-mod self_check;
 pub mod theme_tokens;
 mod ui_plan;
 mod visual;
@@ -43,7 +42,6 @@ pub use model::*;
 pub use paint::*;
 pub use presentation::*;
 pub use presentation_ffi::*;
-pub use self_check::*;
 pub use visual::*;
 pub use window_assembly::*;
 

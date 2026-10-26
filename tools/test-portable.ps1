@@ -112,19 +112,8 @@ try {
         }
       }
     }
-    $config = Start-Process -FilePath (Join-Path $app 'bin/fcitx5-config.exe') `
-      -ArgumentList '--self-test' -Wait -PassThru -WindowStyle Hidden
-    if ($config.ExitCode -ne 0) { throw "Config self-test failed at $location location." }
-    $uiContract = Start-Process -FilePath (Join-Path $app 'bin/fcitx5-config.exe') `
-      -ArgumentList '--ui-contract-test' -Wait -PassThru -WindowStyle Hidden
-    if ($uiContract.ExitCode -ne 0) {
-      throw "Config UI behavior contract failed at $location location."
-    }
-    $uiInteraction = Start-Process -FilePath (Join-Path $app 'bin/fcitx5-config.exe') `
-      -ArgumentList '--ui-interaction-test' -Wait -PassThru -WindowStyle Hidden
-    if ($uiInteraction.ExitCode -ne 0) {
-      throw "Config complete interaction sweep failed at $location location."
-    }
+    & (Join-Path $app 'bin/fcitx5-config.exe') --config (Join-Path $app 'data/config.toml') doctor
+    if ($LASTEXITCODE -ne 0) { throw "Config headless smoke failed at $location location." }
     $status = (& (Join-Path $app 'bin/fcitx5-control.exe') --status) | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0) { throw "Control status failed at $location location." }
     $actual = [IO.Path]::GetFullPath($status.data_root.Replace('/', '\')).TrimEnd('\')

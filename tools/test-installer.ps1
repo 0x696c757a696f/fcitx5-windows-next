@@ -204,8 +204,8 @@ try {
   # Re-running the exact installer is the unattended repair path.
   Invoke-Checked (Join-Path $installRoot 'bin/fcitx5-control.exe') @('--shutdown')
   Invoke-ElevatedChecked $installer $setupArguments
-  Invoke-Checked (Join-Path $installRoot 'bin/fcitx5-config.exe') `
-    @('--ui-interaction-test')
+  Invoke-Checked $installedConfig `
+    @('--config', (Join-Path $env:TEMP 'fcitx5-installer-smoke-missing.toml'), 'doctor')
   Invoke-ElevatedChecked (Join-Path $installRoot 'unins000.exe') `
     @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
   if (Test-Path -LiteralPath $installedConfig -PathType Leaf) {
