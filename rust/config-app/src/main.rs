@@ -17,7 +17,9 @@ use fcitx5_config_core::{
     ConfigField, ConfigSnapshot, FileStore, OverflowBehavior as CoreOverflowBehavior,
     RecoverySource, ScrollDirection, VerticalTextColumnDirection, WritingMode as CoreWritingMode,
 };
-use fcitx5_control_core::{control_schema_json, control_usage_text};
+use fcitx5_control_core::{
+    control_schema_json, control_themes_list_json_for_paths, control_usage_text,
+};
 use fcitx5_package_core::{
     finalize_package_removal_entries, find_repository_package, mark_package_for_removal_entries,
     parse_lockfile, parse_manifest, parse_repository_index_with_policy, parse_trusted_keys,
@@ -1946,11 +1948,19 @@ fn windui_settings_root(
         engine_restart_sender,
         &locale,
     );
-    let accent_pick = windui_signal(0usize);
-    let window_shadow = windui_signal(true);
-    let ui_font_size = windui_signal(14.0f64);
-    let ui_scale = windui_signal(0.5f32);
-    let compact = windui_signal(false);
+    let themes = candidate_adapter.with(WindUiConfigAdapter::theme_choices);
+    let appearance = AppearanceControls::new();
+    appearance.sync(candidate_adapter, &themes);
+    let theme_names: Vec<String> = themes
+        .iter()
+        .map(|theme| {
+            if theme.id == DEFAULT_THEME_ID {
+                locale.text("theme.default")
+            } else {
+                theme.name.clone()
+            }
+        })
+        .collect();
     let language_controls =
         windui_settings_language_controls(candidate_adapter, candidate_status, &locale);
     let plugin_locale = locale.clone();
@@ -2027,19 +2037,9 @@ fn windui_settings_root(
                         ),
                     ))
                     .child(WindUiElement::setting_row_desc(
-                        locale.text("settings.theme.accent"),
-                        locale.text("settings.theme.accent_hint"),
-                        WindUiElement::dropdown(
-                            ["wechat_green", "bamboo", "dark_green"]
-                                .map(|name| locale.text(&format!("settings.accent.{name}")))
-                                .into(),
-                            accent_pick,
-                        )
-                        .width(180),
-                    ))
-                    .child(WindUiElement::setting_row(
-                        locale.text("settings.theme.shadow"),
-                        WindUiElement::switch(window_shadow),
+                        locale.text("settings.theme.choice"),
+                        locale.text("settings.theme.choice_hint"),
+                        WindUiElement::dropdown(theme_names, appearance.theme).width(220),
                     )),
             ))
             .child(windui_settings_card(
@@ -2047,21 +2047,22 @@ fn windui_settings_root(
                     .width_match()
                     .spacing(16)
                     .child(windui_settings_section_title(
-                        &locale.text("settings.typography.section"),
+                        &locale.text("settings.candidate.text_section"),
                     ))
                     .child(WindUiElement::setting_row_desc(
-                        locale.text("settings.typography.font_size"),
-                        locale.text("settings.typography.font_size_hint"),
-                        WindUiElement::stepper(ui_font_size, 11.0, 20.0, 1.0),
+                        locale.text("settings.candidate.font_size"),
+                        locale.text("settings.candidate.font_size_hint"),
+                        WindUiElement::stepper(
+                            appearance.font_size,
+                            CANDIDATE_FONT_SIZE_RANGE.0,
+                            CANDIDATE_FONT_SIZE_RANGE.1,
+                            1.0,
+                        ),
                     ))
                     .child(WindUiElement::setting_row_desc(
-                        locale.text("settings.typography.scale"),
-                        locale.text("settings.typography.scale_hint"),
-                        WindUiElement::slider(ui_scale).width(180),
-                    ))
-                    .child(WindUiElement::setting_row(
-                        locale.text("settings.typography.compact"),
-                        WindUiElement::switch(compact),
+                        locale.text("settings.candidate.opacity"),
+                        locale.text("settings.candidate.opacity_hint"),
+                        WindUiElement::slider(appearance.opacity).width(180),
                     )),
             )),
     );
@@ -2113,24 +2114,59 @@ fn windui_settings_root(
                 ),
         )
         .child(
-            WindUiElement::label(locale.text("settings.ready"))
+            WindUiElement::label_signal(candidate_status)
                 .font_size(12.5)
                 .fg_role(WindUiRole::TextMuted),
         )
         .child(WindUiElement::flex_spacer())
         .child(
-            WindUiElement::button(locale.text("settings.restore_page"))
-                .small()
-                .outline()
-                .neutral(),
-        )
-        .child(
             WindUiElement::button(locale.text("settings.reload"))
                 .small()
                 .outline()
-                .neutral(),
+                .neutral()
+                .on_click({
+                    let locale = locale.clone();
+                    let themes = themes.clone();
+                    move |ctx| {
+                        let mut result = Ok(());
+                        candidate_adapter.update(|adapter| result = adapter.reload());
+                        match result {
+                            Ok(()) => {
+                                appearance.sync(candidate_adapter, &themes);
+                                candidate_status.set(locale.text("settings.reloaded"));
+                            }
+                            Err(error) => ctx.toast_err(error),
+                        }
+                    }
+                })
+                .visible_when(move || nav.get() == 1),
         )
-        .child(WindUiElement::button(locale.text("settings.save")).small());
+        .child(
+            WindUiElement::button(locale.text("settings.save"))
+                .small()
+                .on_click({
+                    let locale = locale.clone();
+                    move |ctx| {
+                        let edits = candidate_adapter
+                            .with(|adapter| appearance.pending_edits(&adapter.preview(), &themes));
+                        let mut result = Ok(());
+                        candidate_adapter.update(|adapter| {
+                            result = edits
+                                .into_iter()
+                                .try_for_each(|edit| adapter.set(edit))
+                                .and_then(|()| adapter.apply());
+                        });
+                        match result {
+                            Ok(()) => {
+                                candidate_status.set(locale.text("settings.saved"));
+                                ctx.toast_ok(locale.text("settings.saved"));
+                            }
+                            Err(error) => ctx.toast_err(error),
+                        }
+                    }
+                })
+                .visible_when(move || nav.get() == 1),
+        );
 
     let body = WindUiElement::col()
         .fill()
@@ -3955,8 +3991,120 @@ impl WindUiConfigAdapter {
                 &self.path,
                 fcitx5_config_core::CommitFault::None,
             )
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        fcitx5_windows_common_core::broadcast_visual_config_changed();
+        Ok(())
     }
+
+    /// Discards the draft and reads the configuration from disk again.
+    fn reload(&mut self) -> Result<(), String> {
+        *self = Self::load(self.path.clone())?;
+        Ok(())
+    }
+
+    fn theme_choices(&self) -> Vec<ThemeChoice> {
+        control_themes_list_json_for_paths(&self.installation_root, &self.data_root)
+            .ok()
+            .map(|json| theme_choices_from_json(&json))
+            .unwrap_or_default()
+    }
+}
+
+const DEFAULT_THEME_ID: &str = "builtin:default";
+const CANDIDATE_FONT_SIZE_RANGE: (f64, f64) = (8.0, 48.0);
+const CANDIDATE_OPACITY_MIN: f32 = 0.2;
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+struct ThemeChoice {
+    id: String,
+    name: String,
+}
+
+fn theme_choices_from_json(json: &str) -> Vec<ThemeChoice> {
+    #[derive(Deserialize)]
+    struct ThemeList {
+        themes: Vec<ThemeChoice>,
+    }
+    serde_json::from_str::<ThemeList>(json)
+        .map(|list| list.themes)
+        .unwrap_or_default()
+}
+
+/// Maps the 0..1 slider position to the candidate opacity range Config Core accepts.
+fn opacity_from_slider(position: f32) -> f32 {
+    let opacity = CANDIDATE_OPACITY_MIN + (1.0 - CANDIDATE_OPACITY_MIN) * position.clamp(0.0, 1.0);
+    (opacity * 100.0).round() / 100.0
+}
+
+fn slider_from_opacity(opacity: f32) -> f32 {
+    ((opacity - CANDIDATE_OPACITY_MIN) / (1.0 - CANDIDATE_OPACITY_MIN)).clamp(0.0, 1.0)
+}
+
+/// Appearance values edited in place on the page and written to Config Core on Save.
+#[derive(Clone, Copy)]
+struct AppearanceControls {
+    theme: WindUiSignal<usize>,
+    font_size: WindUiSignal<f64>,
+    opacity: WindUiSignal<f32>,
+}
+
+impl AppearanceControls {
+    fn new() -> Self {
+        Self {
+            theme: windui_signal(0usize),
+            font_size: windui_signal(16.0f64),
+            opacity: windui_signal(1.0f32),
+        }
+    }
+
+    fn sync(self, adapter: WindUiSignal<WindUiConfigAdapter>, themes: &[ThemeChoice]) {
+        let snapshot = adapter.with(WindUiConfigAdapter::preview);
+        self.theme.set(
+            themes
+                .iter()
+                .position(|theme| theme.id == snapshot.appearance().theme())
+                .unwrap_or(0),
+        );
+        self.font_size
+            .set(f64::from(snapshot.fonts().candidate().size_dip()));
+        self.opacity
+            .set(slider_from_opacity(snapshot.candidate().opacity()));
+    }
+
+    fn pending_edits(self, snapshot: &ConfigSnapshot, themes: &[ThemeChoice]) -> Vec<ConfigEdit> {
+        appearance_edits(
+            snapshot,
+            themes,
+            self.theme.get(),
+            self.font_size.get(),
+            self.opacity.get(),
+        )
+    }
+}
+
+fn appearance_edits(
+    snapshot: &ConfigSnapshot,
+    themes: &[ThemeChoice],
+    theme: usize,
+    font_size: f64,
+    opacity_position: f32,
+) -> Vec<ConfigEdit> {
+    let mut edits = Vec::new();
+    if let Some(theme) = themes.get(theme) {
+        if theme.id != snapshot.appearance().theme() {
+            edits.push(ConfigEdit::Theme(theme.id.clone()));
+        }
+    }
+    let font_size =
+        font_size.clamp(CANDIDATE_FONT_SIZE_RANGE.0, CANDIDATE_FONT_SIZE_RANGE.1) as f32;
+    if (font_size - snapshot.fonts().candidate().size_dip()).abs() >= 0.5 {
+        edits.push(ConfigEdit::CandidateFontSizeDip(font_size));
+    }
+    let opacity = opacity_from_slider(opacity_position);
+    if (opacity - snapshot.candidate().opacity()).abs() >= 0.005 {
+        edits.push(ConfigEdit::CandidateOpacity(opacity));
+    }
+    edits
 }
 
 fn candidate_layout_mode(snapshot: &ConfigSnapshot) -> Result<CandidateLayoutMode, String> {
@@ -7786,6 +7934,35 @@ mod tests {
             plugin_operation_for(&offline, "community-addon", PluginAction::Remove),
             Some(PluginOperation::Remove("community-addon".to_owned()))
         );
+    }
+
+    #[test]
+    fn appearance_save_writes_only_changed_values() {
+        let snapshot = ConfigCore::compiled_defaults().preview();
+        let themes = theme_choices_from_json(
+            r#"{"format_version":1,"themes":[{"id":"builtin:default","source":"builtin","name":"Default","version":"1","license":"MIT","description":""},{"id":"user:ink","source":"user","name":"Ink","version":"1","license":"MIT","description":""}]}"#,
+        );
+        assert_eq!(themes.len(), 2);
+        let current = themes
+            .iter()
+            .position(|theme| theme.id == snapshot.appearance().theme())
+            .unwrap_or(0);
+        let font_size = f64::from(snapshot.fonts().candidate().size_dip());
+        let opacity = slider_from_opacity(snapshot.candidate().opacity());
+        assert!(appearance_edits(&snapshot, &themes, current, font_size, opacity).is_empty());
+
+        let edits = appearance_edits(&snapshot, &themes, 1 - current, font_size + 2.0, 0.0);
+        assert_eq!(
+            edits,
+            vec![
+                ConfigEdit::Theme(themes[1 - current].id.clone()),
+                ConfigEdit::CandidateFontSizeDip(font_size as f32 + 2.0),
+                ConfigEdit::CandidateOpacity(CANDIDATE_OPACITY_MIN),
+            ]
+        );
+        assert_eq!(opacity_from_slider(1.0), 1.0);
+        assert_eq!(opacity_from_slider(slider_from_opacity(0.6)), 0.6);
+        assert!(theme_choices_from_json("not json").is_empty());
     }
 
     #[test]
