@@ -8203,6 +8203,14 @@ pub fn repair_repository_sequence_state_for_repair(
     "repaired"
 }
 
+/// Returns the install prefixes of the active non-core packages under
+/// `package_root`, the same set the engine adds to its search paths.
+#[cfg(windows)]
+#[must_use]
+pub fn active_package_prefixes(package_root: &Path) -> Vec<PathBuf> {
+    repair_ffi::active_package_directories(package_root, 0).unwrap_or_default()
+}
+
 #[cfg(windows)]
 mod repair_ffi {
     #![deny(unsafe_op_in_unsafe_fn)]
@@ -8513,10 +8521,10 @@ mod repair_ffi {
         Some(true)
     }
 
-    fn active_package_directory_list(
+    pub(super) fn active_package_directories(
         install_root: &std::path::Path,
         kind: u32,
-    ) -> Option<Vec<u16>> {
+    ) -> Option<Vec<std::path::PathBuf>> {
         if !matches!(kind, ACTIVE_PACKAGE_PREFIXES | ACTIVE_PACKAGE_LIBRARY_DIRS) {
             return None;
         }
@@ -8562,7 +8570,14 @@ mod repair_ffi {
                 directories.push(library);
             }
         }
+        Some(directories)
+    }
 
+    fn active_package_directory_list(
+        install_root: &std::path::Path,
+        kind: u32,
+    ) -> Option<Vec<u16>> {
+        let directories = active_package_directories(install_root, kind)?;
         let mut result = Vec::new();
         for (index, directory) in directories.iter().enumerate() {
             if index != 0 {

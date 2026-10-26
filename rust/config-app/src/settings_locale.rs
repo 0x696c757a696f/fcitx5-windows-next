@@ -34,17 +34,20 @@ const WINDUI_SETTINGS_KEYS: &[&str] = &[
     "settings.search",
     "settings.input.subtitle",
     "settings.input.section",
-    "settings.input.profile_hint",
-    "settings.input.engine.wubi",
-    "settings.input.engine.pinyin",
-    "settings.input.engine.rime",
-    "settings.input.engine.mozc",
+    "settings.input.list_hint",
+    "settings.input.default",
+    "settings.input.make_default",
+    "settings.input.move_up",
+    "settings.input.remove",
+    "settings.input.add",
+    "settings.input.add_hint",
+    "settings.input.apply",
+    "settings.input.applied",
+    "settings.input.restart_failed",
     "settings.shortcuts.section",
-    "settings.shortcuts.remove",
-    "settings.shortcuts.toggle_language",
-    "settings.shortcuts.toggle_script",
-    "settings.shortcuts.toggle_width",
-    "settings.shortcuts.toggle_punctuation",
+    "settings.shortcuts.toggle_input_method",
+    "settings.shortcuts.next_input_method",
+    "settings.shortcuts.same",
     "settings.appearance.subtitle",
     "settings.theme.section",
     "settings.theme.accent",
@@ -146,6 +149,7 @@ pub(crate) fn is_supported_locale(locale: &str) -> bool {
 
 #[derive(Clone, Debug)]
 pub(crate) struct LocaleCatalog {
+    tag: &'static str,
     messages: BTreeMap<String, String>,
     english: BTreeMap<String, String>,
 }
@@ -155,7 +159,16 @@ impl LocaleCatalog {
         let locale = resolve_locale(configured, system);
         let messages = catalog(locale);
         let english = catalog("en-US");
-        Self { messages, english }
+        Self {
+            tag: locale,
+            messages,
+            english,
+        }
+    }
+
+    /// The resolved locale tag, such as `zh-CN`.
+    pub(crate) fn tag(&self) -> &'static str {
+        self.tag
     }
 
     pub(crate) fn navigation_labels(&self) -> [String; 6] {

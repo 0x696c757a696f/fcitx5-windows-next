@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use fcitx5_config_core::{CommitFault, ConfigCore, FileStore};
+use fcitx5_config_core::{CommitFault, ConfigCore, ConfigEdit, FileStore};
 use fcitx5_control_core::{
     control_addons_list_json, control_config_reset, control_diagnostics_plan_for_path,
     control_input_method_id_valid, control_install_root, control_package_detail_json,
@@ -401,6 +401,20 @@ fn with_engine_stopped(change: impl FnOnce() -> Result<(), Failure>) -> Result<(
     result
 }
 
+fn restart_engine_if_running() -> Result<(), Failure> {
+    if launcher_command(LauncherCommand::Status).is_err() {
+        return Ok(());
+    }
+    for command in [
+        LauncherCommand::UserStop,
+        LauncherCommand::Resume,
+        LauncherCommand::StartDemand,
+    ] {
+        launcher_command(command)?;
+    }
+    Ok(())
+}
+
 fn run_engine_management(arguments: &[OsString]) -> Result<String, Failure> {
     let launcher_reachable = launcher_command(LauncherCommand::Status).is_ok();
     if launcher_reachable {
@@ -580,8 +594,23 @@ fn run(data_root: PathBuf, command: Command) -> Result<(), Failure> {
             run_engine_management(&[OsString::from("--list-input-methods")])?
         ),
         Command::SetInputMethod(id) => {
-            let _ =
-                run_engine_management(&[OsString::from("--set-input-method"), OsString::from(id)])?;
+            // config.toml owns the enabled list and the default; the engine
+            // rebuilds its input method group from it when it restarts.
+            let store = FileStore::new();
+            let config_path = data_root.join("config.toml");
+            let mut core = ConfigCore::load_or_defaults(&store, &config_path)
+                .map_err(|error| error.to_string())?;
+            let mut enabled = core.preview().input_methods().enabled().to_vec();
+            if !enabled.contains(&id) {
+                enabled.push(id.clone());
+            }
+            core.set(ConfigEdit::InputMethods {
+                enabled,
+                default: id,
+            });
+            core.apply(&store, &config_path, CommitFault::None)
+                .map_err(|error| error.to_string())?;
+            restart_engine_if_running()?;
         }
         Command::RestartEngine => {
             for command in [

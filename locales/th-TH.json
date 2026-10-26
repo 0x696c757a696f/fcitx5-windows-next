@@ -262,4 +262,17 @@
   "settings.plugins.error.catalog_version_invalid": "เวอร์ชันหรือจำนวนรายการในแค็ตตาล็อกปลั๊กอินไม่ถูกต้อง",
   "settings.plugins.error.catalog_fields_invalid": "แค็ตตาล็อกปลั๊กอินมีฟิลด์ที่ไม่ถูกต้อง",
   "settings.plugins.error.control_unavailable": "บริการปลั๊กอินไม่พร้อมใช้งาน"
+  ,"settings.input.list_hint": "วิธีป้อนข้อมูลที่เปิดใช้ ปุ่มลัดวิธีป้อนข้อมูลถัดไปจะสลับตามลำดับนี้"
+  ,"settings.input.default": "ค่าเริ่มต้น"
+  ,"settings.input.make_default": "ตั้งเป็นค่าเริ่มต้น"
+  ,"settings.input.move_up": "เลื่อนขึ้น"
+  ,"settings.input.remove": "นำออก"
+  ,"settings.input.add": "เพิ่ม"
+  ,"settings.input.add_hint": "วิธีป้อนข้อมูลจากปลั๊กอินที่ติดตั้งจะแสดงที่นี่ด้วย"
+  ,"settings.input.apply": "นำไปใช้"
+  ,"settings.input.applied": "บันทึกแล้ว กำลังเริ่มเอนจินวิธีป้อนข้อมูลใหม่"
+  ,"settings.input.restart_failed": "บันทึกแล้ว แต่เริ่มเอนจินวิธีป้อนข้อมูลใหม่ไม่สำเร็จ: {error}"
+  ,"settings.shortcuts.toggle_input_method": "สลับระหว่างแป้นพิมพ์กับวิธีป้อนข้อมูลเริ่มต้น"
+  ,"settings.shortcuts.next_input_method": "วิธีป้อนข้อมูลถัดไป"
+  ,"settings.shortcuts.same": "ปุ่มลัดทั้งสองต้องไม่ซ้ำกัน"
 }

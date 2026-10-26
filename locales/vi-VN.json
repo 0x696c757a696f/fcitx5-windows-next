@@ -262,4 +262,17 @@
   "settings.plugins.error.catalog_version_invalid": "Phiên bản hoặc số mục trong danh mục trình cắm không hợp lệ",
   "settings.plugins.error.catalog_fields_invalid": "Danh mục trình cắm có trường không hợp lệ",
   "settings.plugins.error.control_unavailable": "Dịch vụ trình cắm hiện không khả dụng"
+  ,"settings.input.list_hint": "Các bộ gõ đang bật. Phím tắt chuyển bộ gõ tiếp theo sẽ xoay vòng theo thứ tự này."
+  ,"settings.input.default": "Mặc định"
+  ,"settings.input.make_default": "Đặt làm mặc định"
+  ,"settings.input.move_up": "Lên trên"
+  ,"settings.input.remove": "Gỡ"
+  ,"settings.input.add": "Thêm"
+  ,"settings.input.add_hint": "Bộ gõ từ các plugin đã cài cũng được liệt kê ở đây."
+  ,"settings.input.apply": "Áp dụng"
+  ,"settings.input.applied": "Đã lưu. Bộ máy gõ đang khởi động lại."
+  ,"settings.input.restart_failed": "Đã lưu, nhưng không thể khởi động lại bộ máy gõ: {error}"
+  ,"settings.shortcuts.toggle_input_method": "Chuyển giữa bàn phím và bộ gõ mặc định"
+  ,"settings.shortcuts.next_input_method": "Bộ gõ tiếp theo"
+  ,"settings.shortcuts.same": "Hai phím tắt phải khác nhau."
 }

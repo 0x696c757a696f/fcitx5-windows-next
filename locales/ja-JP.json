@@ -262,4 +262,17 @@
   "settings.plugins.error.catalog_version_invalid": "プラグインカタログのバージョンまたは項目数が無効です",
   "settings.plugins.error.catalog_fields_invalid": "プラグインカタログに無効な項目があります",
   "settings.plugins.error.control_unavailable": "プラグインサービスを利用できません"
+  ,"settings.input.list_hint": "有効な入力メソッド。「次の入力メソッド」ショートカットはこの順に切り替えます。"
+  ,"settings.input.default": "既定"
+  ,"settings.input.make_default": "既定にする"
+  ,"settings.input.move_up": "上へ"
+  ,"settings.input.remove": "削除"
+  ,"settings.input.add": "追加"
+  ,"settings.input.add_hint": "インストール済みプラグインの入力メソッドもここに表示されます。"
+  ,"settings.input.apply": "適用"
+  ,"settings.input.applied": "保存しました。入力メソッドエンジンを再起動しています。"
+  ,"settings.input.restart_failed": "保存しましたが、入力メソッドエンジンを再起動できませんでした: {error}"
+  ,"settings.shortcuts.toggle_input_method": "キーボードと既定の入力メソッドを切り替え"
+  ,"settings.shortcuts.next_input_method": "次の入力メソッド"
+  ,"settings.shortcuts.same": "2 つのショートカットは別のキーにしてください。"
 }
