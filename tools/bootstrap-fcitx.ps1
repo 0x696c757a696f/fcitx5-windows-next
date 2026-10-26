@@ -36,13 +36,13 @@ foreach ($root in @($sources, $buildRoot, $stage)) {
 }
 
 $sourcePins = @(
-  @{ Name = 'fcitx5'; Url = 'https://github.com/fcitx/fcitx5.git'; Commit = 'c3f37dbb7db8f92c5a810858c5223deba1ba6753' },
+  @{ Name = 'fcitx5'; Url = 'https://github.com/fcitx/fcitx5.git'; Commit = '145e981d6377550ffb39ee8de61452910622652c' },
   @{ Name = 'libime'; Url = 'https://github.com/fcitx/libime.git'; Commit = '5be1300ea00e899b3f2c46d1e9f6bca21139cdeb' },
   @{ Name = 'fcitx5-chinese-addons'; Url = 'https://github.com/fcitx/fcitx5-chinese-addons.git'; Commit = 'e8d930f402e359cfd76a101ee3e46815d1331d83' },
   @{ Name = 'fcitx5-rime'; Url = 'https://github.com/fcitx/fcitx5-rime.git'; Commit = 'f5048611ea60e53955d5f013f608551e85d38f09' },
   @{ Name = 'fcitx5-lua'; Url = 'https://github.com/fcitx/fcitx5-lua.git'; Commit = '9bf8d3dd2c6240d8e3e194d09547acbfa6a81204' },
   @{ Name = 'fcitx5-unikey'; Url = 'https://github.com/fcitx/fcitx5-unikey.git'; Commit = 'ed9170c35c1a6275d105e03d7f9bc4f674c1469c' },
-  @{ Name = 'librime'; Url = 'https://github.com/rime/librime.git'; Commit = '1b3417d2b6a11b5e50e0e1fa9dc396056aa11dce' },
+  @{ Name = 'librime'; Url = 'https://github.com/rime/librime.git'; Commit = '87467217b456780f9217f41df271c5dd6aa37d00' },
   @{ Name = 'librime-lua'; Url = 'https://github.com/hchunhui/librime-lua.git'; Commit = '6da5d6cedb853380ed1b5b9b6979cb1a9c028353' },
   @{ Name = 'librime-octagram'; Url = 'https://github.com/lotem/librime-octagram.git'; Commit = '57d18b9f58e5284bd891d559f6bdd16cf60341e9' },
   @{ Name = 'librime-proto'; Url = 'https://github.com/lotem/librime-proto.git'; Commit = '657a923cd4c333e681dc943e6894e6f6d42d25b4' },
