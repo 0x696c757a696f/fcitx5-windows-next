@@ -120,7 +120,9 @@ fn run_client() -> Result<(), String> {
         // (1) root is the Window element.
         let root_type = current_control_type(&root)?;
         if root_type != UIA_WindowControlTypeId.0 {
-            return Err(format!("root control type was {root_type}, expected Window"));
+            return Err(format!(
+                "root control type was {root_type}, expected Window"
+            ));
         }
 
         // (2) the flattened semantic tree exposes Text and Button, and never the hidden button.
@@ -198,8 +200,7 @@ fn run_client() -> Result<(), String> {
         // (6) Invoke through the real UIA pattern, then observe the dynamic label change.
         // SAFETY: the pattern id is the documented Invoke pattern.
         let pattern: IUIAutomationInvokePattern = unsafe {
-            button
-                .GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
+            button.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
         }
         .map_err(|error| format!("InvokePattern unavailable: {error}"))?;
         // SAFETY: the pattern was obtained from a live provider element.
@@ -326,7 +327,9 @@ fn current_control_type(
 }
 
 #[cfg(windows)]
-fn window_rect(hwnd: windows::Win32::Foundation::HWND) -> Result<windows::Win32::Foundation::RECT, String> {
+fn window_rect(
+    hwnd: windows::Win32::Foundation::HWND,
+) -> Result<windows::Win32::Foundation::RECT, String> {
     use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
 

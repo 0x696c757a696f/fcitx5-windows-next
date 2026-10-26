@@ -3925,7 +3925,6 @@ impl AppHandler for UiHost {
         result
     }
 
-
     fn wants_close(&self) -> bool {
         self.close
     }
@@ -4375,12 +4374,12 @@ mod tests {
         use tiny_skia::Pixmap;
 
         let invoked = crate::signal::signal(0);
-        let app = App::new("accessibility", 300, 160).content(
-            Element::col().child(Element::button("Invoke").on_click({
+        let app = App::new("accessibility", 300, 160).content(Element::col().child(
+            Element::button("Invoke").on_click({
                 let invoked = invoked.clone();
                 move |_| invoked.set(invoked.get() + 1)
-            })),
-        );
+            }),
+        ));
         let mut handler = app.into_handler_for_test();
         let mut pixmap = Pixmap::new(300, 160).unwrap();
         handler.render(
@@ -4403,7 +4402,11 @@ mod tests {
             handler.accessibility_action(button.id, AccessibilityAction::Invoke),
             AccessibilityActionResult::Performed
         );
-        assert_eq!(invoked.get(), 1, "Invoke must use the normal callback exactly once");
+        assert_eq!(
+            invoked.get(),
+            1,
+            "Invoke must use the normal callback exactly once"
+        );
 
         assert_eq!(
             handler.accessibility_action(button.id, AccessibilityAction::SetFocus),
@@ -4419,7 +4422,6 @@ mod tests {
             "SetFocus must update the real tree snapshot"
         );
     }
-
 
     /// 标题栏宿主不是窗口：渲染它不认领通道消费权（否则消费权持有者关窗后可能落到它身上，
     /// 消息画进标题栏、开窗请求无人取走、只在悬停时才排空）。之后出帧的内容宿主照常认领。

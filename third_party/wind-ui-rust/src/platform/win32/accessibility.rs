@@ -15,23 +15,23 @@ use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::System::Com::SAFEARRAY;
 use windows::Win32::System::Ole::{SafeArrayCreateVector, SafeArrayDestroy, SafeArrayPutElement};
 use windows::Win32::System::Variant::{
-    VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_BSTR, VT_BOOL, VT_I4,
+    VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_BOOL, VT_BSTR, VT_I4,
 };
 use windows::Win32::UI::Accessibility::{
     IInvokeProvider, IInvokeProvider_Impl, IRawElementProviderFragment,
     IRawElementProviderFragmentRoot, IRawElementProviderFragmentRoot_Impl,
     IRawElementProviderFragment_Impl, IRawElementProviderSimple, IRawElementProviderSimple_Impl,
     NavigateDirection, NavigateDirection_FirstChild, NavigateDirection_LastChild,
-    NavigateDirection_NextSibling, NavigateDirection_PreviousSibling, NavigateDirection_Parent,
+    NavigateDirection_NextSibling, NavigateDirection_Parent, NavigateDirection_PreviousSibling,
     ProviderOptions, ProviderOptions_ServerSideProvider, UIA_ButtonControlTypeId,
-    UIA_ControlTypePropertyId, UIA_E_ELEMENTNOTAVAILABLE, UIA_E_ELEMENTNOTENABLED,
-    UIA_E_NOTSUPPORTED, UIA_HasKeyboardFocusPropertyId, UIA_InvokePatternId,
+    UIA_ControlTypePropertyId, UIA_HasKeyboardFocusPropertyId, UIA_InvokePatternId,
     UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId, UIA_NamePropertyId,
     UIA_TextControlTypeId, UIA_WindowControlTypeId, UiaAppendRuntimeId, UiaRect,
+    UIA_E_ELEMENTNOTAVAILABLE, UIA_E_ELEMENTNOTENABLED, UIA_E_NOTSUPPORTED,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_APP};
-use windows_core::{implement, BSTR, ComObject, Error, HRESULT, IUnknown, Result};
+use windows_core::{implement, ComObject, Error, IUnknown, Result, BSTR, HRESULT};
 
 use crate::accessibility::{
     AccessibilityAction, AccessibilityActionResult, AccessibilityNode, AccessibilityNodeId,
@@ -166,7 +166,11 @@ fn element_fragment(hwnd: HWND, id: AccessibilityNodeId) -> IRawElementProviderF
     .into_interface()
 }
 
-fn provider_for(hwnd: HWND, snapshot: &AccessibilitySnapshot, id: AccessibilityNodeId) -> IRawElementProviderFragment {
+fn provider_for(
+    hwnd: HWND,
+    snapshot: &AccessibilitySnapshot,
+    id: AccessibilityNodeId,
+) -> IRawElementProviderFragment {
     if snapshot.root == Some(id) {
         root_fragment(hwnd)
     } else {
@@ -205,7 +209,9 @@ fn snapshot_for(state: ProviderState) -> Result<AccessibilitySnapshot> {
 fn node_for(state: ProviderState) -> Result<(AccessibilitySnapshot, AccessibilityNode)> {
     let snapshot = snapshot_for(state)?;
     let id = match state.target {
-        ProviderTarget::Root => snapshot.root.ok_or_else(|| uia_error(UIA_E_ELEMENTNOTAVAILABLE))?,
+        ProviderTarget::Root => snapshot
+            .root
+            .ok_or_else(|| uia_error(UIA_E_ELEMENTNOTAVAILABLE))?,
         ProviderTarget::Node(id) => id,
     };
     let node = snapshot
@@ -302,7 +308,9 @@ fn pattern_provider(state: ProviderState, pattern_id: i32) -> Result<IUnknown> {
     }
     let (_, node) = node_for(state)?;
     if node.role != AccessibilityRole::Button
-        || !node.supported_actions.contains(&AccessibilityAction::Invoke)
+        || !node
+            .supported_actions
+            .contains(&AccessibilityAction::Invoke)
     {
         return Err(no_element_error());
     }
@@ -335,14 +343,19 @@ fn neighbor(
             let Some(parent) = snapshot.node(parent_id) else {
                 return unavailable();
             };
-            let Some(index) = parent.children.iter().position(|candidate| *candidate == node.id)
+            let Some(index) = parent
+                .children
+                .iter()
+                .position(|candidate| *candidate == node.id)
             else {
                 return unavailable();
             };
             if direction == NavigateDirection_NextSibling {
                 parent.children.get(index + 1).copied()
             } else {
-                index.checked_sub(1).and_then(|i| parent.children.get(i).copied())
+                index
+                    .checked_sub(1)
+                    .and_then(|i| parent.children.get(i).copied())
             }
         }
         _ => return unsupported(),
@@ -385,7 +398,11 @@ fn scaled_screen_rect(state: ProviderState, node: &AccessibilityNode) -> Result<
 }
 
 fn runtime_id(id: AccessibilityNodeId) -> Result<*mut SAFEARRAY> {
-    let values = [UiaAppendRuntimeId as i32, id.index() as i32, id.generation() as i32];
+    let values = [
+        UiaAppendRuntimeId as i32,
+        id.index() as i32,
+        id.generation() as i32,
+    ];
     // SAFETY: SafeArrayCreateVector allocates a COM-owned VT_I4 array; ownership is transferred to
     // UIA on success. Every put uses a valid element index and pointer to a live i32.
     let array = unsafe { SafeArrayCreateVector(VT_I4, 0, values.len() as u32) };
@@ -406,7 +423,10 @@ fn runtime_id(id: AccessibilityNodeId) -> Result<*mut SAFEARRAY> {
     Ok(array)
 }
 
-fn focused_fragment(state: ProviderState, snapshot: &AccessibilitySnapshot) -> Result<IRawElementProviderFragment> {
+fn focused_fragment(
+    state: ProviderState,
+    snapshot: &AccessibilitySnapshot,
+) -> Result<IRawElementProviderFragment> {
     let id = snapshot
         .nodes
         .iter()
@@ -459,7 +479,10 @@ impl IRawElementProviderSimple_Impl for ElementProvider_Impl {
         Ok(ProviderOptions_ServerSideProvider)
     }
 
-    fn GetPatternProvider(&self, patternid: windows::Win32::UI::Accessibility::UIA_PATTERN_ID) -> Result<IUnknown> {
+    fn GetPatternProvider(
+        &self,
+        patternid: windows::Win32::UI::Accessibility::UIA_PATTERN_ID,
+    ) -> Result<IUnknown> {
         pattern_provider(self.0, patternid.0)
     }
 
@@ -504,7 +527,11 @@ impl IRawElementProviderFragment_Impl for ElementProvider_Impl {
             ProviderTarget::Node(id) => id,
             ProviderTarget::Root => return unsupported(),
         };
-        action_result(bridge_action(self.0.hwnd, id, AccessibilityAction::SetFocus))
+        action_result(bridge_action(
+            self.0.hwnd,
+            id,
+            AccessibilityAction::SetFocus,
+        ))
     }
 
     fn FragmentRoot(&self) -> Result<IRawElementProviderFragmentRoot> {
@@ -522,7 +549,10 @@ impl IRawElementProviderSimple_Impl for RootProvider_Impl {
         Ok(ProviderOptions_ServerSideProvider)
     }
 
-    fn GetPatternProvider(&self, patternid: windows::Win32::UI::Accessibility::UIA_PATTERN_ID) -> Result<IUnknown> {
+    fn GetPatternProvider(
+        &self,
+        patternid: windows::Win32::UI::Accessibility::UIA_PATTERN_ID,
+    ) -> Result<IUnknown> {
         pattern_provider(self.0, patternid.0)
     }
 

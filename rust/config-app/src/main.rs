@@ -7577,7 +7577,10 @@ mod tests {
         assert!(!ids.contains(&"theme-package"));
         assert_eq!(ids.last(), Some(&"community-addon-data"));
         let data = rows.last().expect("input method data row");
-        assert_eq!(data.category, locale.text("packages.type.input_method_data"));
+        assert_eq!(
+            data.category,
+            locale.text("packages.type.input_method_data")
+        );
         assert_eq!(
             plugin_operation_for(&snapshot, "community-addon-data", PluginAction::Install),
             Some(PluginOperation::Install("community-addon-data".to_owned()))

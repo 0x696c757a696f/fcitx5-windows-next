@@ -4,6 +4,7 @@
 //! 「拷贝 + R/B 交换」进一块 BGRA 上传缓冲，再 `SetDIBitsToDevice` 拷屏。不在 pixmap 上
 //! 原地交换，是因为宿主的局部重绘要靠它保存上一帧画面。空闲时阻塞在 `GetMessageW`，零 CPU。
 
+mod accessibility;
 pub mod clipboard;
 #[cfg(feature = "d2d")]
 pub(super) mod d2d;
@@ -11,7 +12,6 @@ pub mod dragdrop;
 pub mod hotkey;
 pub mod tray;
 mod tsf;
-mod accessibility;
 
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
@@ -34,6 +34,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::Media::{timeBeginPeriod, timeEndPeriod};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Accessibility::UiaReturnRawElementProvider;
 use windows::Win32::UI::Controls::{MARGINS, WM_MOUSELEAVE};
 use windows::Win32::UI::HiDpi::{
     AdjustWindowRectExForDpi, GetDpiForSystem, GetDpiForWindow, GetSystemMetricsForDpi,
@@ -79,16 +80,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SW_SHOWNORMAL, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE,
     WM_ACTIVATE, WM_APP, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COPYDATA, WM_DESTROY,
     WM_DPICHANGED, WM_DROPFILES, WM_DWMCOLORIZATIONCOLORCHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE,
-    WM_GETMINMAXINFO, WM_GETOBJECT, WM_HOTKEY, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_SETCONTEXT,
-    WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-    WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCCREATE,
-    WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCMBUTTONDOWN, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN,
-    WM_NCRBUTTONUP, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETICON,
-    WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WM_TOUCH,
-    WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP,
-    WS_THICKFRAME,
+    WM_GETMINMAXINFO, WM_GETOBJECT, WM_HOTKEY, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION,
+    WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE,
+    WM_NCCREATE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCMBUTTONDOWN, WM_NCMOUSEMOVE,
+    WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_SETCURSOR, WM_SETICON, WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WM_TIMER, WM_TOUCH, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
 };
-use windows::Win32::UI::Accessibility::UiaReturnRawElementProvider;
 // 窗口图标（`App::icon`）：HICON 由 tray 那份 RGBA 转换复用，销毁归 WindowState::drop。
 use windows::Win32::UI::WindowsAndMessaging::{
     DestroyIcon, SendMessageW, HICON, ICON_BIG, ICON_SMALL, SM_CXICON, SM_CXSMICON,
@@ -2028,7 +2028,8 @@ unsafe extern "system" fn wnd_proc(
                         (*request).snapshot = state.handler.accessibility_snapshot();
                     }
                     accessibility::BridgeOperation::Action { id, action } => {
-                        (*request).action_result = Some(state.handler.accessibility_action(id, action));
+                        (*request).action_result =
+                            Some(state.handler.accessibility_action(id, action));
                     }
                 }
                 (*request).delivered = true;
