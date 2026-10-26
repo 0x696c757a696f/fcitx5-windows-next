@@ -13,6 +13,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 
 $repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $stage = [IO.Path]::GetFullPath($StageRoot)
@@ -191,6 +192,9 @@ function Assert-PackageImports([string] $PackageRoot, [string] $Id, $StageDlls) 
   }
 }
 
+$onWindows = $IsWindows -or $env:OS -eq 'Windows_NT'
+$curl = if ($onWindows) { Join-Path $SystemRoot 'curl.exe' } else { 'curl' }
+$tar = if ($onWindows) { Join-Path $SystemRoot 'tar.exe' } else { 'tar' }
 $assetBase = $inventory.repository -replace '\.git$', ''
 $assetBase = "$assetBase/releases/download/$($inventory.release)"
 New-Item -ItemType Directory -Force -Path $CacheRoot | Out-Null
@@ -198,18 +202,21 @@ foreach ($archive in $archiveHashes.Keys) {
   $path = Join-Path $CacheRoot $archive
   if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or
       (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $archiveHashes[$archive]) {
-    Invoke-WebRequest -Uri "$assetBase/$archive" -OutFile $path -UseBasicParsing
+    Write-Host "Downloading $archive"
+    & $curl --fail --location --silent --show-error --retry 3 --connect-timeout 30 --max-time 900 `
+      --output $path "$assetBase/$archive"
+    if ($LASTEXITCODE -ne 0) { throw "Could not download $archive." }
   }
   if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $archiveHashes[$archive]) {
     throw "Fork plugin archive does not match its pinned SHA-256: $archive"
   }
 }
 
-$tar = if ($IsWindows -or $env:OS -eq 'Windows_NT') { Join-Path $SystemRoot 'tar.exe' } else { 'tar' }
 $stageDlls = Get-DllIndex @((Join-Path $stage 'bin'))
 if (Test-Path -LiteralPath $OutputRoot) { Remove-Item -LiteralPath $OutputRoot -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 foreach ($plugin in @($inventory.packages)) {
+  Write-Host "Preparing $($plugin.id)"
   $packageRoot = Join-Path $OutputRoot $plugin.id
   New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
   foreach ($archive in @($plugin.archives)) {
