@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory)] [string] $ArtifactDirectory,
-  [Parameter(Mandatory)] [string] $ReleaseManifest
+  [Parameter(Mandatory)] [string] $ReleaseManifest,
+  [switch] $WithoutAuthenticode
 )
 
 Set-StrictMode -Version Latest
@@ -23,7 +24,7 @@ foreach ($item in $manifest.artifacts) {
   if ($actual -ne $item.sha256 -or (Get-Item -LiteralPath $path).Length -ne $item.size) {
     throw "Final artifact hash/size mismatch: $($item.name)"
   }
-  if ($path.EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase)) {
+  if (-not $WithoutAuthenticode -and $path.EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase)) {
     $signature = Get-AuthenticodeSignature -LiteralPath $path
     if ($signature.Status -ne 'Valid') { throw "Invalid Authenticode signature: $path" }
   }
@@ -124,12 +125,18 @@ $sbom = Get-Content -LiteralPath (Join-Path $artifacts $sbomPath[0].name) -Raw |
 if ($sbom.spdxVersion -ne 'SPDX-2.3' -or $sbom.packages.Count -lt 2 -or
     $sbom.files.Count -lt 1) { throw 'SPDX SBOM does not describe the staged product.' }
 $signaturePath = $manifestPath + '.p7s'
-if (-not (Test-Path -LiteralPath $signaturePath -PathType Leaf)) {
-  throw 'Detached release-manifest signature is missing.'
+if ($WithoutAuthenticode) {
+  if (Test-Path -LiteralPath $signaturePath) {
+    throw 'A release without Authenticode must not carry a detached manifest signature.'
+  }
+} else {
+  if (-not (Test-Path -LiteralPath $signaturePath -PathType Leaf)) {
+    throw 'Detached release-manifest signature is missing.'
+  }
+  Add-Type -AssemblyName System.Security.Cryptography.Pkcs
+  $cms = [Security.Cryptography.Pkcs.SignedCms]::new(
+    [Security.Cryptography.Pkcs.ContentInfo]::new([IO.File]::ReadAllBytes($manifestPath)), $true)
+  $cms.Decode([IO.File]::ReadAllBytes($signaturePath))
+  $cms.CheckSignature($true)
 }
-Add-Type -AssemblyName System.Security.Cryptography.Pkcs
-$cms = [Security.Cryptography.Pkcs.SignedCms]::new(
-  [Security.Cryptography.Pkcs.ContentInfo]::new([IO.File]::ReadAllBytes($manifestPath)), $true)
-$cms.Decode([IO.File]::ReadAllBytes($signaturePath))
-$cms.CheckSignature($true)
 Write-Host 'Final signed portable, hash, SBOM, and detached-manifest smoke passed.'
