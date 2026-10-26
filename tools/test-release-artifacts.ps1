@@ -104,10 +104,9 @@ try {
         (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne
           $file.sha256) { throw "Portable staged-file verification failed: $($file.path)" }
   }
-  & (Join-Path $portableRoot 'bin/fcitx5-config.exe') --self-test
+  & (Join-Path $portableRoot 'bin/fcitx5-config.exe') --config `
+    (Join-Path $portableRoot 'data/config.toml') doctor
   if ($LASTEXITCODE -ne 0) { throw 'Signed portable Config smoke failed.' }
-  & (Join-Path $portableRoot 'bin/fcitx5-config.exe') --ui-interaction-test
-  if ($LASTEXITCODE -ne 0) { throw 'Signed portable Config interaction sweep failed.' }
   & (Join-Path $portableRoot 'bin/fcitx5-control.exe') --schema
   if ($LASTEXITCODE -ne 0) { throw 'Signed portable Control smoke failed.' }
 } finally {

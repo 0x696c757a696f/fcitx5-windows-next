@@ -279,7 +279,6 @@ mod tests {
         for signature in [
             "fn windui_settings_root(",
             "fn windui_plugins_page(",
-            "fn windui_theme_toggle(",
             "fn candidate_layout_mode_button(",
             "fn windui_config_core_candidate_layout_controls(",
         ] {

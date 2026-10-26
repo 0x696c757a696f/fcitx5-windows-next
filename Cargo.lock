@@ -307,7 +307,6 @@ dependencies = [
 name = "fcitx5-config-app"
 version = "0.1.0"
 dependencies = [
- "fcitx5-candidate-core",
  "fcitx5-config-core",
  "fcitx5-control-core",
  "fcitx5-package-core",

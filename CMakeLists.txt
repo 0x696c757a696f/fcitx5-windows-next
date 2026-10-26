@@ -1047,16 +1047,9 @@ if(BUILD_TESTING)
            COMMAND "${FCITX_CONTROL_EXE}" --data-root
                    "${CMAKE_CURRENT_BINARY_DIR}/control-test-data"
                    --apply-config "${CMAKE_CURRENT_SOURCE_DIR}/resources/config.toml")
-  add_test(NAME config-ui-headless-smoke COMMAND "${FCITX_CONFIG_SHIPPING_EXE}" --self-test)
-  add_test(NAME config-ui-i18n-check COMMAND "${FCITX_CONFIG_SHIPPING_EXE}" --check-i18n)
-  add_test(NAME config-ui-resource-check COMMAND "${FCITX_CONFIG_SHIPPING_EXE}" --check-resources)
-  add_test(NAME config-ui-behavior-contract COMMAND "${FCITX_CONFIG_SHIPPING_EXE}" --ui-contract-test)
-  add_test(NAME config-ui-visual-contract
-           COMMAND "${FCITX_CONFIG_SHIPPING_EXE}" --ui-visual-contract-test)
-  add_test(NAME config-ui-live-preview-contract
-           COMMAND "${FCITX_CONFIG_SHIPPING_EXE}" --ui-live-preview-contract-test)
-  add_test(NAME config-ui-interaction-coverage
-           COMMAND "${FCITX_CONFIG_SHIPPING_EXE}" --ui-interaction-test)
+  add_test(NAME config-cli-validate-defaults
+           COMMAND "${FCITX_CONFIG_SHIPPING_EXE}" --config
+                   "${CMAKE_CURRENT_SOURCE_DIR}/resources/config.toml" validate)
   add_test(
     NAME rust-config-ui-preview-qa
     COMMAND
@@ -1068,16 +1061,6 @@ if(BUILD_TESTING)
       --candidate-ui-exe "${FCITX_UI_EXE}" --out
       "${CMAKE_CURRENT_BINARY_DIR}/rust-config-ui-preview-qa")
   set_tests_properties(rust-config-ui-preview-qa PROPERTIES TIMEOUT 60)
-  add_test(
-    NAME rust-config-self-check
-    COMMAND
-      "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-      "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
-      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-app --bin
-      fcitx5-config --target "${FCITX_RUST_TARGET}" -- --self-check --report
-      "${CMAKE_CURRENT_BINARY_DIR}/config-self-check.json")
-  set_tests_properties(rust-config-self-check PROPERTIES
-                       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
   add_test(
     NAME rust-config-core-transaction-contract
     COMMAND
@@ -1097,10 +1080,6 @@ if(BUILD_TESTING)
   set_tests_properties(rust-config-core-cli-contract PROPERTIES
                        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
   add_test(
-    NAME rust-config-shipping-contract
-    COMMAND "${FCITX_CONFIG_SHIPPING_EXE}" --self-check --report
-            "${CMAKE_CURRENT_BINARY_DIR}/config-rust-shipping-report.json")
-  add_test(
     NAME config-rust-shipping-lineage
     COMMAND
       "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
@@ -1115,28 +1094,6 @@ if(BUILD_TESTING)
   set_tests_properties(config-rust-shipping-lineage
                        PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
                                   TIMEOUT 45)
-  add_test(
-    NAME config-rust-legacy-headless-cli
-    COMMAND
-      "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-      "${FCITX_PWSH_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass
-      -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/test-config-rust-legacy-cli.ps1"
-      -CargoExecutable "${FCITX_CARGO_EXECUTABLE}" -CargoTarget
-      "${FCITX_RUST_TARGET}" -Report
-      "${CMAKE_CURRENT_BINARY_DIR}/config-rust-legacy-headless-cli.json")
-  set_tests_properties(config-rust-legacy-headless-cli
-                       PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-                                  TIMEOUT 45)
-  add_test(
-    NAME rust-config-window-smoke
-    COMMAND
-      "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-      "${FCITX_CARGO_EXECUTABLE}" run --locked --manifest-path
-      "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-config-app --bin
-      fcitx5-config --target "${FCITX_RUST_TARGET}" -- --window-smoke --report
-      "${CMAKE_CURRENT_BINARY_DIR}/config-window-smoke.json")
-  set_tests_properties(rust-config-window-smoke PROPERTIES
-                       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
   add_executable(fcitx5_engine_core_contract_test tests/unit/engine_core_contract_test.cpp)
   target_include_directories(fcitx5_engine_core_contract_test

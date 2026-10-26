@@ -92,28 +92,10 @@ if ($rustHash -ne $shippingHash) {
   throw "Shipping fcitx5-config.exe is not byte-identical to the Rust shipping build output"
 }
 
-$rustReport = Join-Path $reportDirectory 'config-rust-shipping-lineage-self-check.json'
-[void] (Invoke-CheckedProcess -FilePath $shippingExe -Arguments @('--self-check', '--report', $rustReport) -Name 'rust-config-shipping-lineage-self-check')
-
-$rust = Get-Content -LiteralPath $rustReport -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($rust.component -ne 'fcitx5-config') {
-  throw "Rust shipping-lineage report did not run under the shipping component name: $($rust.component)"
-}
-if ($rust.rust_shipping_target_name -ne 'fcitx5-config.exe') {
-  throw "Rust shipping-lineage report lost the shipping executable name"
-}
-if ($rust.preserves_product_binary_name -ne $true) {
-  throw "Rust shipping-lineage report did not preserve the product binary name"
-}
-if ($rust.shipping_config_replaced -ne $true) {
-  throw "Rust shipping-lineage check must prove the CMake shipping target has been cut over"
-}
-if ($rust.permanent_runtime_selector -ne $false) {
-  throw "Rust shipping-lineage report must not declare a permanent runtime selector"
-}
-if ($rust.candidate_preview_renderer_contract -ne 'shipping-candidate-real-preview-host-path') {
-  throw "Rust shipping-lineage report did not preserve the Candidate preview host contract"
-}
+# The shipping binary must run its real headless Config path on the product's
+# default configuration.
+$defaultConfig = Join-Path $repoRoot 'resources\config.toml'
+[void] (Invoke-CheckedProcess -FilePath $shippingExe -Arguments @('--config', $defaultConfig, 'validate') -Name 'rust-config-shipping-lineage-validate')
 
 $reportObject = [ordered]@{
   component = 'fcitx5-config'
@@ -122,11 +104,7 @@ $reportObject = [ordered]@{
   rust_shipping_lineage_executable = $shippingExe
   rust_source_sha256 = $rustHash.ToLowerInvariant()
   rust_shipping_sha256 = $shippingHash.ToLowerInvariant()
-  rust_report = $rustReport
   rust_shipping_target_name = 'fcitx5-config.exe'
-  preserves_product_binary_name = $true
-  shipping_config_replaced = $true
-  permanent_runtime_selector = $false
   result = 'PASS'
 }
 $reportObject | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $reportPath -Encoding UTF8

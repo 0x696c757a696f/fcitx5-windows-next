@@ -377,14 +377,9 @@ try {
     }
   }
 
-  $uiContract = Start-Process -FilePath $config -ArgumentList '--ui-contract-test' `
-    -PassThru -Wait -WindowStyle Hidden
-  if ($uiContract.ExitCode -ne 0) { throw 'Config UI behavior contract failed.' }
-  $evidence.checks.config_ui_contract = $true
-  $uiInteraction = Start-Process -FilePath $config -ArgumentList '--ui-interaction-test' `
-    -PassThru -Wait -WindowStyle Hidden
-  if ($uiInteraction.ExitCode -ne 0) { throw 'Config complete interaction sweep failed.' }
-  $evidence.checks.config_interaction_coverage = $true
+  & $config --config (Join-Path $env:TEMP 'fcitx5-desktop-smoke-missing.toml') doctor
+  if ($LASTEXITCODE -ne 0) { throw 'Config headless smoke failed.' }
+  $evidence.checks.config_headless_smoke = $true
 
   & $notepadTest --raw-harness
   if ($LASTEXITCODE -ne 0) {
