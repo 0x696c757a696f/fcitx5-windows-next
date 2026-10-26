@@ -11,7 +11,7 @@ use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::windows::ffi::OsStringExt;
-use std::panic::{catch_unwind, UnwindSafe};
+use std::panic::{catch_unwind, AssertUnwindSafe, UnwindSafe};
 use std::path::PathBuf;
 use std::process::Command;
 use std::ptr::null_mut;
@@ -139,6 +139,16 @@ static PROFILE_IDENTITY_REPORT: OnceLock<String> = OnceLock::new();
 static IPC_BOUNDARY_REPORT: OnceLock<String> = OnceLock::new();
 static COMPOSITION_TRANSCRIPT_REPORT: OnceLock<String> = OnceLock::new();
 static DIFFERENTIAL_SUMMARY_REPORT: OnceLock<String> = OnceLock::new();
+
+/// Runs a TSF callback without letting a panic unwind into the host application: unwinding
+/// across this COM boundary aborts the process the user is typing in. Key callbacks fall back to
+/// passing the key through.
+fn com_guard<T>(fallback: Result<T>, callback: impl FnOnce() -> Result<T>) -> Result<T> {
+    catch_unwind(AssertUnwindSafe(callback)).unwrap_or_else(|_| {
+        trace_event("callback_panicked");
+        fallback
+    })
+}
 
 pub fn panic_to_hresult<F>(operation: F) -> HRESULT
 where
@@ -2522,45 +2532,47 @@ impl Fcitx5ReadSurroundingSession {
 
 impl ITfEditSession_Impl for Fcitx5ReadSurroundingSession_Impl {
     fn DoEditSession(&self, edit_cookie: u32) -> Result<()> {
-        let selection_range = self.selection_range(edit_cookie)?;
-        let (caret, caret_source) = self.caret_rect(edit_cookie, &selection_range);
-        let before_range = unsafe {
-            // SAFETY: The selection range is valid during this edit session; the
-            // cloned range is released by the COM wrapper.
-            selection_range.Clone()?
-        };
-        let mut shifted = 0i32;
-        // SAFETY: The cloned range is valid during this edit session and the
-        // halt condition may be null.
-        unsafe {
-            before_range.ShiftStart(
-                edit_cookie,
-                -SURROUNDING_LIMIT_UTF16,
-                &mut shifted,
-                std::ptr::null(),
-            )?;
-        }
-        let mut buffer = vec![0_u16; SURROUNDING_LIMIT_UTF16 as usize];
-        let mut fetched = 0u32;
-        // SAFETY: buffer is valid writable UTF-16 storage for the duration of
-        // the call.
-        unsafe {
-            before_range.GetText(edit_cookie, 0, &mut buffer, &mut fetched)?;
-        }
-        buffer.truncate(fetched as usize);
-        let Ok(text) = String::from_utf16(&buffer) else {
-            return Err(E_FAIL.into());
-        };
-        let cursor = text.encode_utf16().count() as u32;
-        *self.snapshot.borrow_mut() = SurroundingSnapshot {
-            valid: true,
-            text,
-            cursor,
-            anchor: cursor,
-            caret,
-            caret_source,
-        };
-        Ok(())
+        com_guard(Err(E_UNEXPECTED.into()), || {
+            let selection_range = self.selection_range(edit_cookie)?;
+            let (caret, caret_source) = self.caret_rect(edit_cookie, &selection_range);
+            let before_range = unsafe {
+                // SAFETY: The selection range is valid during this edit session; the
+                // cloned range is released by the COM wrapper.
+                selection_range.Clone()?
+            };
+            let mut shifted = 0i32;
+            // SAFETY: The cloned range is valid during this edit session and the
+            // halt condition may be null.
+            unsafe {
+                before_range.ShiftStart(
+                    edit_cookie,
+                    -SURROUNDING_LIMIT_UTF16,
+                    &mut shifted,
+                    std::ptr::null(),
+                )?;
+            }
+            let mut buffer = vec![0_u16; SURROUNDING_LIMIT_UTF16 as usize];
+            let mut fetched = 0u32;
+            // SAFETY: buffer is valid writable UTF-16 storage for the duration of
+            // the call.
+            unsafe {
+                before_range.GetText(edit_cookie, 0, &mut buffer, &mut fetched)?;
+            }
+            buffer.truncate(fetched as usize);
+            let Ok(text) = String::from_utf16(&buffer) else {
+                return Err(E_FAIL.into());
+            };
+            let cursor = text.encode_utf16().count() as u32;
+            *self.snapshot.borrow_mut() = SurroundingSnapshot {
+                valid: true,
+                text,
+                cursor,
+                anchor: cursor,
+                caret,
+                caret_source,
+            };
+            Ok(())
+        })
     }
 }
 
@@ -2640,86 +2652,88 @@ impl Fcitx5TextEditSession {
 
 impl ITfEditSession_Impl for Fcitx5TextEditSession_Impl {
     fn DoEditSession(&self, edit_cookie: u32) -> Result<()> {
-        let selection_range = self.selection_range(edit_cookie)?;
-        match self.action.clone() {
-            TextEditAction::ApplyEngineResult(result) => {
-                if result.delete_surrounding_text
-                    && result.delete_surrounding_offset == -1
-                    && result.delete_surrounding_size == 1
-                {
-                    let mut shifted = 0i32;
-                    // SAFETY: The cloned range is valid for this edit session.
-                    // The null halt condition matches the existing C++ behavior.
-                    unsafe {
-                        selection_range.ShiftStart(
-                            edit_cookie,
-                            -1,
-                            &mut shifted,
-                            std::ptr::null(),
-                        )?;
+        com_guard(Err(E_UNEXPECTED.into()), || {
+            let selection_range = self.selection_range(edit_cookie)?;
+            match self.action.clone() {
+                TextEditAction::ApplyEngineResult(result) => {
+                    if result.delete_surrounding_text
+                        && result.delete_surrounding_offset == -1
+                        && result.delete_surrounding_size == 1
+                    {
+                        let mut shifted = 0i32;
+                        // SAFETY: The cloned range is valid for this edit session.
+                        // The null halt condition matches the existing C++ behavior.
+                        unsafe {
+                            selection_range.ShiftStart(
+                                edit_cookie,
+                                -1,
+                                &mut shifted,
+                                std::ptr::null(),
+                            )?;
+                        }
+                        Fcitx5TextEditSession::set_range_text(&selection_range, edit_cookie, "")?;
+                    } else if result.delete_surrounding_text {
+                        return Err(E_NOTIMPL.into());
                     }
-                    Fcitx5TextEditSession::set_range_text(&selection_range, edit_cookie, "")?;
-                } else if result.delete_surrounding_text {
-                    return Err(E_NOTIMPL.into());
-                }
 
-                if !result.commit.is_empty() {
-                    if let Some(composition) = &self.current_composition {
-                        // SAFETY: The composition belongs to this active edit
-                        // session and its range remains valid until it is ended.
+                    if !result.commit.is_empty() {
+                        if let Some(composition) = &self.current_composition {
+                            // SAFETY: The composition belongs to this active edit
+                            // session and its range remains valid until it is ended.
+                            let composition_range = unsafe { composition.GetRange()? };
+                            Fcitx5TextEditSession::set_range_text(
+                                &composition_range,
+                                edit_cookie,
+                                &result.commit,
+                            )?;
+                            // SAFETY: Ending the current composition is required
+                            // after committing its text.
+                            unsafe { composition.EndComposition(edit_cookie)? };
+                        } else {
+                            Fcitx5TextEditSession::set_range_text(
+                                &selection_range,
+                                edit_cookie,
+                                &result.commit,
+                            )?;
+                        }
+                        *self.resulting_composition.borrow_mut() = None;
+                    } else if !result.preedit.is_empty() {
+                        let composition =
+                            self.start_or_get_composition(edit_cookie, &selection_range)?;
+                        // SAFETY: The composition belongs to this active edit session.
                         let composition_range = unsafe { composition.GetRange()? };
                         Fcitx5TextEditSession::set_range_text(
                             &composition_range,
                             edit_cookie,
-                            &result.commit,
+                            &result.preedit,
                         )?;
-                        // SAFETY: Ending the current composition is required
-                        // after committing its text.
+                        *self.resulting_composition.borrow_mut() = Some(composition);
+                    } else if let Some(composition) = &self.current_composition {
+                        // SAFETY: The composition belongs to this active edit session.
+                        let composition_range = unsafe { composition.GetRange()? };
+                        Fcitx5TextEditSession::set_range_text(&composition_range, edit_cookie, "")?;
+                        // SAFETY: Empty engine preedit ends the existing local
+                        // composition.
                         unsafe { composition.EndComposition(edit_cookie)? };
+                        *self.resulting_composition.borrow_mut() = None;
                     } else {
-                        Fcitx5TextEditSession::set_range_text(
-                            &selection_range,
-                            edit_cookie,
-                            &result.commit,
-                        )?;
+                        *self.resulting_composition.borrow_mut() = None;
+                    }
+                }
+                TextEditAction::ClearComposition => {
+                    if let Some(composition) = &self.current_composition {
+                        // SAFETY: The composition belongs to this active edit session.
+                        let composition_range = unsafe { composition.GetRange()? };
+                        Fcitx5TextEditSession::set_range_text(&composition_range, edit_cookie, "")?;
+                        // SAFETY: Focus loss must terminate the composition.
+                        unsafe { composition.EndComposition(edit_cookie)? };
                     }
                     *self.resulting_composition.borrow_mut() = None;
-                } else if !result.preedit.is_empty() {
-                    let composition =
-                        self.start_or_get_composition(edit_cookie, &selection_range)?;
-                    // SAFETY: The composition belongs to this active edit session.
-                    let composition_range = unsafe { composition.GetRange()? };
-                    Fcitx5TextEditSession::set_range_text(
-                        &composition_range,
-                        edit_cookie,
-                        &result.preedit,
-                    )?;
-                    *self.resulting_composition.borrow_mut() = Some(composition);
-                } else if let Some(composition) = &self.current_composition {
-                    // SAFETY: The composition belongs to this active edit session.
-                    let composition_range = unsafe { composition.GetRange()? };
-                    Fcitx5TextEditSession::set_range_text(&composition_range, edit_cookie, "")?;
-                    // SAFETY: Empty engine preedit ends the existing local
-                    // composition.
-                    unsafe { composition.EndComposition(edit_cookie)? };
-                    *self.resulting_composition.borrow_mut() = None;
-                } else {
-                    *self.resulting_composition.borrow_mut() = None;
                 }
             }
-            TextEditAction::ClearComposition => {
-                if let Some(composition) = &self.current_composition {
-                    // SAFETY: The composition belongs to this active edit session.
-                    let composition_range = unsafe { composition.GetRange()? };
-                    Fcitx5TextEditSession::set_range_text(&composition_range, edit_cookie, "")?;
-                    // SAFETY: Focus loss must terminate the composition.
-                    unsafe { composition.EndComposition(edit_cookie)? };
-                }
-                *self.resulting_composition.borrow_mut() = None;
-            }
-        }
-        *self.applied.borrow_mut() = true;
-        Ok(())
+            *self.applied.borrow_mut() = true;
+            Ok(())
+        })
     }
 }
 
@@ -2746,7 +2760,9 @@ impl IClassFactory_Impl for Fcitx5TsfClassFactory_Impl {
         interface_id: *const GUID,
         object: *mut *mut c_void,
     ) -> Result<()> {
-        create_tsf_service_instance(outer, interface_id, object)
+        com_guard(Err(E_UNEXPECTED.into()), || {
+            create_tsf_service_instance(outer, interface_id, object)
+        })
     }
 
     fn LockServer(&self, _lock: BOOL) -> Result<()> {
@@ -3322,11 +3338,13 @@ impl Drop for Fcitx5TsfService {
 
 impl ITfTextInputProcessor_Impl for Fcitx5TsfService_Impl {
     fn Activate(&self, thread_manager: Ref<ITfThreadMgr>, client_id: u32) -> Result<()> {
-        self.activate_runtime(self, thread_manager, client_id)
+        com_guard(Err(E_UNEXPECTED.into()), || {
+            self.activate_runtime(self, thread_manager, client_id)
+        })
     }
 
     fn Deactivate(&self) -> Result<()> {
-        self.deactivate_runtime()
+        com_guard(Err(E_UNEXPECTED.into()), || self.deactivate_runtime())
     }
 }
 
@@ -3337,7 +3355,9 @@ impl ITfTextInputProcessorEx_Impl for Fcitx5TsfService_Impl {
         client_id: u32,
         _flags: u32,
     ) -> Result<()> {
-        self.activate_runtime(self, thread_manager, client_id)
+        com_guard(Err(E_UNEXPECTED.into()), || {
+            self.activate_runtime(self, thread_manager, client_id)
+        })
     }
 }
 
@@ -3355,16 +3375,18 @@ impl ITfThreadMgrEventSink_Impl for Fcitx5TsfService_Impl {
         focused_document_manager: Ref<ITfDocumentMgr>,
         previous_focused_document_manager: Ref<ITfDocumentMgr>,
     ) -> Result<()> {
-        if focused_document_manager.is_null() {
-            if let Some(previous) = previous_focused_document_manager.as_ref() {
-                // SAFETY: The document manager is supplied by TSF for this
-                // callback; GetTop returns a live context when one exists.
-                if let Ok(context) = unsafe { previous.GetTop() } {
-                    self.clear_context_composition(&context)?;
+        com_guard(Err(E_UNEXPECTED.into()), || {
+            if focused_document_manager.is_null() {
+                if let Some(previous) = previous_focused_document_manager.as_ref() {
+                    // SAFETY: The document manager is supplied by TSF for this
+                    // callback; GetTop returns a live context when one exists.
+                    if let Ok(context) = unsafe { previous.GetTop() } {
+                        self.clear_context_composition(&context)?;
+                    }
                 }
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     fn OnPushContext(&self, _context: Ref<ITfContext>) -> Result<()> {
@@ -3397,46 +3419,48 @@ impl ITfKeyEventSink_Impl for Fcitx5TsfService_Impl {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> Result<BOOL> {
-        trace_event("on_test_key_down_enter");
-        if context.is_null() || !self.runtime.borrow().active {
-            trace_event("on_test_key_down_inactive");
-            return Ok(BOOL(0));
-        }
-        let context = context.ok()?;
-        if self.runtime.borrow().guard_fail_open
-            || Fcitx5TsfService::context_has_sensitive_input_scope(context)
-            || !self.should_test_eat_key(wparam)
-        {
-            trace_event("on_test_key_down_passthrough");
-            return Ok(BOOL(0));
-        }
-        if let Some(cached) = &self.runtime.borrow().pending_key {
-            let context_id = Fcitx5TsfService::context_id(context);
-            let key_flags = Fcitx5TsfService::keyboard_state_flags(false);
-            if cached.context_id == context_id
-                && cached.virtual_key == wparam.0 as u32
-                && cached.key_flags == key_flags
-            {
-                trace_event(if cached.result.handled {
-                    "on_test_key_down_cached_handled"
-                } else {
-                    "on_test_key_down_cached_not_handled"
-                });
-                return Ok(BOOL(cached.result.handled as i32));
+        com_guard(Ok(BOOL(0)), || {
+            trace_event("on_test_key_down_enter");
+            if context.is_null() || !self.runtime.borrow().active {
+                trace_event("on_test_key_down_inactive");
+                return Ok(BOOL(0));
             }
-        }
-        let Some(result) = self.engine_key_result(context, wparam, lparam, false) else {
-            trace_event("on_test_key_down_no_engine_result");
-            return Ok(BOOL(0));
-        };
-        let handled = result.handled || wparam.0 as u16 == VK_OEM_COMMA.0;
-        self.store_pending_key(context, wparam, result);
-        trace_event(if handled {
-            "on_test_key_down_handled"
-        } else {
-            "on_test_key_down_not_handled"
-        });
-        Ok(BOOL(handled as i32))
+            let context = context.ok()?;
+            if self.runtime.borrow().guard_fail_open
+                || Fcitx5TsfService::context_has_sensitive_input_scope(context)
+                || !self.should_test_eat_key(wparam)
+            {
+                trace_event("on_test_key_down_passthrough");
+                return Ok(BOOL(0));
+            }
+            if let Some(cached) = &self.runtime.borrow().pending_key {
+                let context_id = Fcitx5TsfService::context_id(context);
+                let key_flags = Fcitx5TsfService::keyboard_state_flags(false);
+                if cached.context_id == context_id
+                    && cached.virtual_key == wparam.0 as u32
+                    && cached.key_flags == key_flags
+                {
+                    trace_event(if cached.result.handled {
+                        "on_test_key_down_cached_handled"
+                    } else {
+                        "on_test_key_down_cached_not_handled"
+                    });
+                    return Ok(BOOL(cached.result.handled as i32));
+                }
+            }
+            let Some(result) = self.engine_key_result(context, wparam, lparam, false) else {
+                trace_event("on_test_key_down_no_engine_result");
+                return Ok(BOOL(0));
+            };
+            let handled = result.handled || wparam.0 as u16 == VK_OEM_COMMA.0;
+            self.store_pending_key(context, wparam, result);
+            trace_event(if handled {
+                "on_test_key_down_handled"
+            } else {
+                "on_test_key_down_not_handled"
+            });
+            Ok(BOOL(handled as i32))
+        })
     }
 
     fn OnTestKeyUp(
@@ -3449,56 +3473,60 @@ impl ITfKeyEventSink_Impl for Fcitx5TsfService_Impl {
     }
 
     fn OnKeyDown(&self, context: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
-        trace_event("on_key_down_enter");
-        if context.is_null() || self.runtime.borrow().guard_fail_open {
-            trace_event("on_key_down_passthrough_inactive_or_guard");
-            return Ok(BOOL(0));
-        }
-        let context = context.ok()?;
-        if Fcitx5TsfService::context_has_sensitive_input_scope(context)
-            || !self.should_test_eat_key(wparam)
-        {
-            trace_event("on_key_down_passthrough_scope_or_key");
-            return Ok(BOOL(0));
-        }
-        let result = self
-            .cached_key_result(context, wparam)
-            .or_else(|| self.engine_key_result(context, wparam, lparam, false));
-        let Some(result) = result else {
-            self.state.borrow_mut().key_down(EngineResult::timeout());
-            trace_event("on_key_down_no_engine_result");
-            return Ok(BOOL(0));
-        };
-        trace_event(&format!(
-            "on_key_down_engine_result handled={} commit_len={} preedit_len={} candidates={}",
-            result.handled,
-            result.commit.chars().count(),
-            result.preedit.chars().count(),
-            result.candidates.len()
-        ));
-        let eaten = self.apply_engine_result(context, result)?;
-        trace_event(if eaten {
-            "on_key_down_eaten"
-        } else {
-            "on_key_down_not_eaten"
-        });
-        Ok(BOOL(eaten as i32))
+        com_guard(Ok(BOOL(0)), || {
+            trace_event("on_key_down_enter");
+            if context.is_null() || self.runtime.borrow().guard_fail_open {
+                trace_event("on_key_down_passthrough_inactive_or_guard");
+                return Ok(BOOL(0));
+            }
+            let context = context.ok()?;
+            if Fcitx5TsfService::context_has_sensitive_input_scope(context)
+                || !self.should_test_eat_key(wparam)
+            {
+                trace_event("on_key_down_passthrough_scope_or_key");
+                return Ok(BOOL(0));
+            }
+            let result = self
+                .cached_key_result(context, wparam)
+                .or_else(|| self.engine_key_result(context, wparam, lparam, false));
+            let Some(result) = result else {
+                self.state.borrow_mut().key_down(EngineResult::timeout());
+                trace_event("on_key_down_no_engine_result");
+                return Ok(BOOL(0));
+            };
+            trace_event(&format!(
+                "on_key_down_engine_result handled={} commit_len={} preedit_len={} candidates={}",
+                result.handled,
+                result.commit.chars().count(),
+                result.preedit.chars().count(),
+                result.candidates.len()
+            ));
+            let eaten = self.apply_engine_result(context, result)?;
+            trace_event(if eaten {
+                "on_key_down_eaten"
+            } else {
+                "on_key_down_not_eaten"
+            });
+            Ok(BOOL(eaten as i32))
+        })
     }
 
     fn OnKeyUp(&self, context: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
-        trace_event("on_key_up_enter");
-        if !context.is_null()
-            && self.runtime.borrow().active
-            && !self.runtime.borrow().guard_fail_open
-        {
-            if let Ok(context) = context.ok() {
-                if !Fcitx5TsfService::context_has_sensitive_input_scope(context) {
-                    let _ = self.engine_key_result(context, wparam, lparam, true);
+        com_guard(Ok(BOOL(0)), || {
+            trace_event("on_key_up_enter");
+            if !context.is_null()
+                && self.runtime.borrow().active
+                && !self.runtime.borrow().guard_fail_open
+            {
+                if let Ok(context) = context.ok() {
+                    if !Fcitx5TsfService::context_has_sensitive_input_scope(context) {
+                        let _ = self.engine_key_result(context, wparam, lparam, true);
+                    }
                 }
             }
-        }
-        self.state.borrow_mut().key_up();
-        Ok(BOOL(0))
+            self.state.borrow_mut().key_up();
+            Ok(BOOL(0))
+        })
     }
 
     fn OnPreservedKey(&self, _context: Ref<ITfContext>, _guid: *const GUID) -> Result<BOOL> {
@@ -3513,14 +3541,16 @@ impl ITfActiveLanguageProfileNotifySink_Impl for Fcitx5TsfService_Impl {
         _profile_guid: *const GUID,
         activated: BOOL,
     ) -> Result<()> {
-        if !class_id.is_null() && activated.as_bool() {
-            // SAFETY: class_id is a TSF-owned pointer valid for this callback.
-            let is_ours = unsafe { *class_id == FCITX5_TEXT_SERVICE_CLSID };
-            if is_ours {
-                self.state.borrow_mut().activate();
+        com_guard(Err(E_UNEXPECTED.into()), || {
+            if !class_id.is_null() && activated.as_bool() {
+                // SAFETY: class_id is a TSF-owned pointer valid for this callback.
+                let is_ours = unsafe { *class_id == FCITX5_TEXT_SERVICE_CLSID };
+                if is_ours {
+                    self.state.borrow_mut().activate();
+                }
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 }
 
