@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
+mod input_methods;
 mod settings_locale;
+use input_methods::{discover_input_methods, input_method_directories, InputMethodChoice};
 use settings_locale::{is_supported_locale, LocaleCatalog};
 
 use std::env;
@@ -1568,29 +1570,339 @@ fn windui_plugins_page(
         )
 }
 
-fn windui_hotkey_row(name: &str, keys: &str) -> WindUiElement {
+/// Hotkeys the engine's switch classifier recognizes.
+const INPUT_METHOD_HOTKEYS: [&str; 4] =
+    ["Ctrl+Space", "Ctrl+Shift", "Ctrl+Shift+Space", "Alt+Shift"];
+
+#[derive(Clone, Debug, PartialEq)]
+struct InputMethodDraft {
+    enabled: Vec<String>,
+    default: String,
+}
+
+impl InputMethodDraft {
+    fn from_snapshot(snapshot: &ConfigSnapshot) -> Self {
+        Self {
+            enabled: snapshot.input_methods().enabled().to_vec(),
+            default: snapshot.input_methods().default_id().to_owned(),
+        }
+    }
+
+    fn add(&mut self, id: &str) {
+        if !self.enabled.iter().any(|enabled| enabled == id) {
+            self.enabled.push(id.to_owned());
+        }
+    }
+
+    fn remove(&mut self, id: &str) {
+        if self.enabled.len() <= 1 {
+            return;
+        }
+        self.enabled.retain(|enabled| enabled != id);
+        if self.default == id {
+            self.default.clone_from(&self.enabled[0]);
+        }
+    }
+
+    fn move_up(&mut self, id: &str) {
+        if let Some(index) = self.enabled.iter().position(|enabled| enabled == id) {
+            if index > 0 {
+                self.enabled.swap(index - 1, index);
+            }
+        }
+    }
+
+    fn make_default(&mut self, id: &str) {
+        if self.enabled.iter().any(|enabled| enabled == id) {
+            self.default = id.to_owned();
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct InputMethodRow {
+    id: String,
+    name: String,
+    is_default: bool,
+    first: bool,
+    only: bool,
+}
+
+fn input_method_display_name(id: &str, choices: &[InputMethodChoice]) -> String {
+    choices
+        .iter()
+        .find(|choice| choice.id == id)
+        .map_or_else(|| id.to_owned(), |choice| choice.name.clone())
+}
+
+fn input_method_rows(
+    draft: &InputMethodDraft,
+    choices: &[InputMethodChoice],
+) -> Vec<InputMethodRow> {
+    draft
+        .enabled
+        .iter()
+        .enumerate()
+        .map(|(index, id)| InputMethodRow {
+            id: id.clone(),
+            name: input_method_display_name(id, choices),
+            is_default: *id == draft.default,
+            first: index == 0,
+            only: draft.enabled.len() == 1,
+        })
+        .collect()
+}
+
+fn addable_input_methods(
+    draft: &InputMethodDraft,
+    choices: &[InputMethodChoice],
+) -> Vec<InputMethodChoice> {
+    choices
+        .iter()
+        .filter(|choice| !draft.enabled.contains(&choice.id))
+        .cloned()
+        .collect()
+}
+
+fn installed_input_method_choices(locale: &LocaleCatalog) -> Vec<InputMethodChoice> {
+    let install_root = env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent()?.parent().map(Path::to_path_buf));
+    let data_root = fcitx5_windows_common_core::default_fcitx5_data_root_for_current_process();
+    match (install_root, data_root) {
+        (Some(install_root), Some(data_root)) => discover_input_methods(
+            &input_method_directories(&install_root, &data_root),
+            locale.tag(),
+        ),
+        _ => Vec::new(),
+    }
+}
+
+fn windui_engine_restart_channel(
+    app: &mut WindUiApp,
+    locale: LocaleCatalog,
+) -> WindUiSender<Result<(), String>> {
+    app.channel::<Result<(), String>>(move |ctx, result| match result {
+        Ok(()) => ctx.toast_ok(locale.text("settings.input.applied")),
+        Err(error) => {
+            ctx.toast_err(locale.format("settings.input.restart_failed", &[("error", &error)]))
+        }
+    })
+}
+
+fn windui_input_method_row(
+    row: InputMethodRow,
+    draft: WindUiSignal<InputMethodDraft>,
+    locale: LocaleCatalog,
+) -> WindUiElement {
+    let (default_id, up_id, remove_id) = (row.id.clone(), row.id.clone(), row.id.clone());
+    let default_control = if row.is_default {
+        WindUiElement::badge_intent(locale.text("settings.input.default"), WindUiIntent::Success)
+    } else {
+        WindUiElement::button(locale.text("settings.input.make_default"))
+            .small()
+            .outline()
+            .on_click(move |_| draft.update(|draft| draft.make_default(&default_id)))
+    };
     WindUiElement::row()
+        .width_match()
+        .height(48)
+        .cross(WindUiAlign::Center)
+        .spacing(8)
+        .padding_xy(12, 4)
+        .bg_role(WindUiRole::SurfaceAlt)
+        .child(
+            WindUiElement::col()
+                .weight(1.0)
+                .spacing(2)
+                .child(
+                    WindUiElement::label(row.name)
+                        .font_size(13.5)
+                        .font_weight(600)
+                        .max_lines(1)
+                        .truncate(WindUiTruncate::End),
+                )
+                .child(
+                    WindUiElement::label(row.id)
+                        .font_size(12.0)
+                        .fg_role(WindUiRole::TextMuted)
+                        .max_lines(1),
+                ),
+        )
+        .child(default_control)
+        .child(
+            WindUiElement::button(locale.text("settings.input.move_up"))
+                .small()
+                .outline()
+                .neutral()
+                .enabled(!row.first)
+                .on_click(move |_| draft.update(|draft| draft.move_up(&up_id))),
+        )
+        .child(
+            WindUiElement::button(locale.text("settings.input.remove"))
+                .small()
+                .outline()
+                .neutral()
+                .enabled(!row.only)
+                .on_click(move |_| draft.update(|draft| draft.remove(&remove_id))),
+        )
+}
+
+/// The input method list and switch hotkeys, written to config.toml through
+/// Config Core. The engine reads both at startup, so applying restarts it.
+fn windui_input_method_settings(
+    adapter: WindUiSignal<WindUiConfigAdapter>,
+    choices: Vec<InputMethodChoice>,
+    restart_sender: WindUiSender<Result<(), String>>,
+    locale: &LocaleCatalog,
+) -> WindUiElement {
+    let snapshot = adapter.with(|adapter| adapter.preview());
+    let draft = windui_signal(InputMethodDraft::from_snapshot(&snapshot));
+    let hotkey_index = |value: &str| {
+        INPUT_METHOD_HOTKEYS
+            .iter()
+            .position(|hotkey| *hotkey == value)
+            .unwrap_or(0)
+    };
+    let toggle = windui_signal(hotkey_index(snapshot.hotkeys().toggle_input_method()));
+    let next = windui_signal(hotkey_index(snapshot.hotkeys().next_input_method()));
+
+    let rows_choices = choices.clone();
+    let rows = draft.map(move |draft| input_method_rows(draft, &rows_choices));
+    let row_locale = locale.clone();
+    let list = WindUiElement::list_signal(
+        rows,
+        |row| row.id.clone(),
+        move |row| windui_input_method_row(row, draft, row_locale.clone()),
+    )
+    .width_match()
+    .height(208);
+
+    let addable_choices = choices.clone();
+    let addable = draft.map(move |draft| addable_input_methods(draft, &addable_choices));
+    let addable_names = addable.map(|choices| {
+        choices
+            .iter()
+            .map(|choice| format!("{} ({})", choice.name, choice.id))
+            .collect::<Vec<_>>()
+    });
+    let add_selection = windui_signal(0usize);
+    let add_row = WindUiElement::row()
         .width_match()
         .cross(WindUiAlign::Center)
         .spacing(10)
         .child(
-            WindUiElement::label(name)
-                .font_size(13.0)
-                .fg_role(WindUiRole::Text)
-                .weight(1.0),
+            WindUiElement::dropdown_signal(addable_names, add_selection)
+                .weight(1.0)
+                .enabled_when(move || addable.with(|choices| !choices.is_empty())),
         )
         .child(
-            WindUiElement::stack()
-                .corner(6.0)
-                .bg_role(WindUiRole::SurfaceAlt)
-                .border_role(WindUiRole::Border, 1)
-                .padding_xy(10, 5)
+            WindUiElement::button(locale.text("settings.input.add"))
+                .small()
+                .enabled_when(move || addable.with(|choices| !choices.is_empty()))
+                .on_click(move |_| {
+                    let choice = addable.with(|choices| {
+                        choices
+                            .get(add_selection.get().min(choices.len().saturating_sub(1)))
+                            .cloned()
+                    });
+                    if let Some(choice) = choice {
+                        draft.update(|draft| draft.add(&choice.id));
+                        add_selection.set(0);
+                    }
+                }),
+        );
+
+    let hotkey_labels = INPUT_METHOD_HOTKEYS.map(str::to_owned).to_vec();
+    let pending_message = locale.text("status.unsaved");
+    let same_message = locale.text("settings.shortcuts.same");
+    let apply = WindUiElement::button(locale.text("settings.input.apply"))
+        .small()
+        .on_click(move |ctx| {
+            if adapter.with(|adapter| !adapter.core.diff().is_empty()) {
+                ctx.toast_err(pending_message.clone());
+                return;
+            }
+            let (toggle, next) = (toggle.get(), next.get());
+            if toggle == next {
+                ctx.toast_err(same_message.clone());
+                return;
+            }
+            let draft = draft.get();
+            let mut result = Ok(());
+            adapter.update(|adapter| {
+                result = adapter
+                    .set(ConfigEdit::InputMethods {
+                        enabled: draft.enabled.clone(),
+                        default: draft.default.clone(),
+                    })
+                    .and_then(|()| {
+                        adapter.set(ConfigEdit::HotkeyToggleInputMethod(
+                            INPUT_METHOD_HOTKEYS[toggle.min(3)].to_owned(),
+                        ))
+                    })
+                    .and_then(|()| {
+                        adapter.set(ConfigEdit::HotkeyNextInputMethod(
+                            INPUT_METHOD_HOTKEYS[next.min(3)].to_owned(),
+                        ))
+                    })
+                    .and_then(|()| adapter.apply());
+                if result.is_err() {
+                    adapter.cancel();
+                }
+            });
+            if let Err(error) = result {
+                ctx.toast_err(error);
+                return;
+            }
+            let sender = restart_sender.clone();
+            thread::spawn(move || {
+                let _ = sender.send(run_control(&[OsString::from("--restart-engine")]).map(|_| ()));
+            });
+        });
+
+    WindUiElement::col()
+        .width_match()
+        .spacing(20)
+        .child(windui_settings_card(
+            WindUiElement::col()
+                .width_match()
+                .spacing(12)
+                .child(windui_settings_section_title(
+                    &locale.text("settings.input.section"),
+                ))
                 .child(
-                    WindUiElement::label(keys)
+                    WindUiElement::label(locale.text("settings.input.list_hint"))
+                        .font_size(12.5)
+                        .fg_role(WindUiRole::TextMuted)
+                        .width_match(),
+                )
+                .child(list)
+                .child(add_row)
+                .child(
+                    WindUiElement::label(locale.text("settings.input.add_hint"))
                         .font_size(12.0)
-                        .fg_role(WindUiRole::TextMuted),
+                        .fg_role(WindUiRole::TextMuted)
+                        .width_match(),
                 ),
-        )
+        ))
+        .child(windui_settings_card(
+            WindUiElement::col()
+                .width_match()
+                .spacing(14)
+                .child(windui_settings_section_title(
+                    &locale.text("settings.shortcuts.section"),
+                ))
+                .child(WindUiElement::setting_row(
+                    locale.text("settings.shortcuts.toggle_input_method"),
+                    WindUiElement::dropdown(hotkey_labels.clone(), toggle).width(180),
+                ))
+                .child(WindUiElement::setting_row(
+                    locale.text("settings.shortcuts.next_input_method"),
+                    WindUiElement::dropdown(hotkey_labels, next).width(180),
+                ))
+                .child(apply),
+        ))
 }
 
 fn windui_nav_placeholder(title: &str, locale: &LocaleCatalog) -> WindUiElement {
@@ -1621,12 +1933,19 @@ fn windui_settings_root(
     plugin_sender: WindUiSender<PluginResponse>,
     candidate_adapter: WindUiSignal<WindUiConfigAdapter>,
     candidate_status: WindUiSignal<String>,
+    input_method_choices: Vec<InputMethodChoice>,
+    engine_restart_sender: WindUiSender<Result<(), String>>,
     locale: LocaleCatalog,
 ) -> WindUiElement {
     candidate_status.set(locale.text("settings.candidate.draft_loaded"));
     let nav = windui_signal(0usize);
     let search = windui_signal(String::new());
-    let input_method = windui_signal(0usize);
+    let input_method_settings = windui_input_method_settings(
+        candidate_adapter,
+        input_method_choices,
+        engine_restart_sender,
+        &locale,
+    );
     let accent_pick = windui_signal(0usize);
     let window_shadow = windui_signal(true);
     let ui_font_size = windui_signal(14.0f64);
@@ -1671,94 +1990,7 @@ fn windui_settings_root(
                 &locale.text("nav.general"),
                 &locale.text("settings.input.subtitle"),
             ))
-            .child(windui_settings_card(
-                WindUiElement::col()
-                    .width_match()
-                    .spacing(16)
-                    .child(windui_settings_section_title(
-                        &locale.text("settings.input.section"),
-                    ))
-                    .child(WindUiElement::setting_row_desc(
-                        locale.text("general.input_method"),
-                        locale.text("settings.input.profile_hint"),
-                        WindUiElement::dropdown(
-                            ["wubi", "pinyin", "rime", "mozc"]
-                                .map(|name| locale.text(&format!("settings.input.engine.{name}")))
-                                .into(),
-                            input_method,
-                        )
-                        .width(180),
-                    )),
-            ))
-            .child(windui_settings_card(
-                WindUiElement::col()
-                    .width_match()
-                    .spacing(14)
-                    .child(windui_settings_section_title(
-                        &locale.text("settings.shortcuts.section"),
-                    ))
-                    .child(
-                        WindUiElement::tag_field(
-                            locale.text("shortcuts.placeholder"),
-                            vec![
-                                WindUiElement::chip("Ctrl+Space", {
-                                    let locale = locale.clone();
-                                    move |ctx| {
-                                        ctx.toast(locale.format(
-                                            "settings.shortcuts.remove",
-                                            &[("key", "Ctrl+Space")],
-                                        ))
-                                    }
-                                }),
-                                WindUiElement::chip("Shift", {
-                                    let locale = locale.clone();
-                                    move |ctx| {
-                                        ctx.toast(locale.format(
-                                            "settings.shortcuts.remove",
-                                            &[("key", "Shift")],
-                                        ))
-                                    }
-                                }),
-                                WindUiElement::chip("Ctrl+.", {
-                                    let locale = locale.clone();
-                                    move |ctx| {
-                                        ctx.toast(locale.format(
-                                            "settings.shortcuts.remove",
-                                            &[("key", "Ctrl+.")],
-                                        ))
-                                    }
-                                }),
-                            ],
-                        )
-                        .width_match(),
-                    )
-                    .child(WindUiElement::divider())
-                    .child(
-                        WindUiElement::grid(
-                            2,
-                            12,
-                            vec![
-                                windui_hotkey_row(
-                                    &locale.text("settings.shortcuts.toggle_language"),
-                                    "Shift",
-                                ),
-                                windui_hotkey_row(
-                                    &locale.text("settings.shortcuts.toggle_script"),
-                                    "Ctrl+Shift+F",
-                                ),
-                                windui_hotkey_row(
-                                    &locale.text("settings.shortcuts.toggle_width"),
-                                    "Shift+Space",
-                                ),
-                                windui_hotkey_row(
-                                    &locale.text("settings.shortcuts.toggle_punctuation"),
-                                    "Ctrl+.",
-                                ),
-                            ],
-                        )
-                        .width_match(),
-                    ),
-            )),
+            .child(input_method_settings),
     );
 
     let appearance_page = WindUiElement::scroll().fill().child(
@@ -2769,6 +3001,7 @@ fn windui_settings_default_shell_probe() -> WindUiElement {
     let (candidate_adapter, candidate_status) =
         windui_candidate_config_manager(PathBuf::from("windui-settings-default-shell-probe.toml"))
             .expect("compiled Config Core defaults should initialize the wind-ui probe");
+    let restart_sender = windui_engine_restart_channel(&mut app, locale.clone());
     windui_settings_root(
         snapshot,
         busy,
@@ -2776,6 +3009,8 @@ fn windui_settings_default_shell_probe() -> WindUiElement {
         sender,
         candidate_adapter,
         candidate_status,
+        Vec::new(),
+        restart_sender,
         locale,
     )
 }
@@ -4356,6 +4591,8 @@ fn run_windui_settings_window(
     );
     let (snapshot, busy, status, sender) =
         windui_plugin_manager(&mut app, !screenshot_from_args, locale.clone());
+    let restart_sender = windui_engine_restart_channel(&mut app, locale.clone());
+    let input_method_choices = installed_input_method_choices(&locale);
     app.content(windui_settings_root(
         snapshot,
         busy,
@@ -4363,6 +4600,8 @@ fn run_windui_settings_window(
         sender,
         candidate_adapter,
         candidate_status,
+        input_method_choices,
+        restart_sender,
         locale,
     ))
     .run();
@@ -7547,6 +7786,54 @@ mod tests {
             plugin_operation_for(&offline, "community-addon", PluginAction::Remove),
             Some(PluginOperation::Remove("community-addon".to_owned()))
         );
+    }
+
+    #[test]
+    fn input_method_draft_edits_keep_a_valid_default() {
+        let mut draft = InputMethodDraft {
+            enabled: vec!["pinyin".to_owned(), "rime".to_owned()],
+            default: "pinyin".to_owned(),
+        };
+        draft.add("rime");
+        draft.add("mozc");
+        assert_eq!(draft.enabled, ["pinyin", "rime", "mozc"]);
+        draft.move_up("mozc");
+        draft.move_up("pinyin");
+        assert_eq!(draft.enabled, ["pinyin", "mozc", "rime"]);
+        draft.make_default("unknown");
+        assert_eq!(draft.default, "pinyin");
+        draft.remove("pinyin");
+        assert_eq!(draft.enabled, ["mozc", "rime"]);
+        assert_eq!(draft.default, "mozc");
+        draft.remove("rime");
+        draft.remove("mozc");
+        assert_eq!(draft.enabled, ["mozc"]);
+    }
+
+    #[test]
+    fn input_method_rows_name_entries_and_hide_enabled_ones_from_add() {
+        let choices = vec![
+            InputMethodChoice {
+                id: "pinyin".to_owned(),
+                name: "Pinyin".to_owned(),
+            },
+            InputMethodChoice {
+                id: "rime".to_owned(),
+                name: "Rime".to_owned(),
+            },
+        ];
+        let draft = InputMethodDraft {
+            enabled: vec!["pinyin".to_owned(), "gone".to_owned()],
+            default: "gone".to_owned(),
+        };
+        let rows = input_method_rows(&draft, &choices);
+        assert_eq!(rows[0].name, "Pinyin");
+        assert!(rows[0].first && !rows[0].is_default && !rows[0].only);
+        assert_eq!(rows[1].name, "gone");
+        assert!(rows[1].is_default);
+        let addable = addable_input_methods(&draft, &choices);
+        assert_eq!(addable.len(), 1);
+        assert_eq!(addable[0].id, "rime");
     }
 
     #[test]

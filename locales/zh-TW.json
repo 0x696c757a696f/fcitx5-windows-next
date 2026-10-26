@@ -262,4 +262,17 @@
   "settings.plugins.error.catalog_version_invalid": "外掛目錄版本或項目數無效",
   "settings.plugins.error.catalog_fields_invalid": "外掛目錄包含無效欄位",
   "settings.plugins.error.control_unavailable": "外掛服務無法使用"
+  ,"settings.input.list_hint": "已啟用的輸入法，「下一個輸入法」快速鍵依此順序輪換。"
+  ,"settings.input.default": "預設"
+  ,"settings.input.make_default": "設為預設"
+  ,"settings.input.move_up": "上移"
+  ,"settings.input.remove": "移除"
+  ,"settings.input.add": "新增"
+  ,"settings.input.add_hint": "已安裝外掛中的輸入法也會列在這裡。"
+  ,"settings.input.apply": "套用"
+  ,"settings.input.applied": "已儲存，輸入法引擎正在重新啟動。"
+  ,"settings.input.restart_failed": "已儲存，但輸入法引擎重新啟動失敗：{error}"
+  ,"settings.shortcuts.toggle_input_method": "切換鍵盤與預設輸入法"
+  ,"settings.shortcuts.next_input_method": "切換到下一個輸入法"
+  ,"settings.shortcuts.same": "兩個快速鍵不能相同。"
 }

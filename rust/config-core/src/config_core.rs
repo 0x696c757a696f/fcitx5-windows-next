@@ -1066,6 +1066,17 @@ pub enum ConfigEdit {
     CandidateFontFamilies(Vec<String>),
     /// Sets the candidate font size in DIP.
     CandidateFontSizeDip(f32),
+    /// Sets the enabled input methods in activation order and the default one.
+    InputMethods {
+        /// Enabled input-method IDs in activation order.
+        enabled: Vec<String>,
+        /// Default input-method ID; must be one of `enabled`.
+        default: String,
+    },
+    /// Sets the hotkey that toggles between the keyboard and the default input method.
+    HotkeyToggleInputMethod(String),
+    /// Sets the hotkey that switches to the next enabled input method.
+    HotkeyNextInputMethod(String),
 }
 
 /// Identifies an override that can be reset to inherited defaults.
@@ -1591,6 +1602,16 @@ impl ConfigCore {
             }
             ConfigEdit::CandidateFontSizeDip(value) => {
                 self.draft.fonts.candidate.size_dip = Some(value);
+            }
+            ConfigEdit::InputMethods { enabled, default } => {
+                self.draft.input_methods.enabled = Some(enabled);
+                self.draft.input_methods.default = Some(default);
+            }
+            ConfigEdit::HotkeyToggleInputMethod(value) => {
+                self.draft.hotkeys.toggle_input_method = Some(value);
+            }
+            ConfigEdit::HotkeyNextInputMethod(value) => {
+                self.draft.hotkeys.next_input_method = Some(value);
             }
         }
     }

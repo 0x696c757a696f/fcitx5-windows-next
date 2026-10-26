@@ -163,6 +163,21 @@ EngineConfig readEngineConfig() {
     return config;
 }
 
+bool validAddonName(std::string_view name);
+
+// The addon an input method runs on, from the Addon= line of its .conf file.
+std::optional<std::string> inputMethodAddon(const std::filesystem::path& file) {
+    std::ifstream input(file);
+    std::string line;
+    for (int count = 0; count < 256 && std::getline(input, line); ++count) {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        if (line.starts_with("Addon=") && validAddonName(line.substr(6)))
+            return line.substr(6);
+    }
+    return std::nullopt;
+}
+
 std::string startupAddonList(const EngineConfig& config,
                              const std::set<std::string>& packageAddons) {
     std::set<std::string> addons{
@@ -179,6 +194,16 @@ std::string startupAddonList(const EngineConfig& config,
             addons.insert("rime");
         } else if (id == "wbx" || id == "table" || id.starts_with("table-")) {
             addons.insert("table");
+        }
+    }
+    // Any other built-in input method enabled in Settings needs its addon too.
+    if (const auto data = getEnvironment("FCITX_DATA_DIRS"); data && !data->empty()) {
+        const auto directory = pathFromUtf8(*data) / "inputmethod";
+        for (const auto& id : config.enabled) {
+            if (!validAddonName(id))
+                continue;
+            if (auto addon = inputMethodAddon(directory / pathFromUtf8(id + ".conf")))
+                addons.insert(std::move(*addon));
         }
     }
     std::string joined;
@@ -265,16 +290,8 @@ std::set<std::string> packageAddonNames() {
                 addons.insert(name);
         }
         for (const auto& file : confFiles(share / L"inputmethod")) {
-            std::ifstream input(file);
-            std::string line;
-            for (int count = 0; count < 256 && std::getline(input, line); ++count) {
-                if (!line.empty() && line.back() == '\r')
-                    line.pop_back();
-                if (line.starts_with("Addon=") && validAddonName(line.substr(6))) {
-                    addons.insert(line.substr(6));
-                    break;
-                }
-            }
+            if (auto addon = inputMethodAddon(file))
+                addons.insert(std::move(*addon));
         }
     }
     return addons;
@@ -537,11 +554,10 @@ class FcitxRuntime::Impl final {
                                [&](const auto& item) { return item.name() == name; });
         };
         const std::string previousDefault = group.defaultInputMethod();
-        items.erase(
-            std::remove_if(items.begin(), items.end(),
-                           [&](const auto& item) { return manager.entry(item.name()) == nullptr; }),
-            items.end());
         config = readEngineConfig();
+        // Config Core owns the enabled list and its order, so an input method
+        // removed in Settings also leaves the switch cycle.
+        items.clear();
         for (const std::string& id : config.enabled) {
             if (manager.entry(id) && !contains(id)) {
                 items.emplace_back(id);
@@ -558,13 +574,13 @@ class FcitxRuntime::Impl final {
             }
         }
         std::string selected;
-        if (!previousDefault.empty() && previousDefault != "keyboard-us" &&
+        const std::string configuredDefault = config.defaultInputMethod.value_or("");
+        if (!configuredDefault.empty() && contains(configuredDefault)) {
+            selected = configuredDefault;
+        }
+        if (selected.empty() && !previousDefault.empty() && previousDefault != "keyboard-us" &&
             contains(previousDefault)) {
             selected = previousDefault;
-        }
-        const std::string configuredDefault = config.defaultInputMethod.value_or("");
-        if (selected.empty() && !configuredDefault.empty() && contains(configuredDefault)) {
-            selected = configuredDefault;
         }
         for (auto fallback = config.enabled.begin();
              selected.empty() && fallback != config.enabled.end(); ++fallback) {

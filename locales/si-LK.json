@@ -262,4 +262,17 @@
   "settings.plugins.error.catalog_version_invalid": "ප්ලගින නාමාවලියේ අනුවාදය හෝ අයිතම ගණන අවලංගුයි",
   "settings.plugins.error.catalog_fields_invalid": "ප්ලගින නාමාවලියේ අවලංගු ක්ෂේත්‍ර ඇත",
   "settings.plugins.error.control_unavailable": "ප්ලගින සේවාව ලබාගත නොහැක"
+  ,"settings.input.list_hint": "සක්‍රිය ආදාන ක්‍රම. ඊළඟ ආදාන ක්‍රමය කෙටිමඟ මෙම අනුපිළිවෙළින් මාරු කරයි."
+  ,"settings.input.default": "පෙරනිමි"
+  ,"settings.input.make_default": "පෙරනිමි කරන්න"
+  ,"settings.input.move_up": "ඉහළට"
+  ,"settings.input.remove": "ඉවත් කරන්න"
+  ,"settings.input.add": "එක් කරන්න"
+  ,"settings.input.add_hint": "ස්ථාපිත ප්ලගින වල ආදාන ක්‍රමද මෙහි පෙන්වයි."
+  ,"settings.input.apply": "යොදන්න"
+  ,"settings.input.applied": "සුරැකිණි. ආදාන ක්‍රම එන්ජිම යළි ආරම්භ වෙමින් පවතී."
+  ,"settings.input.restart_failed": "සුරැකිණි, නමුත් ආදාන ක්‍රම එන්ජිම යළි ආරම්භ කළ නොහැකි විය: {error}"
+  ,"settings.shortcuts.toggle_input_method": "යතුරුපුවරුව සහ පෙරනිමි ආදාන ක්‍රමය අතර මාරු වන්න"
+  ,"settings.shortcuts.next_input_method": "ඊළඟ ආදාන ක්‍රමය"
+  ,"settings.shortcuts.same": "කෙටිමං දෙක එකිනෙකට වෙනස් විය යුතුය."
 }
