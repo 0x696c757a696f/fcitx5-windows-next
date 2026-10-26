@@ -33,6 +33,7 @@ defaults:
 jobs:
   build-once:
     runs-on: windows-2022
+    timeout-minutes: 240
     steps:
       - name: Require PowerShell 7
         run: |
@@ -46,6 +47,13 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+
+      - name: Require the matching release tag
+        shell: pwsh
+        run: |
+          if ('${{ github.ref }}' -ne 'refs/tags/v${{ inputs.version }}') {
+            throw 'Release must run from the matching v<version> tag.'
+          }
 
       - name: Restore Rust toolchain and target cache
         uses: actions/cache@v6
@@ -83,11 +91,79 @@ jobs:
         shell: pwsh
         run: ./tools/configure-ci-cache.ps1
 
-      - name: Require the matching release tag
-        shell: pwsh
+      - name: Restore MSYS2 toolchain cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            out/downloads
+            out/toolchains/msys64
+          key: ${{ runner.os }}-msys2-clang64-${{ hashFiles('tools/bootstrap-fcitx.ps1') }}
+          restore-keys: |
+            ${{ runner.os }}-msys2-clang64-
+
+      - name: Restore native Fcitx build cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            out/sources
+            out/stage/fcitx5
+            out/build/fcitx5-core
+            out/build/libime
+            out/build/fcitx5-chinese-addons
+            out/build/librime
+            out/build/fcitx5-rime
+            out/build/fcitx5-lua
+            out/build/fcitx5-unikey
+            out/build/native-engine
+          key: ${{ runner.os }}-fcitx-native-${{ hashFiles('tools/bootstrap-fcitx.ps1', 'third_party/patches/**') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-fcitx-native-${{ hashFiles('tools/bootstrap-fcitx.ps1', 'third_party/patches/**') }}-
+
+      - name: Prepare Rust for the native engine
         run: |
-          if ('${{ github.ref }}' -ne 'refs/tags/v${{ inputs.version }}') {
-            throw 'Release must run from the matching v<version> tag.'
+          ./tools/prepare-rust.ps1
+          ./tools/prepare-package-dependencies.ps1
+          rustup target add x86_64-pc-windows-gnu --toolchain 1.99.1-x86_64-pc-windows-msvc
+          # native-engine invokes cargo from the repository CARGO_HOME. The
+          # runner's rustup lives elsewhere, so give that bin directory rustup
+          # proxies of its own.
+          $bin = Join-Path $env:CARGO_HOME 'bin'
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          $rustup = (Get-Command rustup -ErrorAction Stop).Source
+          foreach ($proxy in @('cargo.exe', 'rustc.exe')) {
+            $path = Join-Path $bin $proxy
+            if (-not (Test-Path -LiteralPath $path)) {
+              Copy-Item -LiteralPath $rustup -Destination $path
+            }
+          }
+
+      - name: Bootstrap native Fcitx engine
+        run: |
+          # The first bootstrap verifies and unpacks the MSYS2 archive with
+          # Git for Windows' xz and gpg, which are not on PATH by default.
+          $env:PATH = "$env:PATH;C:\Program Files\Git\usr\bin"
+          # The cache does not restore the Rime plugin junctions as junctions;
+          # drop whatever came back so bootstrap links the pinned checkouts.
+          foreach ($plugin in @('librime-lua', 'librime-octagram', 'librime-proto', 'librime-predict')) {
+            $link = "out/sources/librime/plugins/$plugin"
+            if (-not (Test-Path -LiteralPath $link)) { continue }
+            $item = Get-Item -LiteralPath $link -Force
+            if ($item.LinkType -eq 'Junction') { continue }
+            if ($item.LinkType) { $item.Delete() } else { Remove-Item -LiteralPath $link -Recurse -Force }
+          }
+          # native-engine runs several cargo builds in parallel through this
+          # sccache; start its server once so they do not race to spawn it.
+          & ./out/toolchains/fast/sccache-0.19.0/sccache-v0.19.0-x86_64-pc-windows-msvc/sccache.exe --start-server
+          ./tools/bootstrap-fcitx.ps1
+          # The package gate runs the real Fcitx acceptance against the
+          # official-rebaseline roots; reuse the tree just built for them.
+          foreach ($pair in @(@('official-rebaseline-sources', 'sources'),
+                              @('official-rebaseline-stage', 'stage/fcitx5'))) {
+            $link = Join-Path 'out' $pair[0]
+            if (-not (Test-Path -LiteralPath $link)) {
+              New-Item -ItemType Junction -Path $link `
+                -Target (Resolve-Path (Join-Path 'out' $pair[1])).Path | Out-Null
+            }
           }
 
       - name: Build once, analyze, test, and stage
