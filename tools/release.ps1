@@ -58,10 +58,19 @@ foreach ($path in $peFiles) {
     Copy-Item -LiteralPath $path -Destination $mirror -Force
   }
 }
-& (Join-Path $PSScriptRoot 'prepare-fork-plugins.ps1') -StageRoot $stage
+$forkPluginRoot = Join-Path $outRoot 'fork-plugins'
+& (Join-Path $PSScriptRoot 'prepare-fork-plugins.ps1') -StageRoot $stage -OutputRoot $forkPluginRoot
+# Fork plugins come from another repository's release; sign their binaries too
+# so every DLL a user installs carries the same publisher signature.
+$forkPluginPe = @(Get-ChildItem -LiteralPath $forkPluginRoot -File -Recurse -Include *.exe,*.dll |
+  Select-Object -ExpandProperty FullName)
+if ($forkPluginPe.Count -gt 0) {
+  & (Join-Path $PSScriptRoot 'sign-release.ps1') -Paths $forkPluginPe `
+    -CertificateThumbprint $CertificateThumbprint -TimestampUrl $TimestampUrl
+}
 & (Join-Path $PSScriptRoot 'release-plugin-artifacts.ps1') `
   -Version $Version -Channel $Channel -ReleaseSequence $PluginReleaseSequence -StageRoot $stage `
-  -TrustedKeyring $TrustedKeyring -SigningKey $PluginSigningKey
+  -TrustedKeyring $TrustedKeyring -SigningKey $PluginSigningKey -ForkPayloadRoot $forkPluginRoot
 
 $runtimeParent = Join-Path $stage 'runtime'
 $files = @(Get-ChildItem -LiteralPath $stage -File -Recurse |
@@ -87,7 +96,17 @@ try {
 }
 & (Join-Path $PSScriptRoot 'prepare-package-toolchains.ps1')
 $iscc = Join-Path $repoRoot 'out/toolchains/inno-7.0.2/ISCC.exe'
-& $iscc "/DProductVersion=$Version" "/DReleaseChannel=$Channel" `
+$kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+$signtool = Get-ChildItem -LiteralPath $kits -Filter signtool.exe -File -Recurse |
+  Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+  Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+if (-not $signtool) { throw 'SignTool was not found.' }
+$thumbprint = $CertificateThumbprint.Replace(' ', '').ToUpperInvariant()
+$uninstallerSign = "`$q$signtool`$q sign /sha1 $thumbprint /fd SHA256"
+if ($TimestampUrl) { $uninstallerSign += " /tr $TimestampUrl /td SHA256" }
+$uninstallerSign += ' $f'
+& $iscc "/Sfcitx5sign=$uninstallerSign" '/DSignToolName=fcitx5sign' `
+  "/DProductVersion=$Version" "/DReleaseChannel=$Channel" `
   "/DReleaseGeneration=$generation" "/DStageDir=$stage" "/DArtifactDir=$artifacts" (Join-Path $repoRoot 'installer/fcitx5-windows.iss')
 if ($LASTEXITCODE -ne 0) { throw 'Release installer packaging failed.' }
 $installer = Join-Path $artifacts "fcitx5-windows-$Version$suffix-setup.exe"
