@@ -23,7 +23,7 @@ use fcitx5_package_core::{
 use fcitx5_process_execution_core::run_process_bounded;
 use fcitx5_protocol_core::{
     decode_frame, decode_launcher_response, encode_launcher_request, LauncherCommand,
-    LauncherRequest, Metadata, Status, MAX_CONTROL_FRAME_SIZE,
+    LauncherRequest, LauncherResponse, Metadata, Status, MAX_CONTROL_FRAME_SIZE,
 };
 use fcitx5_windows_common_core::{
     broadcast_visual_config_changed, current_runtime_generation_for_current_process,
@@ -332,6 +332,21 @@ fn launcher_path() -> Result<PathBuf, Failure> {
 }
 
 fn launcher_command(command: LauncherCommand) -> Result<(), Failure> {
+    launcher_transact(command).map(|_| ())
+}
+
+/// The launcher's `LauncherState::UserStopped`: the user stopped the input service.
+const LAUNCHER_STATE_USER_STOPPED: u32 = 1;
+
+/// Whether the engine is running or may be started on demand, as opposed to unreachable or
+/// stopped by the user. Package and configuration changes restart only an engine in this state,
+/// so they never start an input service the user stopped.
+fn engine_active() -> bool {
+    launcher_transact(LauncherCommand::Status)
+        .is_ok_and(|response| response.launcher_state != LAUNCHER_STATE_USER_STOPPED)
+}
+
+fn launcher_transact(command: LauncherCommand) -> Result<LauncherResponse, Failure> {
     let identity = CurrentUserRuntimeIdentity::current()
         .ok_or_else(|| Failure::launcher("launcher unavailable"))?;
     let generation = current_runtime_generation_for_current_process();
@@ -370,11 +385,11 @@ fn launcher_command(command: LauncherCommand) -> Result<(), Failure> {
     {
         return Err(Failure::launcher("launcher rejected the command"));
     }
-    Ok(())
+    Ok(response)
 }
 
 fn request_engine_reload() {
-    if launcher_command(LauncherCommand::Status).is_ok()
+    if engine_active()
         && (launcher_command(LauncherCommand::UserStop).is_err()
             || launcher_command(LauncherCommand::Resume).is_err()
             || launcher_command(LauncherCommand::StartDemand).is_err())
@@ -387,7 +402,7 @@ fn request_engine_reload() {
 /// cannot delete a DLL that a running process has mapped, so the engine is stopped first and
 /// started again afterwards whether or not the change succeeded.
 fn with_engine_stopped(change: impl FnOnce() -> Result<(), Failure>) -> Result<(), Failure> {
-    let running = launcher_command(LauncherCommand::Status).is_ok();
+    let running = engine_active();
     if running {
         launcher_command(LauncherCommand::UserStop)?;
     }
@@ -402,7 +417,7 @@ fn with_engine_stopped(change: impl FnOnce() -> Result<(), Failure>) -> Result<(
 }
 
 fn restart_engine_if_running() -> Result<(), Failure> {
-    if launcher_command(LauncherCommand::Status).is_err() {
+    if !engine_active() {
         return Ok(());
     }
     for command in [
