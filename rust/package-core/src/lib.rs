@@ -8485,7 +8485,31 @@ mod repair_ffi {
         Some(PathBuf::from(OsString::from_wide(slice)))
     }
 
-    fn active_addon_directory_list(install_root: &std::path::Path) -> Option<Vec<u16>> {
+    const ACTIVE_PACKAGE_PREFIXES: u32 = 0;
+    const ACTIVE_PACKAGE_LIBRARY_DIRS: u32 = 1;
+
+    fn usable_package_directory(directory: &std::path::Path) -> Option<bool> {
+        if !directory.is_dir() {
+            return Some(false);
+        }
+        if super::path_contains_reparse_component(directory).ok()?
+            || directory
+                .as_os_str()
+                .encode_wide()
+                .any(|unit| unit == b';' as u16)
+        {
+            return None;
+        }
+        Some(true)
+    }
+
+    fn active_package_directory_list(
+        install_root: &std::path::Path,
+        kind: u32,
+    ) -> Option<Vec<u16>> {
+        if !matches!(kind, ACTIVE_PACKAGE_PREFIXES | ACTIVE_PACKAGE_LIBRARY_DIRS) {
+            return None;
+        }
         let entries = read_installed_lockfile(install_root).ok()?;
         let mut directories = Vec::new();
         for entry in entries {
@@ -8503,28 +8527,30 @@ mod repair_ffi {
                 .join(format!("{}.json", entry.version()));
             let manifest_text = fs::read_to_string(manifest_path).ok()?;
             let manifest = parse_manifest(&manifest_text).ok()?;
-            if manifest.package_type() != &PackageType::Addon
-                || manifest.id() != entry.id()
-                || manifest.version() != entry.version()
-            {
+            if manifest.id() != entry.id() || manifest.version() != entry.version() {
                 return None;
             }
-            let directory = install_root
+            let package_type = manifest.package_type();
+            if *package_type == PackageType::Core
+                || (kind == ACTIVE_PACKAGE_LIBRARY_DIRS && *package_type != PackageType::Addon)
+            {
+                continue;
+            }
+            let prefix = install_root
                 .join("versions")
                 .join(entry.id().as_str())
-                .join(entry.version())
-                .join("lib")
-                .join("fcitx5");
-            if !directory.is_dir()
-                || super::path_contains_reparse_component(&directory).ok()?
-                || directory
-                    .as_os_str()
-                    .encode_wide()
-                    .any(|unit| unit == b';' as u16)
-            {
+                .join(entry.version());
+            if !usable_package_directory(&prefix)? {
                 return None;
             }
-            directories.push(directory);
+            if kind == ACTIVE_PACKAGE_PREFIXES {
+                directories.push(prefix);
+                continue;
+            }
+            let library = prefix.join("bin");
+            if usable_package_directory(&library)? {
+                directories.push(library);
+            }
         }
 
         let mut result = Vec::new();
@@ -8537,17 +8563,20 @@ mod repair_ffi {
         Some(result)
     }
 
+    /// Lists the install prefixes of active non-core packages (`kind` 0) or the
+    /// `bin` directories of active addon packages (`kind` 1), separated by `;`.
     #[no_mangle]
-    pub unsafe extern "C" fn fcitx5_package_active_addon_dirs_utf16(
+    pub unsafe extern "C" fn fcitx5_package_active_dirs_utf16(
         install_root: *const u16,
         install_root_len: usize,
+        kind: u32,
         output: *mut u16,
         capacity: usize,
     ) -> usize {
         let Some(install_root) = path_from_utf16(install_root, install_root_len) else {
             return 0;
         };
-        let Some(value) = active_addon_directory_list(&install_root) else {
+        let Some(value) = active_package_directory_list(&install_root, kind) else {
             return 0;
         };
         if output.is_null() {
@@ -8566,21 +8595,23 @@ mod repair_ffi {
     mod tests {
         use super::*;
 
+        fn wide(path: &std::path::Path) -> Vec<u16> {
+            path.as_os_str().encode_wide().collect()
+        }
+
         #[test]
-        fn active_addon_directories_include_only_enabled_valid_addons() {
-            let root = std::env::temp_dir().join(format!(
-                "fcitx5-package-active-addons-{}",
-                std::process::id()
-            ));
+        fn active_package_directories_include_only_enabled_valid_packages() {
+            let root = std::env::temp_dir()
+                .join(format!("fcitx5-package-active-dirs-{}", std::process::id()));
             let _ = fs::remove_dir_all(&root);
             let architecture = if cfg!(target_pointer_width = "64") {
                 "x64"
             } else {
                 "x86"
             };
-            let manifest = |id: &str| {
+            let manifest = |id: &str, package_type: &str| {
                 format!(
-                    "{{\"format_version\":2,\"id\":\"{id}\",\"version\":\"1.0.0\",\"type\":\"addon\",\
+                    "{{\"format_version\":2,\"id\":\"{id}\",\"version\":\"1.0.0\",\"type\":\"{package_type}\",\
                      \"architecture\":\"{architecture}\",\"min_os\":\"6.1-sp1\",\"core_api\":\"1\",\
                      \"addon_abi\":\"1\",\"dependencies\":[],\"license\":\"MIT\",\
                      \"source_commit\":\"0123456789abcdef\",\"runtime_abi\":\"1\",\
@@ -8593,50 +8624,73 @@ mod repair_ffi {
                     "a".repeat(64)
                 )
             };
-            for id in ["fcitx5-rime", "fcitx5-pinyin"] {
+            let packages = [
+                (
+                    "fcitx5-rime",
+                    "addon",
+                    PackageLifecycleState::Installed,
+                    true,
+                ),
+                ("fcitx5-skk", "addon", PackageLifecycleState::Enabled, false),
+                (
+                    "fcitx5-table-array",
+                    "inputmethod-data",
+                    PackageLifecycleState::Enabled,
+                    true,
+                ),
+                (
+                    "fcitx5-pinyin",
+                    "addon",
+                    PackageLifecycleState::Disabled,
+                    true,
+                ),
+            ];
+            let mut lock = Vec::new();
+            for (id, package_type, state, has_bin) in packages {
                 let manifest_path = root.join("manifests").join(id).join("1.0.0.json");
-                fs::create_dir_all(root.join("versions").join(id).join("1.0.0/lib/fcitx5"))
-                    .expect("addon directory should create");
+                let prefix = root.join("versions").join(id).join("1.0.0");
+                fs::create_dir_all(prefix.join("share")).expect("package prefix should create");
+                if has_bin {
+                    fs::create_dir_all(prefix.join("bin")).expect("bin directory should create");
+                }
                 fs::create_dir_all(
                     manifest_path
                         .parent()
                         .expect("manifest parent should exist"),
                 )
                 .expect("manifest directory should create");
-                fs::write(manifest_path, manifest(id)).expect("manifest should write");
-            }
-            let lock = [
-                LockEntry::new(
-                    PackageId::parse("fcitx5-rime").expect("package id should parse"),
+                fs::write(manifest_path, manifest(id, package_type))
+                    .expect("manifest should write");
+                lock.push(LockEntry::new(
+                    PackageId::parse(id).expect("package id should parse"),
                     "1.0.0".to_owned(),
                     HexDigest32::parse(&"a".repeat(64)).expect("digest should parse"),
-                    PackageLifecycleState::Installed,
-                ),
-                LockEntry::new(
-                    PackageId::parse("fcitx5-pinyin").expect("package id should parse"),
-                    "1.0.0".to_owned(),
-                    HexDigest32::parse(&"b".repeat(64)).expect("digest should parse"),
-                    PackageLifecycleState::Disabled,
-                ),
-            ];
+                    state,
+                ));
+            }
             write_installed_lockfile_atomic(&root, &lock).expect("lockfile should write");
 
-            let directories = active_addon_directory_list(&root)
-                .expect("valid enabled addon directory should be listed");
-            let expected = root
-                .join("versions")
-                .join("fcitx5-rime")
-                .join("1.0.0")
-                .join("lib")
-                .join("fcitx5")
-                .as_os_str()
-                .encode_wide()
-                .collect::<Vec<_>>();
-            assert_eq!(directories, expected);
+            let prefix = |id: &str| root.join("versions").join(id).join("1.0.0");
+            let mut expected = wide(&prefix("fcitx5-rime"));
+            for id in ["fcitx5-skk", "fcitx5-table-array"] {
+                expected.push(b';' as u16);
+                expected.extend(wide(&prefix(id)));
+            }
+            assert_eq!(
+                active_package_directory_list(&root, ACTIVE_PACKAGE_PREFIXES)
+                    .expect("valid active package prefixes should be listed"),
+                expected
+            );
+            assert_eq!(
+                active_package_directory_list(&root, ACTIVE_PACKAGE_LIBRARY_DIRS)
+                    .expect("valid active addon bin directories should be listed"),
+                wide(&prefix("fcitx5-rime").join("bin"))
+            );
+            assert!(active_package_directory_list(&root, 2).is_none());
 
             fs::write(root.join("manifests/fcitx5-rime/1.0.0.json"), "{}")
                 .expect("corrupt manifest should write");
-            assert!(active_addon_directory_list(&root).is_none());
+            assert!(active_package_directory_list(&root, ACTIVE_PACKAGE_PREFIXES).is_none());
             let _ = fs::remove_dir_all(&root);
         }
     }
