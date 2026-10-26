@@ -496,7 +496,7 @@ fn refresh_packages(data_root: &std::path::Path, base_url: Option<String>) -> Re
 fn install_or_update_package(data_root: &std::path::Path, id: &str) -> Result<(), Failure> {
     let facade = package_facade(data_root)?;
     let mut transport = package_transport(data_root)?;
-    facade
+    let result = facade
         .install_or_update(
             "fcitx5-windows-next",
             option_env!("FCITX_RELEASE_CHANNEL_NAME").unwrap_or("stable"),
@@ -509,7 +509,17 @@ fn install_or_update_package(data_root: &std::path::Path, id: &str) -> Result<()
             &mut transport,
         )
         .map_err(|error| Failure::package(format!("{}: {error}", error.code())))?;
-    request_engine_reload();
+    // The engine may still have the replaced versions loaded; restarting it around the
+    // cleanup also loads the new ones. If it cannot be stopped, the old versions stay until
+    // the next update.
+    if with_engine_stopped(|| {
+        facade.prune_replaced_versions(&result);
+        Ok(())
+    })
+    .is_err()
+    {
+        eprintln!("warning: package change is saved; restart the input service to activate it");
+    }
     println!(
         "{}",
         control_packages_list_json(data_root).map_err(Failure::package)?

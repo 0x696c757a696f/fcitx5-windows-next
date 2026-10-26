@@ -447,6 +447,18 @@ impl PackageCoreFacade {
         }
     }
 
+    /// Removes the versions a committed install or update replaced. Call it while no process
+    /// has the replaced versions loaded. Core keeps its previous version as the rollback target
+    /// until the update is healthy, so Core entries are skipped.
+    pub fn prune_replaced_versions(&self, result: &PackageInstallResult) {
+        let package_root = self.package_root();
+        for entry in result.plan.entries() {
+            if entry.package_type() != &PackageType::Core {
+                let _ = crate::prune_inactive_package_versions(&package_root, entry.id());
+            }
+        }
+    }
+
     /// Changes enabled/disabled state through the checked lockfile owner.
     pub fn set_package_state(
         &self,

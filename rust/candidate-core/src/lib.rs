@@ -22,7 +22,6 @@ mod presentation;
 mod presentation_ffi;
 #[cfg(windows)]
 pub mod presentation_server;
-pub mod qingfeng;
 #[cfg(windows)]
 pub mod renderer;
 mod self_check;
