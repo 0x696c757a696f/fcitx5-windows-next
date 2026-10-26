@@ -7403,6 +7403,50 @@ pub fn finalize_installed_package_removal(
     Ok(())
 }
 
+/// Removes the version directories and manifests of `package_id` that the lockfile no longer
+/// points at. A directory a running process still holds files in is left for the next update.
+#[cfg(windows)]
+pub fn prune_inactive_package_versions(
+    install_root: impl AsRef<Path>,
+    package_id: &str,
+) -> Result<(), LifecycleError> {
+    let install_root = install_root.as_ref();
+    validate_program_install_root(install_root)
+        .map_err(|error| lifecycle_error(error.code, error.message))?;
+    let package_id = PackageId::parse(package_id)
+        .map_err(|_| lifecycle_error("invalid_identity", "package id is invalid"))?;
+    let lock = read_installed_lockfile(install_root)
+        .map_err(|error| lifecycle_error(error.code, error.message))?;
+    let Some(active) = lock.iter().find(|entry| entry.id() == &package_id) else {
+        return Ok(());
+    };
+    let active = active.version();
+    let versions = install_root.join("versions").join(package_id.as_str());
+    if let Ok(entries) = fs::read_dir(&versions) {
+        for entry in entries.flatten() {
+            let is_directory = entry.file_type().is_ok_and(|kind| kind.is_dir());
+            if is_directory && entry.file_name() != active {
+                let _ = fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    let keep = [
+        format!("{active}.json"),
+        format!("{active}.sig"),
+        format!("{active}.sig.json"),
+    ];
+    let manifests = install_root.join("manifests").join(package_id.as_str());
+    if let Ok(entries) = fs::read_dir(&manifests) {
+        for entry in entries.flatten() {
+            let is_file = entry.file_type().is_ok_and(|kind| kind.is_file());
+            if is_file && !keep.iter().any(|name| entry.file_name() == name.as_str()) {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
 pub fn finalize_installed_package_removal_in_roots(
     roots: &ProgramDataRoots,
@@ -13648,6 +13692,66 @@ mod tests {
             result.expect_err("lifecycle transition should fail").code(),
             result_code
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pruning_keeps_only_the_active_version_of_a_package() {
+        let root = std::env::temp_dir().join(format!(
+            "fcitx5-package-prune-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos()
+        ));
+        let versions = root.join("versions");
+        let manifests = root.join("manifests");
+        for (id, version) in [
+            ("fcitx5-rime", "1.0.0"),
+            ("fcitx5-rime", "0.9.0"),
+            ("fcitx5-rime", "1.0.0.1"),
+            ("fcitx5-skk", "0.9.0"),
+        ] {
+            fs::create_dir_all(versions.join(id).join(version).join("bin"))
+                .expect("version directory should create");
+            fs::create_dir_all(manifests.join(id)).expect("manifest directory should create");
+            fs::write(manifests.join(id).join(format!("{version}.json")), "{}")
+                .expect("manifest should write");
+            fs::write(manifests.join(id).join(format!("{version}.sig.json")), "{}")
+                .expect("signature should write");
+        }
+        write_installed_lockfile_atomic(
+            &root,
+            &[lock_entry("fcitx5-rime", PackageLifecycleState::Enabled)],
+        )
+        .expect("lockfile should write");
+
+        prune_inactive_package_versions(&root, "fcitx5-rime").expect("pruning should succeed");
+        prune_inactive_package_versions(&root, "fcitx5-skk")
+            .expect("a package missing from the lockfile is left alone");
+
+        let names = |path: PathBuf| {
+            let mut names = fs::read_dir(path)
+                .expect("directory should read")
+                .map(|entry| {
+                    entry
+                        .expect("entry should read")
+                        .file_name()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect::<Vec<_>>();
+            names.sort();
+            names
+        };
+        assert_eq!(names(versions.join("fcitx5-rime")), ["1.0.0"]);
+        assert_eq!(
+            names(manifests.join("fcitx5-rime")),
+            ["1.0.0.json", "1.0.0.sig.json"]
+        );
+        assert_eq!(names(versions.join("fcitx5-skk")), ["0.9.0"]);
+        let _ = fs::remove_dir_all(&root);
     }
 
     fn lock_entry(id: &str, state: PackageLifecycleState) -> LockEntry {

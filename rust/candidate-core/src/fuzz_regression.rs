@@ -2,10 +2,6 @@
 
 use super::{valid_text, MAX_CANDIDATES, MAX_CANDIDATE_TEXT_UTF8};
 use crate::axis_layout::{self, CandidateLayoutOptions, OverflowBehavior, WritingMode};
-use crate::qingfeng::{
-    qingfeng_candidate_visual_plan, QingfengCandidateVisualInput, QingfengOrientation,
-    QingfengThemeMode,
-};
 use crate::renderer::{
     grapheme_clusters, horizontal_column_anchors, horizontal_run_plan_with_anchors,
     HorizontalColumnAnchors, HorizontalColumnInput,
@@ -43,12 +39,13 @@ impl Rng {
     }
 }
 
-fn candidate_fixture(
-    rng: &mut Rng,
-    iteration: usize,
-    index: usize,
-    selected: bool,
-) -> QingfengCandidateVisualInput {
+struct CandidateFixture {
+    label: String,
+    text: String,
+    comment: String,
+}
+
+fn candidate_fixture(rng: &mut Rng, iteration: usize, index: usize) -> CandidateFixture {
     let text = match (iteration + index + rng.below(10)) % 10 {
         0 => "alpha",
         1 => "你好",
@@ -68,13 +65,10 @@ fn candidate_fixture(
         2 => "annotation 注释".to_owned(),
         _ => "这是一个很长的候选注释 annotation".to_owned(),
     };
-    QingfengCandidateVisualInput {
+    CandidateFixture {
         label: format!("{}.", index + 1),
         text,
         comment,
-        selected,
-        show_label: true,
-        reserve_label: true,
     }
 }
 
@@ -88,7 +82,7 @@ fn deterministic_measure(value: &str, font_size: f32) -> (f32, f32) {
 }
 
 fn measured_candidate_size(
-    candidate: &QingfengCandidateVisualInput,
+    candidate: &CandidateFixture,
     anchors: HorizontalColumnAnchors,
     max_width: f32,
     dpi: f32,
@@ -268,96 +262,6 @@ fn check_axis_case(
     Ok(())
 }
 
-fn check_qingfeng_case(
-    orientation: QingfengOrientation,
-    inputs: &[QingfengCandidateVisualInput],
-    dpi_scale: f32,
-) -> Result<(), String> {
-    let plan = qingfeng_candidate_visual_plan(
-        orientation,
-        QingfengThemeMode::Light,
-        inputs,
-        24.0 * dpi_scale,
-        dpi_scale,
-    );
-    if !finite_rect(Rect {
-        left: plan.window.left,
-        top: plan.window.top,
-        right: plan.window.right,
-        bottom: plan.window.bottom,
-    }) || plan.items.len() != inputs.len()
-    {
-        return Err("Qingfeng plan has invalid window or item count".to_owned());
-    }
-    for (index, (input, item)) in inputs.iter().zip(&plan.items).enumerate() {
-        if item.label_text != input.label
-            || item.text != input.text
-            || item.comment != input.comment
-        {
-            return Err(format!(
-                "Qingfeng item {index} lost text label={:?}/{:?} text={:?}/{:?} comment={:?}/{:?}",
-                input.label, item.label_text, input.text, item.text, input.comment, item.comment
-            ));
-        }
-        check_text_clusters(&item.label_text)?;
-        check_text_clusters(&item.text)?;
-        check_text_clusters(&item.comment)?;
-        let item_rect = Rect {
-            left: item.item_rect.left,
-            top: item.item_rect.top,
-            right: item.item_rect.right,
-            bottom: item.item_rect.bottom,
-        };
-        let text_rect = Rect {
-            left: item.text_rect.left,
-            top: item.text_rect.top,
-            right: item.text_rect.right,
-            bottom: item.text_rect.bottom,
-        };
-        let window = Rect {
-            left: plan.window.left,
-            top: plan.window.top,
-            right: plan.window.right,
-            bottom: plan.window.bottom,
-        };
-        if !finite_rect(item_rect) || !inside(item_rect, window) || !inside(text_rect, item_rect) {
-            return Err("Qingfeng item/text rect escapes window".to_owned());
-        }
-        if let Some(comment) = item.comment_rect {
-            let comment_rect = Rect {
-                left: comment.left,
-                top: comment.top,
-                right: comment.right,
-                bottom: comment.bottom,
-            };
-            if !inside(comment_rect, item_rect) {
-                return Err("Qingfeng comment rect escapes item".to_owned());
-            }
-        }
-    }
-    for (index, left) in plan.items.iter().enumerate() {
-        for right in plan.items.iter().skip(index + 1) {
-            if overlaps(
-                Rect {
-                    left: left.item_rect.left,
-                    top: left.item_rect.top,
-                    right: left.item_rect.right,
-                    bottom: left.item_rect.bottom,
-                },
-                Rect {
-                    left: right.item_rect.left,
-                    top: right.item_rect.top,
-                    right: right.item_rect.right,
-                    bottom: right.item_rect.bottom,
-                },
-            ) {
-                return Err("Qingfeng items overlap".to_owned());
-            }
-        }
-    }
-    Ok(())
-}
-
 #[test]
 fn candidate_text_layout_property_fuzz_smoke() {
     assert!(valid_text(&vec![b'a'; MAX_CANDIDATE_TEXT_UTF8]));
@@ -374,9 +278,8 @@ fn candidate_text_layout_property_fuzz_smoke() {
         let page_size = 1 + rng.below(9);
         let dpi = [1.0, 1.25, 1.5, 2.0][rng.below(4)];
         let candidate_budget = rng.between(120.0, 360.0) * dpi;
-        let qingfeng_selected = selected.min(count.min(18) - 1);
         let candidate_inputs: Vec<_> = (0..count)
-            .map(|index| candidate_fixture(&mut rng, iteration, index, index == qingfeng_selected))
+            .map(|index| candidate_fixture(&mut rng, iteration, index))
             .collect();
         let column_inputs: Vec<_> = candidate_inputs
             .iter()
@@ -452,7 +355,7 @@ fn candidate_text_layout_property_fuzz_smoke() {
             right: (widest_item + rng.between(280.0, 980.0)).max(640.0),
             bottom: (tallest_item + rng.between(220.0, 720.0)).max(420.0),
         };
-        let layout_case = iteration % 10;
+        let layout_case = iteration % 7;
         // Every generated candidate must fit individually; overflow pressure
         // comes from the number of candidates, not an impossible split-glyph
         // input. This lets the bounds assertions prove full-candidate safety.
@@ -467,10 +370,7 @@ fn candidate_text_layout_property_fuzz_smoke() {
             3 => "vertical-scrolling",
             4 => "horizontal-wrapping",
             5 => "vertical-writing-rl",
-            6 => "vertical-writing-lr",
-            7 => "qingfeng-horizontal",
-            8 => "qingfeng-vertical",
-            _ => "qingfeng-grid",
+            _ => "vertical-writing-lr",
         };
 
         let result = match layout_case {
@@ -568,32 +468,6 @@ fn candidate_text_layout_property_fuzz_smoke() {
                 max_width,
                 max_height,
             ),
-            7..=9 => {
-                let inputs = &candidate_inputs[..count.min(18)];
-                for input in inputs {
-                    check_text_clusters(&input.text).unwrap_or_else(|error| {
-                        panic!(
-                            "seed=0x{SEED:016x} iteration={iteration} layout={layout_name} \
-                             page_size={page_size} selected={selected}: {error}"
-                        )
-                    });
-                    check_text_clusters(&input.comment).unwrap_or_else(|error| {
-                        panic!(
-                            "seed=0x{SEED:016x} iteration={iteration} layout={layout_name} \
-                             page_size={page_size} selected={selected}: {error}"
-                        )
-                    });
-                }
-                check_qingfeng_case(
-                    match layout_case {
-                        7 => QingfengOrientation::Horizontal,
-                        8 => QingfengOrientation::Vertical,
-                        _ => QingfengOrientation::Grid { columns: 3 },
-                    },
-                    inputs,
-                    dpi,
-                )
-            }
             _ => unreachable!(),
         };
         if let Err(error) = result {

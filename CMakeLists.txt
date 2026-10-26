@@ -371,7 +371,6 @@ add_custom_command(
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/frame_update.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/measure_ffi.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/presentation_server.rs"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/qingfeng.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/renderer.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/ui_plan.rs"
     "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/window_host.rs"
