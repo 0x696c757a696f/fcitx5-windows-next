@@ -1012,7 +1012,7 @@
     },
     {
       "name": "rust-crate-ordered-float",
-      "version": "5.5.0",
+      "version": "5.5.1",
       "source": "https://github.com/reem/rust-ordered-float",
       "license": "MIT"
     },
