@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -33,6 +34,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -161,11 +163,13 @@ EngineConfig readEngineConfig() {
     return config;
 }
 
-std::string startupAddonList(const EngineConfig& config) {
+std::string startupAddonList(const EngineConfig& config,
+                             const std::set<std::string>& packageAddons) {
     std::set<std::string> addons{
         "windowskeyboard", "pinyin",         "punctuation", "pinyinhelper",
         "chttrans",        "luaaddonloader", "imeapi",
     };
+    addons.insert(packageAddons.begin(), packageAddons.end());
     for (const auto& id : config.enabled) {
         if (id == "pinyin") {
             addons.insert("pinyin");
@@ -227,6 +231,53 @@ std::vector<std::filesystem::path> activePackageDirectories(const std::filesyste
         begin = end + 1;
     }
     return result;
+}
+
+bool validAddonName(std::string_view name) {
+    return !name.empty() && name.size() <= 64 && std::all_of(name.begin(), name.end(), [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+               c == '-' || c == '_';
+    });
+}
+
+// Fcitx starts with --disable=all, so an installed plugin only works if its addons are in the
+// --enable list: the addons it ships, and the addons its input methods run on (a table
+// package ships only input method files that use the bundled "table" addon).
+std::set<std::string> packageAddonNames() {
+    std::set<std::string> addons;
+    std::error_code error;
+    const auto confFiles = [&error](const std::filesystem::path& directory) {
+        std::vector<std::filesystem::path> files;
+        for (std::filesystem::directory_iterator it(directory, error), end; !error && it != end;
+             it.increment(error)) {
+            std::error_code entryError;
+            if (it->path().extension() == L".conf" && it->is_regular_file(entryError))
+                files.push_back(it->path());
+        }
+        error.clear();
+        return files;
+    };
+    for (const auto& prefix :
+         activePackageDirectories(localDataDirectory(), kActivePackagePrefixes)) {
+        const auto share = prefix / L"share" / L"fcitx5";
+        for (const auto& file : confFiles(share / L"addon")) {
+            if (const auto name = utf8Path(file.stem()); validAddonName(name))
+                addons.insert(name);
+        }
+        for (const auto& file : confFiles(share / L"inputmethod")) {
+            std::ifstream input(file);
+            std::string line;
+            for (int count = 0; count < 256 && std::getline(input, line); ++count) {
+                if (!line.empty() && line.back() == '\r')
+                    line.pop_back();
+                if (line.starts_with("Addon=") && validAddonName(line.substr(6))) {
+                    addons.insert(line.substr(6));
+                    break;
+                }
+            }
+        }
+    }
+    return addons;
 }
 
 bool setupEnvironment() {
@@ -874,7 +925,7 @@ bool FcitxRuntime::initialize(bool safeMode) {
             // and addons needed by the configured input methods/tests instead
             // of loading every bundled on-demand addon (for example Rime,
             // table, or spell) before the first TSF client can type.
-            enabledAddons = startupAddonList(impl_->config);
+            enabledAddons = startupAddonList(impl_->config, packageAddonNames());
         }
         arguments = {"fcitx5-engine", "--disable=all", "--enable=" + enabledAddons};
         std::vector<char*> argv;

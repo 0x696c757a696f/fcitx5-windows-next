@@ -129,11 +129,6 @@ foreach ($plugin in @($forkInventory.packages)) {
 
 $artifactRoot = Join-Path $packageRoot 'release-artifacts'
 $payloadRoot = Join-Path $packageRoot ('plugin-staging-' + [guid]::NewGuid().ToString('N'))
-$archiveName = "$($plugin.id)-$Version-$($plugin.architecture).fcpkg"
-$archive = Join-Path $artifactRoot $archiveName
-$manifestPath = Join-Path $payloadRoot 'manifest.json'
-$signaturePath = Join-Path $payloadRoot 'manifest.sig.json'
-$manifestRawSignaturePath = Join-Path $payloadRoot 'manifest.sig.raw'
 $indexPath = Join-Path $artifactRoot 'index.json'
 $indexSignaturePath = Join-Path $artifactRoot 'index.sig.json'
 $indexRawSignaturePath = Join-Path $payloadRoot 'index.sig.raw'
@@ -216,9 +211,6 @@ try {
     Compress-Archive -Path (Join-Path $pluginPayloadRoot '*') -DestinationPath $archive -CompressionLevel Optimal
     $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
     $assetBase = "https://github.com/0x696c757a696f/fcitx5-windows-next/releases/download/v$Version"
-    $generatedAt = [DateTimeOffset]::UtcNow
-    $expiresAt = $generatedAt.AddDays(7)
-    $targetCanonical = "$($plugin.id)`t$Version`t$ReleaseSequence`t$($plugin.architecture)`t$archiveHash`n"
     $indexPackages += [ordered]@{
       id = $plugin.id
       title = $plugin.title
@@ -268,16 +260,16 @@ try {
     'official-2026-mldsa65', 'mldsa65', $indexRawSignaturePath, $indexSignaturePath)
   Invoke-Checked $packageCli @('--verify-repository-v2', $indexPath, $indexSignaturePath,
     $TrustedKeyring, $Channel)
-   foreach ($archiveInfo in $archives) {
-     Invoke-Checked $packageCli @('--install', $archiveInfo.Archive, $verificationRoot,
-       "release-$($archiveInfo.Plugin.id)", $TrustedKeyring)
-   }
-   foreach ($path in @($archives | ForEach-Object { $_.Manifest; $_.Signature }) + @($indexPath, $indexSignaturePath)) {
+  foreach ($archiveInfo in $archives) {
+    Invoke-Checked $packageCli @('--install', $archiveInfo.Archive, $verificationRoot,
+      "release-$($archiveInfo.Plugin.id)", $TrustedKeyring)
+  }
+  foreach ($path in @($archives | ForEach-Object { $_.Manifest; $_.Signature }) + @($indexPath, $indexSignaturePath)) {
     if ((Get-Content -LiteralPath $path -Raw -Encoding UTF8) -match '(?i)(private_key|secret_key|seed_base64)') {
       throw "Private key marker found in generated metadata: $path"
     }
   }
-   Write-Host "Generated signed plugin packages and repository index: $artifactRoot"
+  Write-Host "Generated signed plugin packages and repository index: $artifactRoot"
 } finally {
   if (Test-Path -LiteralPath $payloadRoot) { Remove-Item -LiteralPath $payloadRoot -Recurse -Force }
   if (Test-Path -LiteralPath $verificationRoot) { Remove-Item -LiteralPath $verificationRoot -Recurse -Force }

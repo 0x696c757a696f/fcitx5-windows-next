@@ -265,9 +265,18 @@ impl PackageCoreFacade {
             request.mirror_id,
             request.now_seconds,
         );
-        let policy = previous.as_ref().map_or(policy, |repository| {
-            policy.for_refresh_after(repository.sequence())
-        });
+        // Refreshing again before a new index is published fetches the cached index unchanged.
+        // That is not a replay: verify it as the current cache (which still enforces expiry)
+        // instead of demanding a newer sequence.
+        let unchanged = previous.is_some()
+            && fs::read(self.repository_index_path()).is_ok_and(|cached| cached == index_bytes);
+        let policy = match previous.as_ref() {
+            Some(repository) if unchanged => {
+                policy.for_cached(repository.sequence(), repository.targets_sha256().as_str())
+            }
+            Some(repository) => policy.for_refresh_after(repository.sequence()),
+            None => policy,
+        };
         let repository = verify_repository_index_envelope_with_policy(
             &index_bytes,
             &envelope,
@@ -275,6 +284,12 @@ impl PackageCoreFacade {
             &policy,
         )
         .map_err(|error| PackageFacadeError::new(error.code(), error.to_string()))?;
+        if unchanged {
+            return Ok(RepositoryRefreshResult {
+                sequence: repository.sequence(),
+                package_count: repository.packages().len(),
+            });
+        }
         let release_sequence = maximum_release_sequence(&repository);
         if sequence.present && release_sequence < sequence.maximum {
             return Err(PackageFacadeError::new(

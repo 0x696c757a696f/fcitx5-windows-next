@@ -1318,6 +1318,18 @@ if(BUILD_TESTING)
         rust_safety_policy --target "${FCITX_RUST_TARGET}")
     set_tests_properties(
       rust-safety-policy PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    # Every crate's unit and integration tests; the targeted tests above only cover a few.
+    add_test(
+      NAME rust-workspace-tests
+      COMMAND
+        "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
+        "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
+        "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
+        "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" --workspace --exclude fcitx5-ipc-client --lib
+        --bins --tests --target "${FCITX_RUST_TARGET}" --no-fail-fast)
+    set_tests_properties(
+      rust-workspace-tests PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" TIMEOUT 3600)
     if(FCITX_RUST_TARGET STREQUAL "x86_64-pc-windows-msvc")
       add_test(
         NAME rust-clippy
