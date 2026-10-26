@@ -24,6 +24,7 @@
 #include <ShlObj.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <iterator>
 #include <memory>
@@ -36,10 +37,10 @@
 #include <utility>
 #include <vector>
 
-extern "C" std::size_t fcitx5_package_active_addon_dirs_utf16(const wchar_t* install_root,
-                                                              std::size_t install_root_len,
-                                                              wchar_t* output,
-                                                              std::size_t capacity);
+extern "C" std::size_t fcitx5_package_active_dirs_utf16(const wchar_t* install_root,
+                                                        std::size_t install_root_len,
+                                                        std::uint32_t kind, wchar_t* output,
+                                                        std::size_t capacity);
 
 namespace fcitx::windows::engine {
 namespace {
@@ -202,19 +203,30 @@ std::string utf8Path(const std::filesystem::path& path) {
                : std::string{};
 }
 
-std::string activePackageAddonDirectories(const std::filesystem::path& dataRoot) {
+constexpr std::uint32_t kActivePackagePrefixes = 0;
+constexpr std::uint32_t kActivePackageLibraryDirs = 1;
+
+std::vector<std::filesystem::path> activePackageDirectories(const std::filesystem::path& dataRoot,
+                                                            std::uint32_t kind) {
     const auto packageRoot = dataRoot / L"packages";
-    const std::size_t required = fcitx5_package_active_addon_dirs_utf16(
-        packageRoot.c_str(), packageRoot.native().size(), nullptr, 0);
+    const std::size_t required = fcitx5_package_active_dirs_utf16(
+        packageRoot.c_str(), packageRoot.native().size(), kind, nullptr, 0);
     if (required == 0)
         return {};
     std::wstring directories(required, L'\0');
-    if (fcitx5_package_active_addon_dirs_utf16(packageRoot.c_str(), packageRoot.native().size(),
-                                               directories.data(),
-                                               directories.size()) != directories.size()) {
+    if (fcitx5_package_active_dirs_utf16(packageRoot.c_str(), packageRoot.native().size(), kind,
+                                         directories.data(),
+                                         directories.size()) != directories.size()) {
         return {};
     }
-    return utf8Path(std::filesystem::path(directories));
+    std::vector<std::filesystem::path> result;
+    for (std::size_t begin = 0; begin <= directories.size();) {
+        const auto end = std::min(directories.find(L';', begin), directories.size());
+        if (end > begin)
+            result.emplace_back(directories.substr(begin, end - begin));
+        begin = end + 1;
+    }
+    return result;
 }
 
 bool setupEnvironment() {
@@ -254,12 +266,26 @@ bool setupEnvironment() {
     const auto models = utf8Path(root / "lib" / "libime");
     if (addon.empty() || share.empty() || data.empty() || models.empty())
         return false;
-    std::string addonDirectories = addon;
-    if (const auto activePackages = activePackageAddonDirectories(localDataDirectory());
-        !activePackages.empty()) {
-        addonDirectories.append(";").append(activePackages);
+    // Active packages each live in their own prefix. The patched Fcitx search
+    // paths append the prefixes' share and lib/fcitx5 directories after the
+    // built-in ones, and the addon packages' bin directories resolve the DLLs
+    // their addons import.
+    const auto dataRoot = localDataDirectory();
+    std::string packagePrefixes;
+    for (const auto& prefix : activePackageDirectories(dataRoot, kActivePackagePrefixes)) {
+        const auto value = utf8Path(prefix);
+        if (value.empty())
+            continue;
+        if (!packagePrefixes.empty())
+            packagePrefixes.push_back(';');
+        packagePrefixes.append(value);
     }
-    setEnvironment("FCITX_ADDON_DIRS", addonDirectories.c_str());
+    for (const auto& library : activePackageDirectories(dataRoot, kActivePackageLibraryDirs)) {
+        if (!addDirectory(library.c_str()))
+            return false;
+    }
+    setEnvironment("FCITX_ADDON_DIRS", addon.c_str());
+    setEnvironment("FCITX_PACKAGE_PREFIXES", packagePrefixes.c_str());
     setEnvironment("XDG_DATA_DIRS", share.c_str());
     setEnvironment("FCITX_DATA_DIRS", data.c_str());
     setEnvironment("LIBIME_MODEL_DIRS", models.c_str());
