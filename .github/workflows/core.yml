@@ -34,19 +34,15 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Restore Rust toolchain and target cache
+      - name: Restore Rust toolchain cache
         uses: actions/cache@v6
         with:
           path: |
             out/toolchains/rust/rustup-home
-            out/toolchains/rust/cargo-home/registry
-            out/toolchains/rust/cargo-home/git
             out/toolchains/rust/cargo-home/bin
-            out/toolchains/rust/target
-          key: ${{ runner.os }}-${{ matrix.architecture }}-rust-msvc-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'rust/**/Cargo.toml', 'tools/prepare-rust.ps1') }}
+          key: ${{ runner.os }}-rust-toolchain-${{ hashFiles('rust-toolchain.toml', 'tools/prepare-rust.ps1') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.architecture }}-rust-msvc-
-            ${{ runner.os }}-rust-msvc-
+            ${{ runner.os }}-rust-toolchain-
 
       - name: Install sccache compiler cache
         uses: Mozilla-Actions/sccache-action@v0.0.11
@@ -69,6 +65,17 @@ jobs:
       - name: Configure CI compiler cache
         shell: pwsh
         run: ./tools/configure-ci-cache.ps1
+
+      - name: Prepare pinned Rust toolchain
+        shell: pwsh
+        run: ./tools/prepare-rust.ps1
+
+      - name: Restore Rust dependency cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.architecture }}
+          workspaces: . -> out/toolchains/rust/target
+          cache-bin: false
 
       - name: Build, analyze, test, and run policy checks
         shell: pwsh
