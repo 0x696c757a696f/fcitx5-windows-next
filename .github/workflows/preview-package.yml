@@ -150,6 +150,11 @@ jobs:
       - name: Build, test, and stage the unsigned package
         run: ./tools/verify-product.ps1 package -Version 0.1.0 -Channel nightly
 
+      - name: Verify the pinned fork plugins against the staged runtime
+        run: |
+          $stage = (Get-Content -LiteralPath out/package/current-stage.txt -Raw).Trim()
+          ./tools/prepare-fork-plugins.ps1 -StageRoot $stage
+
       - name: Show compiler cache stats
         if: always()
         run: |

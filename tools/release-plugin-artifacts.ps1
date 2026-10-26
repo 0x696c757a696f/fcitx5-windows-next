@@ -6,7 +6,8 @@ param(
   [Parameter(Mandatory)] [string] $StageRoot,
   [Parameter(Mandatory)] [string] $TrustedKeyring,
   [Parameter(Mandatory)] [string] $SigningKey,
-  [string] $Signer = ''
+  [string] $Signer = '',
+  [string] $ForkPayloadRoot = ''
 )
 
 Set-StrictMode -Version Latest
@@ -81,6 +82,51 @@ foreach ($plugin in @($inventory.packages)) {
   }
 }
 
+# Each package source names its payload root, the payload paths relative to it,
+# and its provenance. Stage packages come from this repository's own build; fork
+# packages come from the pinned fcitx5-plugins release that
+# tools/prepare-fork-plugins.ps1 verified and laid out.
+$packageSources = @()
+foreach ($plugin in @($inventory.packages)) {
+  $packageSources += [pscustomobject]@{
+    Plugin = $plugin
+    Root = $stage
+    Payload = @($plugin.payload)
+    PathPattern = '^[a-z0-9][a-z0-9._/-]*$'
+    Repository = $plugin.source.repository
+    Commit = $plugin.source.commit
+    BuildScript = $plugin.build.script
+    MinOs = '6.1-sp1'
+    Permissions = @('native-code')
+  }
+}
+if ([string]::IsNullOrWhiteSpace($ForkPayloadRoot)) {
+  $ForkPayloadRoot = Join-Path $packageRoot 'fork-plugins'
+}
+$forkInventory = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fork-plugin-inventory.json') -Raw |
+  ConvertFrom-Json
+foreach ($plugin in @($forkInventory.packages)) {
+  if (@($inventory.packages.id) -contains $plugin.id) {
+    throw "Fork plugin $($plugin.id) duplicates a package this repository builds."
+  }
+  $forkRoot = Join-Path $ForkPayloadRoot $plugin.id
+  if (-not (Test-Path -LiteralPath $forkRoot -PathType Container)) {
+    throw "Prepared fork plugin payload is missing: $forkRoot. Run tools/prepare-fork-plugins.ps1 first."
+  }
+  $packageSources += [pscustomobject]@{
+    Plugin = $plugin
+    Root = $forkRoot
+    Payload = @(Get-ChildItem -LiteralPath $forkRoot -File -Recurse | Sort-Object FullName |
+      ForEach-Object { [IO.Path]::GetRelativePath($forkRoot, $_.FullName).Replace('\', '/') })
+    PathPattern = '^[A-Za-z0-9][A-Za-z0-9._/-]*$'
+    Repository = $forkInventory.repository
+    Commit = $forkInventory.commit
+    BuildScript = $forkInventory.build_script
+    MinOs = '10.0'
+    Permissions = @($(if ($plugin.type -eq 'addon') { 'native-code' } else { 'input-data' }))
+  }
+}
+
 $artifactRoot = Join-Path $packageRoot 'release-artifacts'
 $payloadRoot = Join-Path $packageRoot ('plugin-staging-' + [guid]::NewGuid().ToString('N'))
 $archiveName = "$($plugin.id)-$Version-$($plugin.architecture).fcpkg"
@@ -101,13 +147,17 @@ try {
   New-Item -ItemType Directory -Force -Path $artifactRoot, $payloadRoot | Out-Null
   $archives = @()
   $indexPackages = @()
-  foreach ($plugin in @($inventory.packages)) {
+  # Stage packages: foreach ($plugin in @($inventory.packages)); fork packages follow.
+  foreach ($packageSource in $packageSources) {
+    $plugin = $packageSource.Plugin
     $pluginPayloadRoot = Join-Path $payloadRoot $plugin.id
     New-Item -ItemType Directory -Force -Path $pluginPayloadRoot | Out-Null
     $manifestFiles = @()
-    foreach ($relative in @($plugin.payload)) {
-      if ($relative -notmatch '^[a-z0-9][a-z0-9._/-]*$') { throw "Unsafe inventory path: $relative" }
-      $source = Join-Path $stage $relative.Replace('/', '\')
+    foreach ($relative in @($packageSource.Payload)) {
+      if ($relative -notmatch $packageSource.PathPattern -or $relative.Contains('..')) {
+        throw "Unsafe inventory path: $relative"
+      }
+      $source = Join-Path $packageSource.Root $relative.Replace('/', '\')
       if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
         throw "Missing staged $($plugin.id) input: $relative"
       }
@@ -129,24 +179,24 @@ try {
       version = $Version
       type = $plugin.type
       architecture = $plugin.architecture
-      min_os = '6.1-sp1'
+      min_os = $packageSource.MinOs
       core_api = '1'
       addon_abi = '1'
       dependencies = @()
       license = $plugin.license
-      source_commit = $plugin.source.commit
+      source_commit = $packageSource.Commit
       runtime_abi = '1'
-      runtime_build = "$($plugin.source.commit)+$($plugin.build.script)"
+      runtime_build = "$($packageSource.Commit)+$($packageSource.BuildScript)"
       source = [ordered]@{
-        repository = $plugin.source.repository
-        commit = $plugin.source.commit
-        build_script = $plugin.build.script
+        repository = $packageSource.Repository
+        commit = $packageSource.Commit
+        build_script = $packageSource.BuildScript
       }
       data_policy = [ordered]@{
         program = 'versioned'
         user_data = 'durable'
       }
-      permissions = @('native-code')
+      permissions = @($packageSource.Permissions)
       payload = @($manifestFiles)
       key_id = 'official-2026-mldsa65'
     }
