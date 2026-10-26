@@ -17,7 +17,7 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-[Highlights](#-highlights) · [Candidate window](#-candidate-window) · [Architecture](#-architecture) · [Quick start](#-quick-start) · [Configuration](#-configuration) · [Docs](#-documentation) · [Sponsor](#-sponsor)
+[Highlights](#-highlights) · [Candidate window](#-candidate-window) · [Architecture](#-architecture) · [Quick start](#-quick-start) · [Configuration](#-configuration) · [Docs](#-documentation) · [Code signing](#-code-signing-policy) · [Sponsor](#-sponsor)
 
 </div>
 
@@ -194,6 +194,23 @@ The declared Windows compatibility matrix is not yet release-qualified across th
 - [`SECURITY.md`](SECURITY.md): security model and reporting
 - [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md): dependency notices
 - [`AGENTS.md`](AGENTS.md): contributor instructions
+
+## 🔏 Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+Only binaries built by this repository's GitHub Actions release workflow from its public source are signed: the installer, the portable ZIP, the executables and DLLs inside them, and the plugin packages built from [our fork of the Fcitx5 addons](https://github.com/0x696c757a696f/fcitx5-plugins).
+
+| Role | Members |
+| --- | --- |
+| Committers and reviewers | [@0x696c757a696f](https://github.com/0x696c757a696f) |
+| Approvers | [@0x696c757a696f](https://github.com/0x696c757a696f) |
+
+Every release signing request is approved manually by an approver.
+
+### Privacy
+
+This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. When you check for updates or install, update or refresh plugins, it downloads the release metadata and packages from GitHub Releases; GitHub's [privacy statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement) applies to those requests. Nothing you type is ever sent anywhere.
 
 ## 💖 Sponsor
 
