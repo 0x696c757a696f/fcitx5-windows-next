@@ -58,6 +58,7 @@ foreach ($path in $peFiles) {
     Copy-Item -LiteralPath $path -Destination $mirror -Force
   }
 }
+& (Join-Path $PSScriptRoot 'prepare-fork-plugins.ps1') -StageRoot $stage
 & (Join-Path $PSScriptRoot 'release-plugin-artifacts.ps1') `
   -Version $Version -Channel $Channel -ReleaseSequence $PluginReleaseSequence -StageRoot $stage `
   -TrustedKeyring $TrustedKeyring -SigningKey $PluginSigningKey

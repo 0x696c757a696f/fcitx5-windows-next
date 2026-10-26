@@ -1,0 +1,521 @@
+{
+  "format_version": 1,
+  "repository": "https://github.com/0x696c757a696f/fcitx5-plugins.git",
+  "release": "windows-20261026-69",
+  "commit": "b32d5a899a9fac2fb70160fd40ef0885654ea52a",
+  "build_script": ".github/workflows/windows.yml",
+  "archives": {
+    "anthy-any.tar.bz2": "a4526015c3a01f050de654066a7b7b4be44a8a6bbadfa88d81564ab4deffa746",
+    "anthy-x86_64.tar.bz2": "55f5cc33a1da7d856565a7247d8378db1e8687af6ee58f583877c5e37e6ad1b7",
+    "array-any.tar.bz2": "c0ec3f3e29e4414b32f7dda60d4fcda465671fc11f737cf98daeb81c479d7005",
+    "bamboo-any.tar.bz2": "70ee1335661557de297bb4268034c3866ea28179acfa4c1274909623886fcf42",
+    "bamboo-x86_64.tar.bz2": "4c55a1122913f22d2456407ff85dcbe2445ebd6a6731e5da225e31cecd758612",
+    "boshiamy-any.tar.bz2": "14786e9c0a8577de97e365170657cbb3a17a766b92054bb858a668aec14c4e06",
+    "cangjie-any.tar.bz2": "9808e4ebe295b0c312ea4c5fd56d427cff4f07be58770ccfa883f277d20fb1ce",
+    "cantonese-any.tar.bz2": "07bc17071790f8c52788c019e3956498ee9801f1fe736428e93462730c3044ed",
+    "chewing-any.tar.bz2": "9ee155cbb66a2bfdd92d54eaf78ffdc0bf8741082bd116890fbf772e3022d4ed",
+    "chewing-x86_64.tar.bz2": "c99c62c4ccc768c4357c5e598fcd0a0c6dabb5a6a74ec22f355517f57f26e2e5",
+    "cskk-any.tar.bz2": "03ae4facff32ca59aaac4be0f2a8f6184253f626c03ce5a673f16c021252f94a",
+    "cskk-x86_64.tar.bz2": "9aac1577061340d25ba5f88889a0f0d4e84cdbe561b3e277ea5e42049c3b0ea9",
+    "hallelujah-any.tar.bz2": "c6b548ed5d18e6b5cdeee9ad67976fb32592cf90940beaa0b8a0e5083615528a",
+    "hallelujah-x86_64.tar.bz2": "1f64279830afa8b086d28c4f708acba6a39ce0d9813e298a64fd186d26600905",
+    "hangul-any.tar.bz2": "c0b2fe681495a24ac5054ed7ae65888e528025a33427a2ddcce0b89f6277453b",
+    "hangul-x86_64.tar.bz2": "8392ea6bd7aec69a2a48c7cdb58c761b453386705a715d4ce07408e0549c76af",
+    "jyutping-any.tar.bz2": "c446e794a91c0b5bbd3d9a17dca5706f4756ac1a5dc4d37692762862f2803e9d",
+    "jyutping-x86_64.tar.bz2": "2e16dc20b0749eb63254f501b8860cc2899f36f627462897b224e6e6ecf87fba",
+    "keyman-any.tar.bz2": "6e41c295907a04b64de6d0ef1e643f8b1ded3874d91103d1f5f1ef3740c1d2c2",
+    "keyman-x86_64.tar.bz2": "231af4a3a702834c1ff3080c10c108991467f6f4e7d9214d919f9930703bb44a",
+    "kkc-any.tar.bz2": "127c5431fb4d0d0a1dde16b9b19be351fb0706de766fce8971ff167b1d5f1e90",
+    "kkc-x86_64.tar.bz2": "d0175f304a958d35c0dc7613e4ef2b607e918058eba7d22284da6ea6c15f475a",
+    "m17n-any.tar.bz2": "d129bd72868af6e897823f776198926ee3c07ce762502d63596a3dff47e471a9",
+    "m17n-x86_64.tar.bz2": "19e33c101af733d5e37221cca2017079e0cd623525a1b04d520227171165a179",
+    "mozc-any.tar.bz2": "811590248fe213962b0da547f131f230976f1674f6800886fa15f119cefebf4f",
+    "mozc-x86_64.tar.bz2": "19e0eea79550310821dea9e5328fd6acc78ac125511860538d56e5a51caa0c58",
+    "quick-any.tar.bz2": "61da5973555627f1d1640b649f755b94fd5ee83240b9da2fb0b665c13d594c0c",
+    "sayura-any.tar.bz2": "bfa263b45967b7bc23a2ceda6404c1bf0165284ad5776f5e67666dd98171e003",
+    "sayura-x86_64.tar.bz2": "9a651bf3a23ff1f8521e920f0fe4f560b6a5bac32d80e2ff25df4cbc6f0873cf",
+    "skk-any.tar.bz2": "d1430953e9dc8e7e14d7696fe4c7a898afce1a33d6a770ee70f79f87266ba924",
+    "skk-x86_64.tar.bz2": "88c8ab045fe3ab1fa352eb9a4cf02cdae61e4f636e0871d577e1614459122146",
+    "stroke-any.tar.bz2": "5773f20de96431cf2879df4057a3114ab49e9d80daa31e79fd8b0b42ebaf1769",
+    "table-amharic-any.tar.bz2": "20a3f857de095402584c4a7355d1e1ec0f1d35576d24253db15b8587543d2add",
+    "table-arabic-any.tar.bz2": "78e69e77ccbc0501dd3a382b0b5233ad1bc2a914ff8d9bb5747faa303f556f8b",
+    "table-cns11643-any.tar.bz2": "74a565c5206fe87d2a89199884d8adbd29a2fcfc659ceda8e207aff6a10eae0d",
+    "table-compose-any.tar.bz2": "d6ccb82ff40878081ceb3206943e3d742f60e34eecfbe417d27e3ab00489710f",
+    "table-emoji-any.tar.bz2": "c540b1a5f10883b90d7c1c9166ef66b29478f7081dd18b9dab5fd41c51175b62",
+    "table-ipa-x-sampa-any.tar.bz2": "32f3c105adac0b7f7f42c6b5cb28176008c748a2c0a991dfc759a62f68e496c3",
+    "table-latex-any.tar.bz2": "fe150d864c566cc654153fb508a36bfb01fe281dd14e6772a634598da66ba74e",
+    "table-malayalam-phonetic-any.tar.bz2": "3b69e37b956f4079eaadb16dd7cab8ac7d79ca9e460b07b921612cdff381125f",
+    "table-rustrad-any.tar.bz2": "fcda8bafa1e66a21c8310a1e34b0761be8dd62d521ab37a3ae78c5ce7c2ab8a6",
+    "table-tamil-remington-any.tar.bz2": "44c8e720a3aa4afeb20dd33afc6d3370333d82e02e41e8b706dcbe1a88d5b6bf",
+    "table-thai-any.tar.bz2": "a1cef6945981a61cef2490cfb01033ed556d3c5cf8de1b7adcae4882a48fee0d",
+    "table-translit-any.tar.bz2": "5bc4cc46e324a594b4204d60d7e569a7682098b1fd4122a7e453b5d960c925bf",
+    "table-translit-ua-any.tar.bz2": "35954fbb7dc73ec5988f54ffc03fe0d11f10f64d1bf184c52303c1d8f8ebfe1a",
+    "table-viqr-any.tar.bz2": "0210558580ad1b96967756261e6a667bfab71a7b4319e78b35ed170cbc442189",
+    "table-yawerty-any.tar.bz2": "5ef66863cd83c81836e9973b288e6f0c693dab42b88896c73d34afc546cec4d1",
+    "thai-any.tar.bz2": "94bf5fd670a067dd1e64a020b5805acf2ffec7ca8897dcff9ebea8f33b18ac03",
+    "thai-x86_64.tar.bz2": "d0e53bc631bcf04545c7d27b910b78287ce1d486456e91a0d2644215a52bd390",
+    "wu-any.tar.bz2": "6afdaca55ffcd0959cc045993d7e220e80c8eef6eaa0b7a738e3bc3745c4ecf7",
+    "wubi86-any.tar.bz2": "9286be89f877191ce5e8effc96a7829fa78decb25e27937727330d3ca17f9503",
+    "wubi98-any.tar.bz2": "97dcc77ed5b7b3efd4a7afd6e88299ec2de4167935f829b390498fd28691bf25",
+    "zhengma-any.tar.bz2": "4bb54a00f565c6e65abaacff6953e0416987a242c493750660e75af1d98b53ff",
+    "zhuyin-any.tar.bz2": "70596c8afbf68be5c2ca8d915a33320476feaa032aeff582e5d93409e0bc1027",
+    "zhuyin-x86_64.tar.bz2": "825c4d51703d4f93f93e6837c6c70ab1cf6eda14e7b75caa5710573cc1ed507f"
+  },
+  "packages": [
+    {
+      "id": "fcitx5-anthy",
+      "title": "Anthy",
+      "summary": "Japanese input method",
+      "type": "addon",
+      "architecture": "x64",
+      "license": "GPL-2.0-or-later",
+      "archives": [
+        "anthy-x86_64.tar.bz2",
+        "anthy-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-bamboo",
+      "title": "Bamboo",
+      "summary": "Vietnamese input method",
+      "type": "addon",
+      "architecture": "x64",
+      "license": "LGPL-2.1-or-later",
+      "archives": [
+        "bamboo-x86_64.tar.bz2",
+        "bamboo-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-chewing",
+      "title": "Chewing",
+      "summary": "Traditional Chinese Zhuyin input method",
+      "type": "addon",
+      "architecture": "x64",
+      "license": "LGPL-2.1-or-later",
+      "archives": [
+        "chewing-x86_64.tar.bz2",
+        "chewing-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-cskk",
+      "title": "CSKK",
+      "summary": "Japanese SKK input method based on libcskk",
+      "type": "addon",
+      "architecture": "x64",
+      "license": "GPL-3.0-or-later",
+      "archives": [
+        "cskk-x86_64.tar.bz2",
+        "cskk-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-hallelujah",
+      "title": "Hallelujah",
+      "summary": "English input method with word suggestions",
+      "type": "addon",
+      "architecture": "x64",
+      "license": "GPL-3.0-only",
+      "archives": [
+        "hallelujah-x86_64.tar.bz2",
+        "hallelujah-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-hangul",
+      "title": "Hangul",
+      "summary": "Korean input method",
+      "type": "addon",
+      "architecture": "x64",
+      "license": "LGPL-2.1-or-later",
+      "archives": [
+        "hangul-x86_64.tar.bz2",
+        "hangul-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-jyutping",
+      "title": "Jyutping",
+      "summary": "Cantonese input method",
+      "type": "addon",
+      "architecture": "x64",
+      "license": "LGPL-2.1-or-later",
+      "archives": [
+        "jyutping-x86_64.tar.bz2",
+        "jyutping-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-keyman",
+      "title": "Keyman",
+      "summary": "Keyman keyboard layouts",
+      "type": "addon",
+      "architecture": "x64",
+      "license": "GPL-2.0-or-later",
+      "archives": [
+        "keyman-x86_64.tar.bz2",
+        "keyman-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-kkc",
+      "title": "KKC",
+      "summary": "Japanese Kana Kanji input method",
+      "type": "addon",
+      "architecture": "x64",
+      "license": "GPL-3.0-or-later",
+      "archives": [
+        "kkc-x86_64.tar.bz2",
+        "kkc-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-m17n",
+      "title": "M17N",
+      "summary": "Multilingual input methods from m17n",
+      "type": "addon",
+      "architecture": "x64",
+      "license": "LGPL-2.1-or-later",
+      "archives": [
+        "m17n-x86_64.tar.bz2",
+        "m17n-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-mozc",
+      "title": "Mozc",
+      "summary": "Japanese input method",
+      "type": "addon",
+      "architecture": "x64",
+      "license": "BSD-3-Clause",
+      "archives": [
+        "mozc-x86_64.tar.bz2",
+        "mozc-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-sayura",
+      "title": "Sayura",
+      "summary": "Sinhala input method",
+      "type": "addon",
+      "architecture": "x64",
+      "license": "GPL-2.0-or-later",
+      "archives": [
+        "sayura-x86_64.tar.bz2",
+        "sayura-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-skk",
+      "title": "SKK",
+      "summary": "Japanese SKK input method",
+      "type": "addon",
+      "architecture": "x64",
+      "license": "GPL-3.0-or-later",
+      "archives": [
+        "skk-x86_64.tar.bz2",
+        "skk-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-thai",
+      "title": "Thai",
+      "summary": "Thai input method based on libthai",
+      "type": "addon",
+      "architecture": "x64",
+      "license": "GPL-2.0-or-later",
+      "archives": [
+        "thai-x86_64.tar.bz2",
+        "thai-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-zhuyin",
+      "title": "Zhuyin",
+      "summary": "Traditional Chinese Zhuyin input method based on libzhuyin",
+      "type": "addon",
+      "architecture": "x64",
+      "license": "GPL-2.0-or-later",
+      "archives": [
+        "zhuyin-x86_64.tar.bz2",
+        "zhuyin-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-array",
+      "title": "Array 30",
+      "summary": "Chinese table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-or-later",
+      "archives": [
+        "array-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-boshiamy",
+      "title": "Boshiamy",
+      "summary": "Chinese table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-or-later",
+      "archives": [
+        "boshiamy-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-cangjie",
+      "title": "Cangjie",
+      "summary": "Chinese table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-or-later",
+      "archives": [
+        "cangjie-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-cantonese",
+      "title": "Cantonese",
+      "summary": "Chinese table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-or-later",
+      "archives": [
+        "cantonese-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-quick",
+      "title": "Quick",
+      "summary": "Chinese table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-or-later",
+      "archives": [
+        "quick-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-stroke",
+      "title": "Stroke",
+      "summary": "Chinese table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-or-later",
+      "archives": [
+        "stroke-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-wu",
+      "title": "Wu",
+      "summary": "Chinese table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-or-later",
+      "archives": [
+        "wu-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-wubi86",
+      "title": "Wubi 86",
+      "summary": "Chinese table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-or-later",
+      "archives": [
+        "wubi86-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-wubi98",
+      "title": "Wubi 98",
+      "summary": "Chinese table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-or-later",
+      "archives": [
+        "wubi98-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-zhengma",
+      "title": "Zhengma",
+      "summary": "Chinese table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-or-later",
+      "archives": [
+        "zhengma-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-amharic",
+      "title": "Amharic",
+      "summary": "Table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-only",
+      "archives": [
+        "table-amharic-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-arabic",
+      "title": "Arabic",
+      "summary": "Table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-only",
+      "archives": [
+        "table-arabic-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-cns11643",
+      "title": "CNS 11643",
+      "summary": "Table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-only",
+      "archives": [
+        "table-cns11643-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-compose",
+      "title": "Compose",
+      "summary": "Table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-only",
+      "archives": [
+        "table-compose-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-emoji",
+      "title": "Emoji",
+      "summary": "Table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-only",
+      "archives": [
+        "table-emoji-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-ipa-x-sampa",
+      "title": "IPA (X-SAMPA)",
+      "summary": "Table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-only",
+      "archives": [
+        "table-ipa-x-sampa-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-latex",
+      "title": "LaTeX",
+      "summary": "Table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-only",
+      "archives": [
+        "table-latex-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-malayalam-phonetic",
+      "title": "Malayalam Phonetic",
+      "summary": "Table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-only",
+      "archives": [
+        "table-malayalam-phonetic-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-rustrad",
+      "title": "Russian Traditional",
+      "summary": "Table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-only",
+      "archives": [
+        "table-rustrad-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-tamil-remington",
+      "title": "Tamil Remington",
+      "summary": "Table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-only",
+      "archives": [
+        "table-tamil-remington-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-thai",
+      "title": "Thai Table",
+      "summary": "Table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-only",
+      "archives": [
+        "table-thai-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-translit",
+      "title": "Russian Transliteration",
+      "summary": "Table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-only",
+      "archives": [
+        "table-translit-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-translit-ua",
+      "title": "Ukrainian Transliteration",
+      "summary": "Table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-only",
+      "archives": [
+        "table-translit-ua-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-viqr",
+      "title": "Vietnamese VIQR",
+      "summary": "Table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-only",
+      "archives": [
+        "table-viqr-any.tar.bz2"
+      ]
+    },
+    {
+      "id": "fcitx5-table-yawerty",
+      "title": "Yawerty",
+      "summary": "Table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "license": "GPL-3.0-only",
+      "archives": [
+        "table-yawerty-any.tar.bz2"
+      ]
+    }
+  ]
+}
