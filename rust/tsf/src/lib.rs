@@ -3952,6 +3952,16 @@ mod tests {
         IS_CHAT, IS_DEFAULT, IS_EMAIL_SMTPEMAILADDRESS, IS_NUMBER, IS_SEARCH, IS_URL,
     };
 
+    // Tests that hold COM objects or read the module reference count share
+    // process-wide state, so they must not run concurrently.
+    static MODULE_STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_module_state() -> std::sync::MutexGuard<'static, ()> {
+        MODULE_STATE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn panic_boundary_converts_unwind_to_hresult() {
         let result = panic_to_hresult(|| panic!("forced TSF panic boundary regression"));
@@ -4044,6 +4054,7 @@ mod tests {
 
     #[test]
     fn dll_exports_fail_closed_without_object_on_unsupported_class() {
+        let _module_state = lock_module_state();
         let unsupported = GUID::from_u128(0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee);
         let mut object = std::ptr::dangling_mut::<c_void>();
         // SAFETY: both GUID references are aligned immutable values, and
@@ -4055,6 +4066,7 @@ mod tests {
 
     #[test]
     fn dll_exports_are_panic_contained_and_unloadable() {
+        let _module_state = lock_module_state();
         // SAFETY: this export has no arguments and only reads module state.
         assert_eq!(unsafe { DllCanUnloadNow() }, S_OK);
         // SAFETY: the class and IID references are aligned immutable values;
@@ -4071,6 +4083,7 @@ mod tests {
 
     #[test]
     fn rust_factory_creates_minimal_tsf_service_interfaces() {
+        let _module_state = lock_module_state();
         assert_eq!(module_reference_count(), 0);
         let mut factory_object = null_mut();
         // SAFETY: the CLSID/IID references are aligned immutable values and
@@ -4177,6 +4190,7 @@ mod tests {
 
     #[test]
     fn service_lifecycle_callbacks_mutate_and_cleanup_domain_state() {
+        let _module_state = lock_module_state();
         let service = Fcitx5TsfService::new();
         service.activate_for_test();
         let activated = service.lifecycle_state_for_test();
@@ -4514,6 +4528,7 @@ mod tests {
 
     #[test]
     fn module_unload_uses_refcounted_s_false() {
+        let _module_state = lock_module_state();
         module_add_ref();
         // SAFETY: this export has no arguments and only reads module state.
         assert_eq!(unsafe { DllCanUnloadNow() }, S_FALSE);

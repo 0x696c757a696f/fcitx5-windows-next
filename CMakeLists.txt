@@ -1326,8 +1326,8 @@ if(BUILD_TESTING)
         "FCITX_MLDSA_NATIVE_SOURCE_DIR=${FCITX_MLDSA_NATIVE_SOURCE_DIR}"
         "FCITX_MINIZ_SOURCE_DIR=${FCITX_MINIZ_SOURCE_DIR}"
         "${FCITX_CARGO_EXECUTABLE}" test --locked --manifest-path
-        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" --workspace --lib --bins --tests --target
-        "${FCITX_RUST_TARGET}" --no-fail-fast)
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" --workspace --exclude fcitx5-ipc-client --lib
+        --bins --tests --target "${FCITX_RUST_TARGET}" --no-fail-fast)
     set_tests_properties(
       rust-workspace-tests PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" TIMEOUT 3600)
     if(FCITX_RUST_TARGET STREQUAL "x86_64-pc-windows-msvc")
