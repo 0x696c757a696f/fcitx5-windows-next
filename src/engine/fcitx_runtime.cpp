@@ -1186,8 +1186,11 @@ RuntimeResult FcitxRuntime::selectCandidate(std::uint32_t targetProcessId,
     if (index >= static_cast<std::size_t>(std::clamp(count, 0, kMaximumCandidateViews))) {
         throw std::invalid_argument("candidate selection index is invalid");
     }
-    const auto& candidate = bulk ? bulk->candidateFromAll(static_cast<int>(index))
-                                 : candidateList->candidate(static_cast<int>(index));
+    // Rime's bulk list has no real bulk API (totalSize() < 0) and reports
+    // page-local candidates, as collectResult and processKey assume.
+    const auto& candidate = bulk && bulk->totalSize() >= 0
+                                ? bulk->candidateFromAll(static_cast<int>(index))
+                                : candidateList->candidate(static_cast<int>(index));
     candidate.select(&context);
     (void)fcitx5_engine_core_clear_selected_override(impl_->ledger.get(), &ledgerKey);
     RuntimeResult output = impl_->collectResult(found->first, context, true);
