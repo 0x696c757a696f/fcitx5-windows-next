@@ -6,6 +6,7 @@
 
 <p>One system-level TSF entry, the full Fcitx5 Core and addon ecosystem behind it,<br>and a native candidate window, settings and package manager written in Rust.</p>
 
+[![Release](https://img.shields.io/github/v/release/0x696c757a696f/fcitx5-windows-next?include_prereleases&sort=semver&style=for-the-badge&logo=github&label=release&color=07C160)](https://github.com/0x696c757a696f/fcitx5-windows-next/releases)
 [![Core CI](https://img.shields.io/github/actions/workflow/status/0x696c757a696f/fcitx5-windows-next/core.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=Core%20CI)](https://github.com/0x696c757a696f/fcitx5-windows-next/actions/workflows/core.yml)
 [![Developer Preview](https://img.shields.io/badge/status-Developer%20Preview-F97316?style=for-the-badge)](#-status)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-3B82F6?style=for-the-badge)](LICENSE)
@@ -14,15 +15,18 @@
 [![Rust](https://img.shields.io/badge/Rust-1.99-B7410E?style=flat-square&logo=rust&logoColor=white)](rust-toolchain.toml)
 [![Arch](https://img.shields.io/badge/arch-x64%20%7C%20x86%20%7C%20ARM64-6E56CF?style=flat-square)](#-build-from-source)
 [![Fcitx5](https://img.shields.io/badge/engine-Fcitx5%20Core-2EA043?style=flat-square)](https://github.com/fcitx/fcitx5)
+[![Downloads](https://img.shields.io/github/downloads/0x696c757a696f/fcitx5-windows-next/total?style=flat-square&logo=github&label=downloads&color=0F766E)](https://github.com/0x696c757a696f/fcitx5-windows-next/releases)
 
 **English** · [简体中文](README.zh-CN.md)
 
-[Highlights](#-highlights) · [Candidate window](#-candidate-window) · [Architecture](#-architecture) · [Quick start](#-quick-start) · [Configuration](#-configuration) · [Docs](#-documentation) · [Code signing](#-code-signing-policy) · [Sponsor](#-sponsor)
+<a href="https://github.com/0x696c757a696f/fcitx5-windows-next/releases"><img src="https://img.shields.io/badge/Download-Installer%20%7C%20Portable-07C160?style=for-the-badge&logo=windows11&logoColor=white" alt="Download" height="40"></a>
+
+[Highlights](#-highlights) · [Candidate window](#-candidate-window) · [Download](#-download-and-install) · [Architecture](#-architecture) · [Configuration](#-configuration) · [Build](#-build-from-source) · [Code signing](#-code-signing-policy) · [Sponsor](#-sponsor)
 
 </div>
 
 > [!WARNING]
-> **Developer Preview:** This project is for development and evaluation. Local builds and automated tests do not by themselves establish release readiness. See [Status](#-status).
+> **Developer Preview:** built for development and evaluation, and not yet through every release gate. See [Status](#-status).
 
 ## ✨ Highlights
 
@@ -71,7 +75,15 @@ Plugins and updates activate transactionally and can roll back. Repository verif
 
 ## 🎯 Candidate window
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/candidate-layouts-dark.svg">
+  <img src="docs/assets/candidate-layouts-light.svg" alt="Candidate window in the scroll, stacked and vertical_text layouts" width="100%">
+</picture>
+
 Candidate semantics, model and layout are implemented in Rust; Fcitx remains the single source of input semantics.
+
+<details>
+<summary><b>All layouts and label styles</b></summary>
 
 | Layout | `layout_type` | Behavior |
 | :-- | :-- | :-- |
@@ -82,6 +94,31 @@ Candidate semantics, model and layout are implemented in Rust; Fcitx remains the
 | Vertical text | `vertical_text` | Vertically written candidates, columns right-to-left or left-to-right |
 
 Label styles: `plain`, `dot`, `paren`, `bracket`, `circled`. They change only the look, never the selection keys.
+
+</details>
+
+## 📥 Download and install
+
+Get the files from [**Releases**](https://github.com/0x696c757a696f/fcitx5-windows-next/releases). Windows 10 / 11, x64; 32-bit applications are supported too.
+
+| File | What it is | Pick it if |
+| :-- | :-- | :-- |
+| `fcitx5-windows-<version>-setup.exe` | **Installer** (recommended). Installs to `Program Files\Fcitx5` and registers the input method. | You want a normal install |
+| `fcitx5-windows-<version>-portable.zip` | **Portable build.** Extract anywhere and run `Start Fcitx5.exe`; settings stay in that folder. | You want to try it without installing |
+| `*.fcpkg` | **Plugins** such as Rime, Mozc, Chewing and Wubi. | You do not need to download these: install them from **Fcitx5 Settings → Add-ons & Extensions** |
+
+Every release page lists each file, including the plugin catalog and the signature, SBOM and provenance files, with what it is for and how to verify it.
+
+1. Run the installer, or extract the portable ZIP and start `Start Fcitx5.exe` (it asks once for administrator approval to register the input method).
+2. Switch to **Fcitx5** with <kbd>Win</kbd> + <kbd>Space</kbd>.
+3. Open **Fcitx5 Settings** to add input methods, install plugins and pick a theme.
+
+<details>
+<summary><b>Preview builds from <code>main</code></b></summary>
+
+Every push to `main` runs the [Preview Package](https://github.com/0x696c757a696f/fcitx5-windows-next/actions/workflows/preview-package.yml) workflow; its developer-preview packages are attached to each run as artifacts. They are unsigned and meant for testing.
+
+</details>
 
 ## 🧭 Architecture
 
@@ -106,13 +143,40 @@ flowchart TB
 
 Settings, package management, updates and downloads live outside the live input path. They do not receive live keystrokes, preedit text, candidate state or commit history from input sessions.
 
-## 🚀 Quick start
+## 📝 Configuration
 
-### Download a preview build
+User settings are a commented TOML file; anything you leave out inherits from the current theme. Settings writes the same file, so you rarely need to edit it by hand.
 
-Every push to `main` runs the [Preview Package](https://github.com/0x696c757a696f/fcitx5-windows-next/actions/workflows/preview-package.yml) workflow; developer-preview packages are attached to each run as artifacts. There is no official release yet.
+<details>
+<summary><b>Example <code>config.toml</code></b></summary>
 
-### 🔧 Build from source
+See [`resources/config.toml`](resources/config.toml) for every option.
+
+```toml
+[appearance]
+mode = "system"            # system | light | dark, applied live
+
+[candidate]
+layout_type = "scroll"     # automatic | stacked | flow | scroll | vertical_text
+scroll_direction = "horizontal"
+page_size = 5              # 1–9
+opacity = 1.0              # 0.20–1.00
+preedit_mode = "inline"    # inline (in the app) | panel (top of candidate window)
+
+[candidate.label]
+style = "dot"              # plain | dot | paren | bracket | circled
+
+[fonts.candidate]
+families = ["Microsoft YaHei", "system"]
+size_dip = 18.0
+```
+
+</details>
+
+## 🔧 Build from source
+
+<details>
+<summary><b>Requirements and commands</b></summary>
 
 Requirements:
 
@@ -136,47 +200,26 @@ Produce local release-shaped packages (x64, x86, ARM64):
 
 This produces local package artifacts; it is not equivalent to the protected signing and publication release gate.
 
-## 🛠️ Configuration
-
-User settings are a commented TOML file; anything you leave out inherits from the current theme. See [`resources/config.toml`](resources/config.toml) for the full example.
-
-```toml
-[appearance]
-mode = "system"            # system | light | dark, applied live
-
-[candidate]
-layout_type = "scroll"     # automatic | stacked | flow | scroll | vertical_text
-scroll_direction = "horizontal"
-page_size = 5              # 1–9
-opacity = 1.0              # 0.20–1.00
-preedit_mode = "inline"    # inline (in the app) | panel (top of candidate window)
-
-[candidate.label]
-style = "dot"              # plain | dot | paren | bracket | circled
-
-[fonts.candidate]
-families = ["Microsoft YaHei", "system"]
-size_dip = 18.0
-```
+</details>
 
 ## 🧪 Status
 
-The codebase has substantial automated and local verification, and a current-HEAD portable package can be built locally. It is still behind the release evidence gates.
+Releases are published as pre-releases while the remaining release evidence is collected.
 
 <details>
-<summary><b>What local tests alone do not establish</b></summary>
+<summary><b>What automated tests alone do not establish</b></summary>
 
 - real-host typing, accessibility, or UAC/install lifecycle;
-- protected production signing or publication;
+- protected production signing;
 - the online package/plugin lifecycle;
-- the declared Windows compatibility matrix;
-- CI and release evidence.
+- the declared Windows compatibility matrix.
 
 The declared Windows compatibility matrix is not yet release-qualified across the required real-host environments. See [`docs/host-compatibility-matrix-2026-08-20.md`](docs/host-compatibility-matrix-2026-08-20.md) for the evidence record.
 
 </details>
 
-## 📁 Repository layout
+<details>
+<summary><b>Repository layout and documentation</b></summary>
 
 | Path | Contents |
 | :-- | :-- |
@@ -186,14 +229,14 @@ The declared Windows compatibility matrix is not yet release-qualified across th
 | [`tools/`](tools) | Bootstrap, build, test, package and release tooling |
 | [`docs/`](docs) | Contracts, verification matrices and engineering evidence |
 
-## 📚 Documentation
-
 - [`docs/current.md`](docs/current.md): current implementation and evidence truth
 - [`docs/product-contract.md`](docs/product-contract.md): product and architecture contract
 - [`docs/tasks/current.md`](docs/tasks/current.md): current bounded task
 - [`SECURITY.md`](SECURITY.md): security model and reporting
 - [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md): dependency notices
 - [`AGENTS.md`](AGENTS.md): contributor instructions
+
+</details>
 
 ## 🔏 Code signing policy
 
@@ -216,6 +259,11 @@ This program will not transfer any information to other networked systems unless
 
 If this project is useful to you, donations help cover build machines, test devices and development time.
 
+**Ethereum and EVM chains** (ETH or the chain's native coin, USDC, USDT): `0x619FeeF5986b9ed8E75D7CFD67AdB575355b9F80`
+
+<details>
+<summary><b>All networks and addresses</b></summary>
+
 | Network | Assets | Address |
 | --- | --- | --- |
 | **Ethereum and EVM chains**<br><sub>Ethereum, Arbitrum One, Base, Optimism, Polygon, BNB Smart Chain</sub> | ETH or the chain's native coin, USDC, USDT | `0x619FeeF5986b9ed8E75D7CFD67AdB575355b9F80` |
@@ -225,6 +273,8 @@ If this project is useful to you, donations help cover build machines, test devi
 | **Bitcoin · Legacy** | BTC | `123mpbi91xQitVkh9oosY4VczFqJB9kjDQ` |
 | **TRON (TRC-20)** | USDT | `TBHXcP2ReM5sqpRDTyrL1UWtcSmYeyrmnB` |
 | **Solana (SPL)** | USDT | `4s6uaauKCgwSNVzb5Lq1kxUe9dpm8V64D6FPw7hTwrQ6` |
+
+</details>
 
 > [!CAUTION]
 > The EVM address is the same on every chain listed in its row; each other address only works on its own network. Pick the same network in your wallet or exchange before sending: assets sent on any other network may be lost. Any of the four Bitcoin addresses can receive BTC; use whichever format your wallet supports. Check that the address matches character for character before confirming.

@@ -1,0 +1,71 @@
+name: Release Notes
+
+# Rewrites the asset guide at the top of an existing release's notes with
+# tools/write-release-notes.ps1, keeping the generated change list below it.
+# Use it after the guide changes, or for releases published before it existed.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, for example v0.1.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  rewrite:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the notes script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Rewrite the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ($env:TAG -notmatch '^v(\d+\.\d+\.\d+)$') { throw "Not a release tag: $env:TAG" }
+          $version = $Matches[1]
+          $release = & gh api "repos/${{ github.repository }}/releases/tags/$env:TAG" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "No release for $env:TAG." }
+
+          # The script reads only names and sizes, so empty files of the
+          # published sizes stand in for the assets.
+          $mirror = Join-Path $env:RUNNER_TEMP 'release-assets'
+          New-Item -ItemType Directory -Force -Path $mirror | Out-Null
+          foreach ($asset in $release.assets) {
+            $stream = [IO.File]::Create((Join-Path $mirror $asset.name))
+            try { $stream.SetLength([long] $asset.size) } finally { $stream.Dispose() }
+          }
+          $names = @($release.assets | ForEach-Object name)
+          $channel = 'stable'
+          foreach ($candidate in @('beta', 'nightly')) {
+            if ($names -contains "fcitx5-windows-$version-$candidate-setup.exe") { $channel = $candidate }
+          }
+          # Releases signed with Authenticode also carry a CMS signature of the manifest.
+          $suffix = if ($channel -eq 'stable') { '' } else { "-$channel" }
+          $withoutAuthenticode = $names -notcontains "release-manifest-$version$suffix.json.p7s"
+
+          $notes = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          ./tools/write-release-notes.ps1 -ArtifactDirectory $mirror -Version $version `
+            -Channel $channel -WithoutAuthenticode:$withoutAuthenticode `
+            -Repository '${{ github.repository }}' -OutputPath $notes
+
+          # Keep GitHub's generated change list, which starts at its first heading.
+          $body = [string] $release.body
+          $changes = [regex]::Match($body, "(?m)^## What's Changed")
+          if ($changes.Success) {
+            Add-Content -LiteralPath $notes -Value ("`n" + $body.Substring($changes.Index).Trim()) -NoNewline
+          }
+          & gh release edit $env:TAG -R '${{ github.repository }}' --notes-file $notes
+          if ($LASTEXITCODE -ne 0) { throw "Could not update the notes of $env:TAG." }

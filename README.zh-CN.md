@@ -6,6 +6,7 @@
 
 <p>一个系统级 TSF 入口，背后是完整的 Fcitx5 Core 与插件生态，<br>外加用 Rust 打造的原生候选窗、设置与软件包管理。</p>
 
+[![Release](https://img.shields.io/github/v/release/0x696c757a696f/fcitx5-windows-next?include_prereleases&sort=semver&style=for-the-badge&logo=github&label=release&color=07C160)](https://github.com/0x696c757a696f/fcitx5-windows-next/releases)
 [![Core CI](https://img.shields.io/github/actions/workflow/status/0x696c757a696f/fcitx5-windows-next/core.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=Core%20CI)](https://github.com/0x696c757a696f/fcitx5-windows-next/actions/workflows/core.yml)
 [![Developer Preview](https://img.shields.io/badge/status-开发者预览-F97316?style=for-the-badge)](#-当前状态)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-3B82F6?style=for-the-badge)](LICENSE)
@@ -14,15 +15,18 @@
 [![Rust](https://img.shields.io/badge/Rust-1.99-B7410E?style=flat-square&logo=rust&logoColor=white)](rust-toolchain.toml)
 [![Arch](https://img.shields.io/badge/arch-x64%20%7C%20x86%20%7C%20ARM64-6E56CF?style=flat-square)](#-从源码构建)
 [![Fcitx5](https://img.shields.io/badge/engine-Fcitx5%20Core-2EA043?style=flat-square)](https://github.com/fcitx/fcitx5)
+[![Downloads](https://img.shields.io/github/downloads/0x696c757a696f/fcitx5-windows-next/total?style=flat-square&logo=github&label=downloads&color=0F766E)](https://github.com/0x696c757a696f/fcitx5-windows-next/releases)
 
 [English](README.md) · **简体中文**
 
-[亮点](#-亮点) · [候选窗](#-候选窗) · [架构](#-架构) · [快速开始](#-快速开始) · [配置](#-配置) · [文档](#-文档) · [代码签名](#-代码签名政策) · [捐助](#-捐助)
+<a href="https://github.com/0x696c757a696f/fcitx5-windows-next/releases"><img src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD-%E5%AE%89%E8%A3%85%E5%8C%85%20%7C%20%E4%BE%BF%E6%90%BA%E7%89%88-07C160?style=for-the-badge&logo=windows11&logoColor=white" alt="下载" height="40"></a>
+
+[亮点](#-亮点) · [候选窗](#-候选窗) · [下载](#-下载与安装) · [架构](#-架构) · [配置](#-配置) · [构建](#-从源码构建) · [代码签名](#-代码签名政策) · [捐助](#-捐助)
 
 </div>
 
 > [!WARNING]
-> **开发者预览版：** 本项目用于开发和评估。仅凭本地构建和自动化测试，不能证明已经达到发行条件。详见[当前状态](#-当前状态)。
+> **开发者预览版：** 用于开发和评估，尚未通过全部发行门槛。详见[当前状态](#-当前状态)。
 
 ## ✨ 亮点
 
@@ -71,7 +75,15 @@ DirectWrite 渲染，按显示器 DPI 缩放，跟随系统浅色/深色模式�
 
 ## 🎯 候选窗
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/candidate-layouts-dark.svg">
+  <img src="docs/assets/candidate-layouts-light.svg" alt="候选窗的 scroll、stacked 与 vertical_text 布局" width="100%">
+</picture>
+
 候选窗的语义、模型与布局由 Rust 实现，Fcitx 仍是输入语义的唯一来源。
+
+<details>
+<summary><b>全部布局与序号样式</b></summary>
 
 | 布局 | `layout_type` | 说明 |
 | :-- | :-- | :-- |
@@ -82,6 +94,31 @@ DirectWrite 渲染，按显示器 DPI 缩放，跟随系统浅色/深色模式�
 | 竖排文字 | `vertical_text` | 竖写候选，列从右到左或从左到右 |
 
 序号样式可选 `plain`、`dot`、`paren`、`bracket`、`circled`，只改外观，不改选词按键。
+
+</details>
+
+## 📥 下载与安装
+
+在 [**Releases**](https://github.com/0x696c757a696f/fcitx5-windows-next/releases) 页面下载。支持 Windows 10 / 11 x64，32 位应用里也能用。
+
+| 文件 | 是什么 | 适合 |
+| :-- | :-- | :-- |
+| `fcitx5-windows-<版本>-setup.exe` | **安装包**（推荐）。安装到 `Program Files\Fcitx5` 并注册输入法。 | 正常安装使用 |
+| `fcitx5-windows-<版本>-portable.zip` | **便携版**。解压到任意文件夹，运行 `Start Fcitx5.exe`；配置保存在该文件夹里。 | 不想安装、先试用 |
+| `*.fcpkg` | **插件**，例如 Rime、Mozc、新酷音、五笔。 | 不用手动下载，在 **Fcitx5 设置 → 插件与扩展** 里安装即可 |
+
+每个 Release 页面都会逐一说明所有文件（包括插件目录、签名、SBOM 和构建来源证明）是什么、给谁用，以及如何校验。
+
+1. 运行安装包；或者解压便携版，启动 `Start Fcitx5.exe`（第一次会请求一次管理员批准来注册输入法）。
+2. 按 <kbd>Win</kbd> + <kbd>空格</kbd> 切换到 **Fcitx5**。
+3. 打开 **Fcitx5 设置**，添加输入法、安装插件、挑选主题。
+
+<details>
+<summary><b><code>main</code> 分支的预览构建</b></summary>
+
+每次推送到 `main` 都会运行 [Preview Package](https://github.com/0x696c757a696f/fcitx5-windows-next/actions/workflows/preview-package.yml) 工作流，可以在对应运行的 Artifacts 中下载开发者预览包。这些包没有签名，仅供测试。
+
+</details>
 
 ## 🧭 架构
 
@@ -106,13 +143,40 @@ flowchart TB
 
 设置、软件包管理、更新与下载都位于输入路径之外，不接收会话中的实时按键、预编辑文本、候选状态或上屏历史。
 
-## 🚀 快速开始
+## 📝 配置
 
-### 下载预览包
+用户配置是一个带注释的 TOML 文件，未写出的字段继承当前主题。设置程序写的就是这个文件，一般不需要手动编辑。
 
-每次推送到 `main` 都会运行 [Preview Package](https://github.com/0x696c757a696f/fcitx5-windows-next/actions/workflows/preview-package.yml) 工作流，可以在对应运行的 Artifacts 中下载开发者预览包。目前还没有正式发布版。
+<details>
+<summary><b><code>config.toml</code> 示例</b></summary>
 
-### 🔧 从源码构建
+全部选项见 [`resources/config.toml`](resources/config.toml)。
+
+```toml
+[appearance]
+mode = "system"            # system | light | dark，实时生效
+
+[candidate]
+layout_type = "scroll"     # automatic | stacked | flow | scroll | vertical_text
+scroll_direction = "horizontal"
+page_size = 5              # 1–9
+opacity = 1.0              # 0.20–1.00
+preedit_mode = "inline"    # inline（应用内）| panel（候选窗顶部）
+
+[candidate.label]
+style = "dot"              # plain | dot | paren | bracket | circled
+
+[fonts.candidate]
+families = ["Microsoft YaHei", "system"]
+size_dip = 18.0
+```
+
+</details>
+
+## 🔧 从源码构建
+
+<details>
+<summary><b>环境要求与命令</b></summary>
 
 需要：
 
@@ -136,47 +200,26 @@ flowchart TB
 
 这只会生成本地软件包，不等同于受保护的签名与发布流程。
 
-## 🛠️ 配置
-
-用户配置是一个带注释的 TOML 文件，未写出的字段继承当前主题。完整示例见 [`resources/config.toml`](resources/config.toml)。
-
-```toml
-[appearance]
-mode = "system"            # system | light | dark，实时生效
-
-[candidate]
-layout_type = "scroll"     # automatic | stacked | flow | scroll | vertical_text
-scroll_direction = "horizontal"
-page_size = 5              # 1–9
-opacity = 1.0              # 0.20–1.00
-preedit_mode = "inline"    # inline（应用内）| panel（候选窗顶部）
-
-[candidate.label]
-style = "dot"              # plain | dot | paren | bracket | circled
-
-[fonts.candidate]
-families = ["Microsoft YaHei", "system"]
-size_dip = 18.0
-```
+</details>
 
 ## 🧪 当前状态
 
-代码库已有大量自动化和本地验证，也能在本地构建当前 HEAD 的便携包，但仍未通过发行证据门槛。
+在剩余的发行证据收集完成前，版本都以预发布版（pre-release）形式发布。
 
 <details>
-<summary><b>不能仅凭本地测试推断的内容</b></summary>
+<summary><b>仅凭自动化测试无法证明的内容</b></summary>
 
 - 真实主机输入、无障碍和 UAC/安装生命周期；
-- 受保护的生产签名或发布；
+- 受保护的生产签名；
 - 在线软件包 / 插件生命周期；
-- 声明的 Windows 兼容性矩阵；
-- CI 与发行证据。
+- 声明的 Windows 兼容性矩阵。
 
 声明的 Windows 兼容性矩阵尚未在所需的真实主机环境中完成发行级验证，证据记录见 [`docs/host-compatibility-matrix-2026-08-20.md`](docs/host-compatibility-matrix-2026-08-20.md)。
 
 </details>
 
-## 📁 仓库结构
+<details>
+<summary><b>仓库结构与文档</b></summary>
 
 | 目录 | 内容 |
 | :-- | :-- |
@@ -186,14 +229,14 @@ size_dip = 18.0
 | [`tools/`](tools) | bootstrap、构建、测试、打包与发布工具 |
 | [`docs/`](docs) | 契约、验证矩阵和工程证据 |
 
-## 📚 文档
-
 - [`docs/current.md`](docs/current.md)：当前实现与证据事实
 - [`docs/product-contract.md`](docs/product-contract.md)：产品与架构契约
 - [`docs/tasks/current.md`](docs/tasks/current.md)：当前有界任务
 - [`SECURITY.md`](SECURITY.md)：安全模型与漏洞报告
 - [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)：依赖声明
 - [`AGENTS.md`](AGENTS.md)：贡献者说明
+
+</details>
 
 ## 🔏 代码签名政策
 
@@ -216,6 +259,11 @@ Free code signing provided by [SignPath.io](https://about.signpath.io/), certifi
 
 如果这个项目对你有帮助，欢迎捐助，用于支付构建机器、测试设备和开发时间。
 
+**以太坊及 EVM 链**（ETH 或该链原生币、USDC、USDT）：`0x619FeeF5986b9ed8E75D7CFD67AdB575355b9F80`
+
+<details>
+<summary><b>全部网络与地址</b></summary>
+
 | 网络 | 币种 | 地址 |
 | --- | --- | --- |
 | **以太坊及 EVM 链**<br><sub>Ethereum、Arbitrum One、Base、Optimism、Polygon、BNB Smart Chain</sub> | ETH 或该链原生币、USDC、USDT | `0x619FeeF5986b9ed8E75D7CFD67AdB575355b9F80` |
@@ -225,6 +273,8 @@ Free code signing provided by [SignPath.io](https://about.signpath.io/), certifi
 | **Bitcoin · Legacy** | BTC | `123mpbi91xQitVkh9oosY4VczFqJB9kjDQ` |
 | **TRON (TRC-20)** | USDT | `TBHXcP2ReM5sqpRDTyrL1UWtcSmYeyrmnB` |
 | **Solana (SPL)** | USDT | `4s6uaauKCgwSNVzb5Lq1kxUe9dpm8V64D6FPw7hTwrQ6` |
+
+</details>
 
 > [!CAUTION]
 > EVM 地址在该行列出的所有链上通用；其余地址只适用于各自的网络。转账前请在钱包或交易所里选择相同的网络，选错网络的资产可能无法找回。四个比特币地址都可以接收 BTC，按你钱包支持的格式任选其一即可。确认前请逐字核对地址。
