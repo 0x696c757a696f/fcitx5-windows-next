@@ -52,6 +52,8 @@ const SUPPORTED_RUNTIME_ABI: &str = "1";
 const SIGNATURE_ENVELOPE_CANONICALIZATION: &str = "fcitx5-windows-next-json-v1";
 const MLDSA65_PUBLIC_KEY_BYTES: usize = 1952;
 const MLDSA65_SIGNATURE_BYTES: usize = 3309;
+const ED25519_PUBLIC_KEY_BYTES: usize = 32;
+const ED25519_SIGNATURE_BYTES: usize = 64;
 const SLHDSA_SHA2_128S_PUBLIC_KEY_BYTES: usize = 32;
 const RSA_PUBLIC_MAGIC: u32 = 0x3141_5352;
 
@@ -2543,6 +2545,7 @@ pub enum TrustAlgorithm {
     Rsa2048Sha256,
     Mldsa65,
     SlhdsaSha2_128s,
+    Ed25519,
 }
 
 impl TrustAlgorithm {
@@ -2551,6 +2554,7 @@ impl TrustAlgorithm {
             "rsa-2048-sha256" => Ok(Self::Rsa2048Sha256),
             "mldsa65" if format_version == 2 => Ok(Self::Mldsa65),
             "slhdsa-sha2-128s" if format_version == 2 => Ok(Self::SlhdsaSha2_128s),
+            "ed25519" if format_version == 2 => Ok(Self::Ed25519),
             _ => Err(keyring_error("trusted key algorithm is unsupported")),
         }
     }
@@ -2559,6 +2563,7 @@ impl TrustAlgorithm {
         match value {
             "mldsa65" => Ok(Self::Mldsa65),
             "slhdsa-sha2-128s" => Ok(Self::SlhdsaSha2_128s),
+            "ed25519" => Ok(Self::Ed25519),
             _ => Err(signature_error(
                 "signature envelope requires an unsupported algorithm",
             )),
@@ -2570,6 +2575,7 @@ impl TrustAlgorithm {
             Self::Rsa2048Sha256 => "rsa-2048-sha256",
             Self::Mldsa65 => "mldsa65",
             Self::SlhdsaSha2_128s => "slhdsa-sha2-128s",
+            Self::Ed25519 => "ed25519",
         }
     }
 }
@@ -2664,6 +2670,23 @@ pub fn parse_trusted_keys(bytes: &str) -> Result<Vec<TrustedKey>, KeyringError> 
         return Err(keyring_error("trusted key file schema is invalid"));
     }
 
+    let required_algorithms = if format_version == 2 {
+        object_get(object, "policy")
+            .and_then(JsonValue::as_object)
+            .and_then(|policy| object_get(policy, "official_required_signatures"))
+            .and_then(JsonValue::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(JsonValue::as_string)
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
     let mut ids = BTreeSet::new();
     let mut result = Vec::new();
     for value in keys {
@@ -2729,6 +2752,18 @@ pub fn parse_trusted_keys(bytes: &str) -> Result<Vec<TrustedKey>, KeyringError> 
             revoked: status == "revoked",
         });
     }
+    // Envelope verification demands an Ed25519 signature only when the keyring
+    // carries an Ed25519 key, so a policy that requires one without a key would
+    // silently fall back to a single signature.
+    if required_algorithms.iter().any(|value| value == "ed25519")
+        && !result
+            .iter()
+            .any(|key| key.algorithm == TrustAlgorithm::Ed25519 && !key.revoked)
+    {
+        return Err(keyring_error(
+            "trusted key policy requires Ed25519 but no trusted Ed25519 key is present",
+        ));
+    }
 
     Ok(result)
 }
@@ -2761,7 +2796,7 @@ fn validate_keyring_policy(policy: &[(String, JsonValue)]) -> Result<(), Keyring
         let Some(value) = algorithm.as_string() else {
             return Err(keyring_error("trusted key policy algorithm is invalid"));
         };
-        if !matches!(value, "mldsa65" | "slhdsa-sha2-128s") {
+        if !matches!(value, "mldsa65" | "slhdsa-sha2-128s" | "ed25519") {
             return Err(keyring_error(
                 "trusted key policy requires unsupported algorithm",
             ));
@@ -2811,6 +2846,13 @@ fn validate_public_key(algorithm: &TrustAlgorithm, public_key: &[u8]) -> Result<
         TrustAlgorithm::SlhdsaSha2_128s => {
             Err(keyring_error("SLH-DSA public key length is invalid"))
         }
+        TrustAlgorithm::Ed25519
+            if public_key.len() == ED25519_PUBLIC_KEY_BYTES
+                && ed25519_compact::PublicKey::from_slice(public_key).is_ok() =>
+        {
+            Ok(())
+        }
+        TrustAlgorithm::Ed25519 => Err(keyring_error("Ed25519 public key is invalid")),
     }
 }
 
@@ -2825,6 +2867,7 @@ fn keyring_error(message: impl Into<String>) -> KeyringError {
 pub enum SignedObject {
     RepositoryIndex,
     PackageManifest,
+    ReleaseManifest,
 }
 
 impl SignedObject {
@@ -2832,6 +2875,7 @@ impl SignedObject {
         match value {
             "repository-index" => Some(Self::RepositoryIndex),
             "package-manifest" => Some(Self::PackageManifest),
+            "release-manifest" => Some(Self::ReleaseManifest),
             _ => None,
         }
     }
@@ -2840,6 +2884,7 @@ impl SignedObject {
         match self {
             Self::RepositoryIndex => "repository-index",
             Self::PackageManifest => "package-manifest",
+            Self::ReleaseManifest => "release-manifest",
         }
     }
 }
@@ -3023,24 +3068,47 @@ pub fn parse_signature_envelope(
 
 pub fn format_signature_envelope_v2(
     signed_object: SignedObject,
-    key_id: &str,
-    algorithm: TrustAlgorithm,
-    signature: &[u8],
+    entries: &[(&str, TrustAlgorithm, &[u8])],
 ) -> Result<String, SignatureEnvelopeError> {
-    let key_id = PackageId::parse(key_id)
-        .map_err(|_| signature_error("signature envelope key id is invalid"))?;
-    if algorithm != TrustAlgorithm::Mldsa65 || signature.len() != MLDSA65_SIGNATURE_BYTES {
+    let mut mldsa65 = 0;
+    let mut ed25519 = 0;
+    let mut formatted = Vec::with_capacity(entries.len());
+    for (key_id, algorithm, signature) in entries {
+        let key_id = PackageId::parse(key_id)
+            .map_err(|_| signature_error("signature envelope key id is invalid"))?;
+        let complete = match algorithm {
+            TrustAlgorithm::Mldsa65 => {
+                mldsa65 += 1;
+                signature.len() == MLDSA65_SIGNATURE_BYTES
+            }
+            TrustAlgorithm::Ed25519 => {
+                ed25519 += 1;
+                signature.len() == ED25519_SIGNATURE_BYTES
+            }
+            _ => false,
+        };
+        if !complete {
+            return Err(signature_error(
+                "signature envelope entry is not a complete ML-DSA-65 or Ed25519 signature",
+            ));
+        }
+        formatted.push(format!(
+            "{{\"key_id\":\"{}\",\"algorithm\":\"{}\",\"signature_base64\":\"{}\"}}",
+            key_id.as_str(),
+            algorithm.as_str(),
+            encode_base64(signature),
+        ));
+    }
+    if mldsa65 != 1 || ed25519 > 1 {
         return Err(signature_error(
-            "signature envelope requires one complete ML-DSA-65 signature",
+            "signature envelope requires one ML-DSA-65 signature and at most one Ed25519 signature",
         ));
     }
     let envelope = format!(
-        "{{\"format_version\":2,\"signed_object\":\"{}\",\"canonicalization\":\"{}\",\"signatures\":[{{\"key_id\":\"{}\",\"algorithm\":\"{}\",\"signature_base64\":\"{}\"}}]}}\n",
+        "{{\"format_version\":2,\"signed_object\":\"{}\",\"canonicalization\":\"{}\",\"signatures\":[{}]}}\n",
         signed_object.as_str(),
         SIGNATURE_ENVELOPE_CANONICALIZATION,
-        key_id.as_str(),
-        algorithm.as_str(),
-        encode_base64(signature),
+        formatted.join(","),
     );
     parse_signature_envelope(&envelope, signed_object)?;
     Ok(envelope)
@@ -3118,6 +3186,77 @@ pub fn verify_mldsa65_signature(
     Ok(())
 }
 
+pub fn verify_ed25519_signature(
+    object_bytes: &[u8],
+    signature: &[u8],
+    key: &TrustedKey,
+) -> Result<(), SignatureVerificationError> {
+    if key.revoked() {
+        return Err(signature_verification_error(
+            "revoked_key",
+            "Ed25519 key is revoked",
+        ));
+    }
+    if key.algorithm() != &TrustAlgorithm::Ed25519 || object_bytes.is_empty() {
+        return Err(signature_verification_error(
+            "invalid_signature",
+            "Ed25519 signature identity is incomplete",
+        ));
+    }
+    let verified = ed25519_compact::PublicKey::from_slice(key.public_key())
+        .and_then(|public_key| {
+            let signature = ed25519_compact::Signature::from_slice(signature)?;
+            public_key.verify(object_bytes, &signature)
+        })
+        .is_ok();
+    if !verified {
+        return Err(signature_verification_error(
+            "invalid_signature",
+            "Ed25519 signature verification failed",
+        ));
+    }
+    Ok(())
+}
+
+// A keyring that carries any Ed25519 key, trusted or revoked, makes the
+// Ed25519 signature mandatory next to ML-DSA-65; revoking the only key then
+// fails closed instead of dropping back to a single signature.
+#[cfg(windows)]
+fn verify_required_ed25519(
+    object_bytes: &[u8],
+    envelope: &SignatureEnvelope,
+    trusted_keys: &[TrustedKey],
+) -> Result<(), SignatureVerificationError> {
+    if !trusted_keys
+        .iter()
+        .any(|key| key.algorithm() == &TrustAlgorithm::Ed25519)
+    {
+        return Ok(());
+    }
+    for entry in envelope.signatures() {
+        if entry.algorithm() != &TrustAlgorithm::Ed25519 {
+            continue;
+        }
+        let trusted_key = trusted_keys
+            .iter()
+            .find(|candidate| {
+                candidate.id() == entry.key_id()
+                    && candidate.algorithm() == &TrustAlgorithm::Ed25519
+            })
+            .ok_or_else(|| {
+                signature_verification_error(
+                    "untrusted_key",
+                    "Ed25519 signature key is not trusted",
+                )
+            })?;
+        return verify_ed25519_signature(object_bytes, entry.signature(), trusted_key);
+    }
+    Err(signature_verification_error(
+        "invalid_signature",
+        "signature envelope has no required Ed25519 signature",
+    ))
+}
+
 #[cfg(windows)]
 pub fn verify_manifest_signature(
     object_bytes: &[u8],
@@ -3182,7 +3321,7 @@ pub fn verify_signature_envelope(
                 signature_verification_error("untrusted_key", "ML-DSA signature key is not trusted")
             })?;
         verify_mldsa65_signature(object_bytes, entry.signature(), trusted_key)?;
-        return Ok(());
+        return verify_required_ed25519(object_bytes, envelope, trusted_keys);
     }
     Err(signature_verification_error(
         "invalid_signature",
@@ -3909,6 +4048,7 @@ mod repository_ffi {
             "rsa-2048-sha256" => Some(TrustAlgorithm::Rsa2048Sha256),
             "mldsa65" => Some(TrustAlgorithm::Mldsa65),
             "slhdsa-sha2-128s" => Some(TrustAlgorithm::SlhdsaSha2_128s),
+            "ed25519" => Some(TrustAlgorithm::Ed25519),
             _ => None,
         }
     }
@@ -3953,6 +4093,7 @@ mod repository_ffi {
         match value {
             "mldsa65" => Some(TrustAlgorithm::Mldsa65),
             "slhdsa-sha2-128s" => Some(TrustAlgorithm::SlhdsaSha2_128s),
+            "ed25519" => Some(TrustAlgorithm::Ed25519),
             _ => None,
         }
     }
@@ -8786,6 +8927,7 @@ mod repair_ffi {
             "rsa-2048-sha256" => Some(TrustAlgorithm::Rsa2048Sha256),
             "mldsa65" => Some(TrustAlgorithm::Mldsa65),
             "slhdsa-sha2-128s" => Some(TrustAlgorithm::SlhdsaSha2_128s),
+            "ed25519" => Some(TrustAlgorithm::Ed25519),
             _ => None,
         }
     }
@@ -12082,8 +12224,66 @@ mod tests {
         let duplicate = keyring.replace("official-2026-mldsa65-revoked", "official-2026-mldsa65");
         assert_keyring_error(&duplicate);
 
-        let unsupported_required = keyring.replacen("\"mldsa65\"", "\"ed25519\"", 1);
+        let unsupported_required = keyring.replacen("\"mldsa65\"", "\"x25519\"", 1);
         assert_keyring_error(&unsupported_required);
+
+        let ed25519 = ed25519_test_key_pair();
+        let dual = keyring
+            .replacen("[\"mldsa65\"]", "[\"mldsa65\",\"ed25519\"]", 1)
+            .replacen(
+                "\"keys\":[",
+                &format!("\"keys\":[{},", ed25519_key_json(&ed25519)),
+                1,
+            );
+        let keys = parse_trusted_keys(&dual).expect("dual-signature keyring should parse");
+        assert_eq!(keys[0].id().as_str(), "official-2026-ed25519");
+        assert_eq!(keys[0].algorithm(), &TrustAlgorithm::Ed25519);
+
+        let policy_without_key = keyring.replacen("[\"mldsa65\"]", "[\"mldsa65\",\"ed25519\"]", 1);
+        assert_keyring_error(&policy_without_key);
+
+        let bad_ed25519 = dual.replacen(
+            &base64_for_test(ed25519.pk.as_slice()),
+            &base64_for_test(&[0x41; 31]),
+            1,
+        );
+        assert_keyring_error(&bad_ed25519);
+    }
+
+    #[test]
+    fn ed25519_signature_verifies_only_the_signed_bytes() {
+        let pair = ed25519_test_key_pair();
+        let key = TrustedKey {
+            id: PackageId::parse("official-2026-ed25519").expect("key id should parse"),
+            algorithm: TrustAlgorithm::Ed25519,
+            public_key: pair.pk.to_vec(),
+            revoked: false,
+        };
+        let signature = pair.sk.sign(b"index", None);
+        verify_ed25519_signature(b"index", signature.as_slice(), &key)
+            .expect("Ed25519 signature should verify");
+        assert_eq!(
+            verify_ed25519_signature(b"indeX", signature.as_slice(), &key)
+                .expect_err("tampered bytes should fail")
+                .code(),
+            "invalid_signature"
+        );
+        assert_eq!(
+            verify_ed25519_signature(b"index", &signature.as_slice()[1..], &key)
+                .expect_err("truncated signature should fail")
+                .code(),
+            "invalid_signature"
+        );
+        let revoked = TrustedKey {
+            revoked: true,
+            ..key.clone()
+        };
+        assert_eq!(
+            verify_ed25519_signature(b"index", signature.as_slice(), &revoked)
+                .expect_err("revoked key should fail")
+                .code(),
+            "revoked_key"
+        );
     }
 
     #[test]
@@ -12142,7 +12342,7 @@ mod tests {
         );
         assert_signature_error(&missing_mldsa, SignedObject::PackageManifest);
 
-        let unsupported = manifest.replacen("\"mldsa65\"", "\"ed25519\"", 1);
+        let unsupported = manifest.replacen("\"mldsa65\"", "\"x25519\"", 1);
         assert_signature_error(&unsupported, SignedObject::PackageManifest);
 
         let duplicate = index.replace("official-2026-slh-dsa-recovery", "official-2026-mldsa65");
@@ -12157,9 +12357,7 @@ mod tests {
         let signature = vec![0x43; MLDSA65_SIGNATURE_BYTES];
         let formatted = format_signature_envelope_v2(
             SignedObject::RepositoryIndex,
-            "official-2026-mldsa65",
-            TrustAlgorithm::Mldsa65,
-            &signature,
+            &[("official-2026-mldsa65", TrustAlgorithm::Mldsa65, &signature)],
         )
         .expect("release envelope should format");
         assert_eq!(
@@ -12174,9 +12372,41 @@ mod tests {
         );
         assert!(format_signature_envelope_v2(
             SignedObject::PackageManifest,
-            "official-2026-mldsa65",
-            TrustAlgorithm::Mldsa65,
-            &signature[..signature.len() - 1],
+            &[(
+                "official-2026-mldsa65",
+                TrustAlgorithm::Mldsa65,
+                &signature[..signature.len() - 1],
+            )],
+        )
+        .is_err());
+
+        let ed25519 = vec![0x45; ED25519_SIGNATURE_BYTES];
+        let dual = format_signature_envelope_v2(
+            SignedObject::ReleaseManifest,
+            &[
+                ("official-2026-mldsa65", TrustAlgorithm::Mldsa65, &signature),
+                ("official-2026-ed25519", TrustAlgorithm::Ed25519, &ed25519),
+            ],
+        )
+        .expect("dual envelope should format");
+        let parsed = parse_signature_envelope(&dual, SignedObject::ReleaseManifest)
+            .expect("dual envelope should parse");
+        assert_eq!(parsed.signatures()[1].algorithm(), &TrustAlgorithm::Ed25519);
+        assert!(format_signature_envelope_v2(
+            SignedObject::ReleaseManifest,
+            &[("official-2026-ed25519", TrustAlgorithm::Ed25519, &ed25519)],
+        )
+        .is_err());
+        assert!(format_signature_envelope_v2(
+            SignedObject::ReleaseManifest,
+            &[
+                ("official-2026-mldsa65", TrustAlgorithm::Mldsa65, &signature),
+                (
+                    "official-2026-ed25519",
+                    TrustAlgorithm::Ed25519,
+                    &ed25519[1..]
+                ),
+            ],
         )
         .is_err());
     }
@@ -12580,6 +12810,79 @@ mod tests {
             .expect_err("untrusted repository key should fail")
             .code(),
             "untrusted_key"
+        );
+
+        let ed25519 = ed25519_test_key_pair();
+        let mut dual_keys = keys.clone();
+        dual_keys.push(TrustedKey {
+            id: PackageId::parse("official-2026-ed25519").expect("key id should parse"),
+            algorithm: TrustAlgorithm::Ed25519,
+            public_key: ed25519.pk.to_vec(),
+            revoked: false,
+        });
+        assert_eq!(
+            verify_repository_index_envelope_with_policy(
+                repository.as_bytes(),
+                &envelope,
+                &dual_keys,
+                &policy
+            )
+            .expect_err("a keyring with an Ed25519 key should require its signature")
+            .code(),
+            "invalid_signature"
+        );
+        let mldsa_signature = envelope.signatures()[0].signature().to_vec();
+        let dual_envelope = |signed: &[u8]| {
+            let ed25519_signature = ed25519.sk.sign(signed, None);
+            let text = format_signature_envelope_v2(
+                SignedObject::RepositoryIndex,
+                &[
+                    (
+                        "official-2026-mldsa65",
+                        TrustAlgorithm::Mldsa65,
+                        &mldsa_signature,
+                    ),
+                    (
+                        "official-2026-ed25519",
+                        TrustAlgorithm::Ed25519,
+                        ed25519_signature.as_slice(),
+                    ),
+                ],
+            )
+            .expect("dual envelope should format");
+            parse_signature_envelope(&text, SignedObject::RepositoryIndex)
+                .expect("dual envelope should parse")
+        };
+        verify_repository_index_envelope_with_policy(
+            repository.as_bytes(),
+            &dual_envelope(repository.as_bytes()),
+            &dual_keys,
+            &policy,
+        )
+        .expect("dual-signed repository should verify");
+        assert_eq!(
+            verify_repository_index_envelope_with_policy(
+                repository.as_bytes(),
+                &dual_envelope(b"other bytes"),
+                &dual_keys,
+                &policy
+            )
+            .expect_err("an Ed25519 signature over other bytes should fail")
+            .code(),
+            "invalid_signature"
+        );
+        let mut revoked_ed25519 = dual_keys.clone();
+        revoked_ed25519.last_mut().expect("Ed25519 key").revoked = true;
+        assert_eq!(
+            verify_repository_index_envelope_with_policy(
+                repository.as_bytes(),
+                &dual_envelope(repository.as_bytes()),
+                &revoked_ed25519,
+                &policy
+            )
+            .expect_err("a revoked Ed25519 key should fail closed")
+            .code(),
+            "revoked_key"
         );
         let mut beta_text = repository.clone();
         beta_text = beta_text.replace("\"channel\":\"stable\"", "\"channel\":\"beta\"");
@@ -13520,6 +13823,19 @@ mod tests {
             base64_for_test(mldsa),
             base64_for_test(mldsa),
             base64_for_test(slhdsa)
+        )
+    }
+
+    fn ed25519_test_key_pair() -> ed25519_compact::KeyPair {
+        ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new([7; 32]))
+    }
+
+    fn ed25519_key_json(pair: &ed25519_compact::KeyPair) -> String {
+        format!(
+            "{{\"key_id\":\"official-2026-ed25519\",\"algorithm\":\"ed25519\",\
+             \"status\":\"trusted\",\"public_key_base64\":\"{}\",\
+             \"scope\":[\"repository\",\"package\"],\"channels\":[\"stable\"]}}",
+            base64_for_test(pair.pk.as_slice())
         )
     }
 

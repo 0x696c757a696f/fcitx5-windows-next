@@ -152,6 +152,12 @@
       "license": "CC0-1.0 OR MIT-0 OR Apache-2.0"
     },
     {
+      "name": "rust-crate-ed25519-compact",
+      "version": "2.6.0",
+      "source": "https://github.com/jedisct1/rust-ed25519-compact",
+      "license": "MIT"
+    },
+    {
       "name": "rust-crate-encoding-rs",
       "version": "0.8.42",
       "source": "https://github.com/hsivonen/encoding_rs",

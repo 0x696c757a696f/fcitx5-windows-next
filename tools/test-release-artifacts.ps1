@@ -2,6 +2,8 @@
 param(
   [Parameter(Mandatory)] [string] $ArtifactDirectory,
   [Parameter(Mandatory)] [string] $ReleaseManifest,
+  [Parameter(Mandatory)] [string] $PackageCli,
+  [Parameter(Mandatory)] [string] $TrustedKeyring,
   [switch] $WithoutAuthenticode
 )
 
@@ -13,6 +15,12 @@ $prefix = $artifacts.TrimEnd('\') + '\'
 if (-not $manifestPath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
   throw 'Release manifest must be inside the artifact directory.'
 }
+$dualSignature = $manifestPath -replace '\.json$', '.sig.json'
+if (-not (Test-Path -LiteralPath $dualSignature -PathType Leaf)) {
+  throw 'Release manifest ML-DSA-65 + Ed25519 signature is missing.'
+}
+& $PackageCli --verify-release-manifest $manifestPath $dualSignature $TrustedKeyring
+if ($LASTEXITCODE -ne 0) { throw 'Release manifest ML-DSA-65 + Ed25519 signature did not verify.' }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 if ($manifest.format_version -ne 1 -or $manifest.source_commit -notmatch '^[0-9a-f]{40}$') {
   throw 'Release manifest identity is invalid.'

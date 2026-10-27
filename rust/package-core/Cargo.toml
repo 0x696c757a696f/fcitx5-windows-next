@@ -35,6 +35,7 @@ path = "src/bootstrap_main.rs"
 
 [dependencies]
 blake3 = { version = "=1.5.5", default-features = false, features = ["pure"] }
+ed25519-compact = { version = "=2.6.0", default-features = false }
 
 [build-dependencies]
 cc = "=1.4.4"
