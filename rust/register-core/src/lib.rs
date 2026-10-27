@@ -26,13 +26,6 @@ const TSF_TEXT_SERVICE_CLSID: &str = "{3A21B9E2-4F47-4C36-8BFA-91D7D3B3E901}";
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x20;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x220;
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct Fcitx5RegisterUtf16 {
-    ptr: *const u16,
-    len: usize,
-}
-
 pub const REGISTER_ARTIFACT_OK: u32 = 0;
 pub const REGISTER_ARTIFACT_INVALID_ARGUMENT: u32 = 1;
 pub const REGISTER_ARTIFACT_HELPER_LOCATION: u32 = 2;
@@ -168,16 +161,6 @@ impl Drop for Library {
             let _ = FreeLibrary(self.0);
         }
     }
-}
-
-fn path_from_utf16(value: Fcitx5RegisterUtf16) -> Option<PathBuf> {
-    if value.ptr.is_null() {
-        return None;
-    }
-    // SAFETY: The length-delimited ABI requires `ptr` to be readable for `len`
-    // UTF-16 code units; this function copies them and retains no borrow.
-    let slice = unsafe { std::slice::from_raw_parts(value.ptr, value.len) };
-    Some(PathBuf::from(OsString::from_wide(slice)))
 }
 
 fn wide_z(value: &OsStr) -> Vec<u16> {
@@ -446,71 +429,6 @@ pub fn invoke_registration_export(dll: &Path, export_kind: u32) -> Hresult {
     // SAFETY: The function pointer was resolved from the live module with its
     // documented registration-export signature and the module outlives this call.
     unsafe { function() }
-}
-
-#[no_mangle]
-pub extern "C" fn fcitx5_register_validate_artifact(
-    helper: Fcitx5RegisterUtf16,
-    dll: Fcitx5RegisterUtf16,
-    architecture_bits: u32,
-) -> u32 {
-    let Some(helper) = path_from_utf16(helper) else {
-        return REGISTER_ARTIFACT_INVALID_ARGUMENT;
-    };
-    let Some(dll) = path_from_utf16(dll) else {
-        return REGISTER_ARTIFACT_INVALID_ARGUMENT;
-    };
-    validate_product_artifact(&helper, &dll, architecture_bits)
-}
-
-#[no_mangle]
-pub extern "C" fn fcitx5_register_parse_operation(operation: Fcitx5RegisterUtf16) -> u32 {
-    let Some(operation) = path_from_utf16(operation) else {
-        return REGISTER_OPERATION_UNKNOWN;
-    };
-    parse_operation(operation.as_os_str())
-}
-
-#[no_mangle]
-pub extern "C" fn fcitx5_register_validate_dll_argument(dll: Fcitx5RegisterUtf16) -> u32 {
-    let Some(dll) = path_from_utf16(dll) else {
-        return REGISTER_DLL_ARGUMENT_INVALID;
-    };
-    validate_dll_argument(&dll)
-}
-
-#[no_mangle]
-pub extern "C" fn fcitx5_register_operation_requires_admin(operation: u32) -> u32 {
-    operation_requires_admin(operation)
-}
-
-#[no_mangle]
-pub extern "C" fn fcitx5_register_operation_export(operation: u32) -> u32 {
-    operation_export(operation)
-}
-
-#[no_mangle]
-pub extern "C" fn fcitx5_register_registration_status_for_dll(dll: Fcitx5RegisterUtf16) -> u32 {
-    let Some(dll) = path_from_utf16(dll) else {
-        return REGISTER_STATUS_INVALID_ARGUMENT;
-    };
-    registration_status_for_dll(&dll)
-}
-
-#[no_mangle]
-pub extern "C" fn fcitx5_register_is_elevated() -> u32 {
-    is_elevated() as u32
-}
-
-#[no_mangle]
-pub extern "C" fn fcitx5_register_invoke_registration_export(
-    dll: Fcitx5RegisterUtf16,
-    export_kind: u32,
-) -> Hresult {
-    let Some(dll) = path_from_utf16(dll) else {
-        return hresult_from_win32(ERROR_INVALID_PARAMETER);
-    };
-    invoke_registration_export(&dll, export_kind)
 }
 
 #[cfg(test)]

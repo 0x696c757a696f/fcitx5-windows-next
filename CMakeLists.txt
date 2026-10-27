@@ -328,29 +328,6 @@ add_dependencies(fcitx5_config_core_rust fcitx5_config_core_rustlib)
 target_link_libraries(fcitx5_config_core_rust
                       INTERFACE advapi32 bcrypt ntdll userenv ws2_32)
 
-set(FCITX_RUST_REGISTER_CORE_STATICLIB
-    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_register_core.lib")
-add_custom_command(
-  OUTPUT "${FCITX_RUST_REGISTER_CORE_STATICLIB}"
-  COMMAND
-    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
-    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-register-core --lib --target
-    "${FCITX_RUST_TARGET}"
-  DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
-    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/register-core/Cargo.toml"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/register-core/src/lib.rs"
-  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-  COMMENT "Building Rust fcitx5-register-core staticlib")
-add_custom_target(fcitx5_register_core_rustlib
-                  DEPENDS "${FCITX_RUST_REGISTER_CORE_STATICLIB}")
-add_library(fcitx5_register_core_rust STATIC IMPORTED GLOBAL)
-set_target_properties(fcitx5_register_core_rust
-                      PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_REGISTER_CORE_STATICLIB}")
-add_dependencies(fcitx5_register_core_rust fcitx5_register_core_rustlib)
-
 set(FCITX_RUST_CANDIDATE_CORE_STATICLIB
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_candidate_core.lib")
 add_custom_command(
@@ -478,32 +455,6 @@ if(FCITX_DEVELOPMENT_PEER_EXCEPTION)
   target_compile_definitions(fcitx5_ipc_client PRIVATE FCITX_DEVELOPMENT_PEER_EXCEPTION=1)
 endif()
 fcitx_apply_project_options(fcitx5_ipc_client)
-
-set(FCITX_RUST_TSF_SUPPORT_CORE_STATICLIB
-    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_tsf_support_core.lib")
-add_custom_command(
-  OUTPUT "${FCITX_RUST_TSF_SUPPORT_CORE_STATICLIB}"
-  COMMAND
-    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-    "FCITX_RELEASE_DATA_DIRECTORY=${FCITX_RELEASE_DATA_DIRECTORY}"
-    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
-    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-tsf-support-core --lib --target
-    "${FCITX_RUST_TARGET}"
-  DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
-    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/tsf-support-core/Cargo.toml"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/tsf-support-core/src/lib.rs"
-  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-  COMMENT "Building Rust fcitx5-tsf-support-core staticlib")
-add_custom_target(fcitx5_tsf_support_core_rustlib
-                  DEPENDS "${FCITX_RUST_TSF_SUPPORT_CORE_STATICLIB}")
-add_library(fcitx5_tsf_activation_guard STATIC IMPORTED GLOBAL)
-add_library(fcitx5::tsf_activation_guard ALIAS fcitx5_tsf_activation_guard)
-set_target_properties(fcitx5_tsf_activation_guard PROPERTIES
-                      IMPORTED_LOCATION "${FCITX_RUST_TSF_SUPPORT_CORE_STATICLIB}")
-add_dependencies(fcitx5_tsf_activation_guard fcitx5_tsf_support_core_rustlib)
-target_link_libraries(fcitx5_tsf_activation_guard INTERFACE ws2_32 userenv ntdll bcrypt advapi32)
 
 set(FCITX_RUST_MOCK_ENGINE_EXE
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/$<IF:$<CONFIG:Debug>,debug,release>/fcitx5-mock-engine.exe")
