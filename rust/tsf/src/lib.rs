@@ -23,6 +23,7 @@ use std::sync::OnceLock;
 use std::thread::{sleep, JoinHandle};
 use std::time::Duration;
 
+mod app_compat;
 mod input_mode;
 
 use fcitx5_protocol_core as protocol;
@@ -1358,6 +1359,18 @@ fn start_candidate_notification_watch(
     Some((stop, thread))
 }
 
+/// Traces a failed pipe open. An access-denied open means this process's
+/// policy (an anti-cheat or sandbox) blocks the pipe, so the whole process
+/// stops trying for a while instead of spending each key's budget on it.
+fn record_pipe_open_failure(event: &str, error: i32) {
+    if error == app_compat::ERROR_ACCESS_DENIED_CODE {
+        app_compat::IPC_DENIAL.record(common::engine_client::tick_milliseconds());
+        trace_event(&format!("{event}_denied"));
+    } else {
+        trace_event(&format!("{event}_failed error={error}"));
+    }
+}
+
 fn activation_guard_disabled() -> bool {
     std::env::var_os("FCITX5_TEST_DATA_ROOT")
         .map(PathBuf::from)
@@ -1496,7 +1509,12 @@ impl EngineClient {
     /// attempts only get the input budget, so a missing or stuck engine can
     /// never block the host's UI thread on every key.
     fn begin_request(&mut self, cold_start: bool) -> Option<u64> {
-        if self.failure_streak > 0 && common::engine_client::tick_milliseconds() < self.retry_at {
+        let now = common::engine_client::tick_milliseconds();
+        if self.failure_streak > 0 && now < self.retry_at {
+            return None;
+        }
+        // A process that may not open the pipe passes keys through untouched.
+        if app_compat::IPC_DENIAL.active(now) {
             return None;
         }
         self.drop_stale_connection(common::engine_client::tick_milliseconds());
@@ -1616,9 +1634,12 @@ impl EngineClient {
             trace_event("engine_client_connect_rejected_identity_or_pipe");
             return false;
         }
-        let Some(pipe) = PipeClient::open(&self.pipe_name, deadline, true) else {
-            trace_event("engine_client_open_pipe_failed");
-            return false;
+        let pipe = match PipeClient::open_with_error(&self.pipe_name, deadline, true) {
+            Ok(pipe) => pipe,
+            Err(error) => {
+                record_pipe_open_failure("engine_client_open_pipe", error);
+                return false;
+            }
         };
         let policy_mode = if self.expected_engine_path.is_empty() {
             PEER_POLICY_DEVELOPMENT_SAME_USER_SESSION
@@ -1657,9 +1678,12 @@ impl EngineClient {
             trace_event("engine_client_launcher_rejected_identity_or_pipe");
             return false;
         }
-        let Some(pipe) = PipeClient::open(&self.launcher_pipe_name, deadline, false) else {
-            trace_event("engine_client_open_launcher_pipe_failed");
-            return false;
+        let pipe = match PipeClient::open_with_error(&self.launcher_pipe_name, deadline, false) {
+            Ok(pipe) => pipe,
+            Err(error) => {
+                record_pipe_open_failure("engine_client_open_launcher_pipe", error);
+                return false;
+            }
         };
         let (policy_mode, development_exception_enabled) = self.launcher_policy();
         if !pipe.verify_server(
@@ -1734,6 +1758,10 @@ impl EngineClient {
         ok
     }
 
+    fn ipc_denied(&self) -> bool {
+        app_compat::IPC_DENIAL.active(common::engine_client::tick_milliseconds())
+    }
+
     /// Whether a launcher is already serving this generation's pipe.
     fn launcher_running(&self) -> bool {
         !self.launcher_pipe_name.is_empty()
@@ -1786,10 +1814,14 @@ impl EngineClient {
         if self.connect(deadline) {
             return true;
         }
+        if self.ipc_denied() {
+            return false;
+        }
         if self.request_launcher_start(deadline) && self.connect(deadline) {
             return true;
         }
-        if !self.start_launcher_process() {
+        // Starting a launcher cannot help a process that may not open its pipe.
+        if self.ipc_denied() || !self.start_launcher_process() {
             return false;
         }
         while common::engine_client::deadline_has_time(deadline) {
@@ -2950,6 +2982,17 @@ impl Fcitx5TsfService {
             trace_event("activate_runtime_guard_disabled");
             return Ok(());
         }
+        if current_module_path()
+            .ok()
+            .and_then(|module_path| module_path_buf(&module_path))
+            .is_some_and(|module_path| app_compat::current_process_excluded(&module_path))
+        {
+            runtime.reset_local_state();
+            runtime.guard_fail_open = true;
+            self.state.borrow_mut().deactivate();
+            trace_event("activate_runtime_app_excluded");
+            return Ok(());
+        }
 
         let thread_manager_ref = thread_manager.ok()?;
         let keystroke_manager: ITfKeystrokeMgr = thread_manager_ref.cast()?;
@@ -2960,10 +3003,10 @@ impl Fcitx5TsfService {
             .and_then(|module_path| EngineClient::new_for_current_module(&module_path));
         // Activation runs for every thread that gets focus; only spawn a launcher when none
         // is serving yet instead of starting a process each time.
-        if let Some(client) = engine_client
-            .as_ref()
-            .filter(|client| !client.launcher_running())
-        {
+        if let Some(client) = engine_client.as_ref().filter(|client| {
+            !app_compat::IPC_DENIAL.active(common::engine_client::tick_milliseconds())
+                && !client.launcher_running()
+        }) {
             let _ = client.start_launcher_process();
         }
 

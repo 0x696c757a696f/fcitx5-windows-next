@@ -105,6 +105,12 @@ if (-not $SourceOnly) {
         $imports -match '(?im)^\s+(WINHTTP|WININET|URLMON)\.dll\s*$') {
       throw "Network-capable library imported by input-plane binary: $binary"
     }
+    # The TSF DLL loads into other apps' processes, so it carries its own VC
+    # runtime instead of binding to whichever vcruntime140.dll the host has.
+    if ($fileName -eq 'fcitx5-tsf.dll' -and
+        $imports -match '(?im)^\s+(VCRUNTIME140[A-Z0-9_]*|MSVCP140[A-Z0-9_]*)\.dll\s*$') {
+      throw "TSF DLL imports the VC++ redistributable runtime: $binary"
+    }
     if ($fileName -in @('fcitx5-package.exe', 'fcitx5-deployer.exe', 'fcitx5-updater.exe') -and
         $imports -match '(?im)^\s+(WINHTTP|WININET|URLMON)\.dll\s*$') {
       throw "Network library crossed into non-downloader package boundary: $binary"

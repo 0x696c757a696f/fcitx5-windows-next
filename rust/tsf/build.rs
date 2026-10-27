@@ -19,6 +19,22 @@ fn main() {
         .join("icons")
         .join("fcitx5-tsf.ico");
     let watched_icons = [icon.as_path()];
+    // The DLL loads into every app with a text field, games included. Link
+    // the VC runtime statically and the Universal CRT from the OS, so the DLL
+    // needs no Visual C++ redistributable and never binds to an older
+    // vcruntime140.dll that an app ships next to its executable.
+    if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        for arg in [
+            "/NODEFAULTLIB:msvcrt.lib",
+            "/NODEFAULTLIB:vcruntime.lib",
+            "/NODEFAULTLIB:libucrt.lib",
+            "/DEFAULTLIB:libcmt.lib",
+            "/DEFAULTLIB:libvcruntime.lib",
+            "/DEFAULTLIB:ucrt.lib",
+        ] {
+            println!("cargo:rustc-cdylib-link-arg={arg}");
+        }
+    }
     windows_resource::compile_for_cdylib(
         &resource_script,
         &resource_dir,
