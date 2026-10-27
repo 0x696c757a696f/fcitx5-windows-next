@@ -134,10 +134,11 @@ if ($authenticode) {
 $sbom = Join-Path $artifacts "fcitx5-windows-$Version$suffix.spdx.json"
 & (Join-Path $PSScriptRoot 'generate-sbom.ps1') -StageRoot $stage -OutputPath $sbom `
   -Version $Version -SourceCommit $sourceCommit
-$pluginReleaseFiles = @(
-  (Get-ChildItem -LiteralPath $artifacts -Filter '*.fcpkg' -File | Select-Object -ExpandProperty FullName),
-  (Join-Path $artifacts 'index.json'),
-  (Join-Path $artifacts 'index.sig.json'))
+# Flat list: a nested array here would reach the release manifest as one entry
+# named after the last archive, with lists for its size and hash.
+$pluginReleaseFiles = @(Get-ChildItem -LiteralPath $artifacts -Filter '*.fcpkg' -File |
+    Select-Object -ExpandProperty FullName) +
+  @((Join-Path $artifacts 'index.json'), (Join-Path $artifacts 'index.sig.json'))
 foreach ($path in $pluginReleaseFiles) {
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing signed plugin release asset: $path" }
 }
