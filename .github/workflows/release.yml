@@ -242,9 +242,12 @@ jobs:
           if (-not (Test-Path -LiteralPath $pointer -PathType Leaf)) {
             throw 'Verified stage pointer was not transferred.'
           }
-          $name = Split-Path -Leaf (Get-Content -LiteralPath $pointer -Raw).Trim()
-          $stage = Get-Item -LiteralPath (Join-Path out/package $name) -ErrorAction SilentlyContinue
-          if (-not $stage -or -not $stage.PSIsContainer -or $name -notlike 'stage-*') {
+          # The pointer holds the build runner's absolute <out/package>/stage-*/Fcitx5.
+          $recorded = (Get-Content -LiteralPath $pointer -Raw).Trim()
+          $name = Split-Path -Leaf (Split-Path -Parent $recorded)
+          $stage = Get-Item -LiteralPath (Join-Path out/package $name 'Fcitx5') -ErrorAction SilentlyContinue
+          if (-not $stage -or -not $stage.PSIsContainer -or $name -notlike 'stage-*' -or
+              (Split-Path -Leaf $recorded) -ne 'Fcitx5') {
             throw 'Verified stage was not transferred.'
           }
           [IO.File]::WriteAllText((Resolve-Path out/package/current-stage.txt),
