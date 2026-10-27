@@ -1,8 +1,9 @@
 name: README Screenshots
 
 # Captures the real candidate window from a published portable package for
-# the README (tools/capture-readme-candidates.ps1) and uploads the images as
-# an artifact. Copy them to docs/assets/ when they change.
+# the README (tools/capture-readme-candidates.ps1). The images are uploaded
+# as an artifact and pushed to the screenshots/readme branch, one commit on
+# its own, so they can be fetched with git; copy them to docs/assets/.
 on:
   workflow_dispatch:
     inputs:
@@ -26,6 +27,8 @@ jobs:
   capture:
     runs-on: windows-2022
     timeout-minutes: 20
+    permissions:
+      contents: write
     steps:
       - name: Check out the capture script
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -60,3 +63,20 @@ jobs:
           name: readme-screenshots
           path: ${{ runner.temp }}/readme-screenshots
           if-no-files-found: error
+
+      - name: Push the images to screenshots/readme
+        if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $images = Join-Path $env:RUNNER_TEMP 'readme-screenshots'
+          $work = Join-Path $env:RUNNER_TEMP 'screenshots-branch'
+          & git init -q $work
+          Copy-Item -Path (Join-Path $images '*.png') -Destination $work
+          & git -C $work add -A
+          & git -C $work -c user.name='github-actions[bot]' `
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' `
+            commit -q -m "README candidate screenshots from ${{ github.sha }}"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not commit the images.' }
+          & git -C $work push -q --force "https://x-access-token:$env:GH_TOKEN@github.com/${{ github.repository }}.git" HEAD:refs/heads/screenshots/readme
+          if ($LASTEXITCODE -ne 0) { throw 'Could not push screenshots/readme.' }
