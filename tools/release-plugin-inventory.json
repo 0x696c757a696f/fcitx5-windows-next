@@ -64,8 +64,9 @@
         "dependencies": []
       },
       "payload": [
-        "lib/fcitx5/unikey.dll",
-        "share/fcitx5/addon/unikey.conf"
+        "lib/fcitx5/libunikey.dll",
+        "share/fcitx5/addon/unikey.conf",
+        "share/fcitx5/inputmethod/unikey.conf"
       ]
     }
   ]
