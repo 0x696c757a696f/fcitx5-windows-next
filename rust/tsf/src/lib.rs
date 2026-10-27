@@ -59,13 +59,13 @@ use windows::Win32::UI::TextServices::{
     ITfActiveLanguageProfileNotifySink_Impl, ITfCandidateListUIElement,
     ITfCandidateListUIElement_Impl, ITfCategoryMgr, ITfComposition, ITfCompositionSink,
     ITfCompositionSink_Impl, ITfContext, ITfContextComposition, ITfDocumentMgr, ITfEditSession,
-    ITfEditSession_Impl, ITfInputProcessorProfileMgr, ITfInputProcessorProfiles, ITfInputScope,
-    ITfKeyEventSink, ITfKeyEventSink_Impl, ITfKeystrokeMgr, ITfLangBarItem, ITfLangBarItemMgr,
-    ITfRange, ITfSource, ITfTextInputProcessor, ITfTextInputProcessorEx,
-    ITfTextInputProcessorEx_Impl, ITfTextInputProcessor_Impl, ITfThreadFocusSink,
-    ITfThreadFocusSink_Impl, ITfThreadMgr, ITfThreadMgrEventSink, ITfThreadMgrEventSink_Impl,
-    ITfUIElement, ITfUIElementMgr, ITfUIElement_Impl, InputScope, GUID_PROP_INPUTSCOPE,
-    GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT, GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
+    ITfEditSession_Impl, ITfInputProcessorProfileMgr, ITfInputProcessorProfiles,
+    ITfInputProcessorProfilesEx, ITfInputScope, ITfKeyEventSink, ITfKeyEventSink_Impl,
+    ITfKeystrokeMgr, ITfLangBarItem, ITfLangBarItemMgr, ITfRange, ITfSource, ITfTextInputProcessor,
+    ITfTextInputProcessorEx, ITfTextInputProcessorEx_Impl, ITfTextInputProcessor_Impl,
+    ITfThreadFocusSink, ITfThreadFocusSink_Impl, ITfThreadMgr, ITfThreadMgrEventSink,
+    ITfThreadMgrEventSink_Impl, ITfUIElement, ITfUIElementMgr, ITfUIElement_Impl, InputScope,
+    GUID_PROP_INPUTSCOPE, GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT, GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
     GUID_TFCAT_TIPCAP_UIELEMENTENABLED, GUID_TFCAT_TIP_KEYBOARD, IS_ALPHANUMERIC_PIN,
     IS_ALPHANUMERIC_PIN_SET, IS_NUMERIC_PASSWORD, IS_NUMERIC_PIN, IS_PASSWORD, IS_PRIVATE,
     TF_DEFAULT_SELECTION, TF_ES_READ, TF_ES_READWRITE, TF_ES_SYNC, TF_SELECTION,
@@ -121,6 +121,8 @@ const FCITX5_PROFILE_DISPLAY_NAME_W: &[u16] = &[
     b'x' as u16,
     b'5' as u16,
 ];
+/// `IDS_FCITX5_PROFILE_DISPLAY_NAME` in resources/windows/resource.h.
+const IDS_FCITX5_PROFILE_DISPLAY_NAME: u32 = 201;
 const LANG_EN_US: u16 = 0x0409;
 const LANG_ZH_CN: u16 = 0x0804;
 const LANG_JA_JP: u16 = 0x0411;
@@ -378,6 +380,24 @@ fn register_profiles() -> Result<()> {
             true,
             0,
         )?;
+    }
+    // Windows Settings shows the profile's MUI display name, falling back to
+    // the plain description above. The string table in tsf.rc holds the
+    // English and Simplified Chinese names, so the language list follows the
+    // user's display language. Older hosts without this interface keep the
+    // plain description, so a failure here does not fail registration.
+    if let Ok(profiles_ex) = profiles.cast::<ITfInputProcessorProfilesEx>() {
+        // SAFETY: The interface is live, GUID pointers refer to immutable
+        // constants and module_path is a valid UTF-16 buffer for the call.
+        let _ = unsafe {
+            profiles_ex.SetLanguageProfileDisplayName(
+                &FCITX5_TEXT_SERVICE_CLSID,
+                LANG_ZH_CN,
+                &FCITX5_LANGUAGE_PROFILE_GUID,
+                &module_path,
+                IDS_FCITX5_PROFILE_DISPLAY_NAME,
+            )
+        };
     }
     // SAFETY: CoCreateInstance is called after COM initialization and requested
     // for the system TSF category manager interface.

@@ -1,3 +1,18 @@
 #include "resource.h"
 
 IDI_FCITX5_TSF ICON "../icons/fcitx5-tsf.ico"
+
+// Profile display name read by Windows Settings. Numeric language ids keep
+// this script free of a windows.h include: 0x09/0x01 is en-US and 0x04/0x02
+// is zh-CN.
+LANGUAGE 0x09, 0x01
+STRINGTABLE
+BEGIN
+    IDS_FCITX5_PROFILE_DISPLAY_NAME "Fcitx5"
+END
+
+LANGUAGE 0x04, 0x02
+STRINGTABLE
+BEGIN
+    IDS_FCITX5_PROFILE_DISPLAY_NAME L"\x5C0F\x4F01\x9E45\x8F93\x5165\x6CD5"
+END
