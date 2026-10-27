@@ -1,65 +1,142 @@
 name: Auto-merge dependency updates
 
-# Merges the bot-authored update PRs (Dependabot, update-dependencies.yml and
-# sync-upstream.yml) once their checks pass on the exact head commit. Nothing
-# from the PR branch is checked out or executed here.
+# Merges the bot-authored update PRs (Dependabot, update-dependencies.yml,
+# update-fork-plugins.yml and sync-upstream.yml) once their checks pass on the
+# exact head commit. Nothing from the PR branch is checked out or executed here.
+#
+# Runs the bot opens with GITHUB_TOKEN raise no workflow_run event, so an hourly
+# sweep drives those PRs: it replaces a PR that fell behind main by rerunning
+# the workflow that opened it, starts the required workflows on a head that has
+# none, merges a head that passed them all, and opens an issue for a head that
+# failed or a PR that has waited more than a week.
 on:
   workflow_run:
     workflows: [Core, Preview Package]
     types: [completed]
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
   pull-requests: write
   actions: write
+  issues: write
 
 concurrency:
-  group: auto-merge-${{ github.event.workflow_run.head_branch }}
+  group: auto-merge
 
 jobs:
   merge:
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_repository.full_name == github.repository &&
-      (startsWith(github.event.workflow_run.head_branch, 'automation/') ||
-       startsWith(github.event.workflow_run.head_branch, 'upstream/') ||
-       startsWith(github.event.workflow_run.head_branch, 'dependabot/'))
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-24.04
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      BRANCH: ${{ github.event.workflow_run.head_branch }}
-      SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
-      - name: Merge when every required workflow passed
+      - name: Drive every open bot PR
         run: |
           set -euo pipefail
-          pr=$(gh pr list --head "$BRANCH" --base main --state open \
-            --json number,headRefOid,author \
-            --jq '.[] | select(.author.is_bot) |
-                  select(.author.login == "app/dependabot" or .author.login == "app/github-actions") |
-                  select(.headRefOid == env.SHA) | .number')
-          if [ -z "$pr" ]; then
-            echo "No open bot PR for $BRANCH at $SHA."
-            exit 0
-          fi
 
-          # Fcitx pin bumps change the patched native sources, which only the
-          # package build exercises.
-          required=(core.yml)
-          if [ "$BRANCH" = upstream/fcitx5-pins ]; then
-            required+=(preview-package.yml)
-          fi
-          for workflow in "${required[@]}"; do
-            conclusion=$(gh run list --workflow "$workflow" --commit "$SHA" \
-              --json conclusion,status \
-              --jq '[.[] | select(.status == "completed")][0].conclusion // ""')
-            if [ "$conclusion" != success ]; then
-              echo "$workflow has not passed on $SHA yet (${conclusion:-pending})."
-              exit 0
+          ensure_issue() {
+            local body=$2 number
+            export TITLE=$1
+            number=$(gh issue list --state open --search "in:title \"$TITLE\"" --json number,title \
+              --jq '.[] | select(.title == env.TITLE) | .number' | head -n1)
+            if [ -z "$number" ]; then
+              gh issue create --title "$TITLE" --body "$body"
+            fi
+          }
+
+          # Conclusion of a workflow on a commit: success when any run passed,
+          # pending while one is queued or running, failure when one failed,
+          # none when nothing ran. Unapproved pull_request runs count as none.
+          state_of() {
+            gh run list --workflow "$1" --commit "$2" --limit 50 --json status,conclusion --jq '
+              if any(.[]; .conclusion == "success") then "success"
+              elif any(.[]; .status != "completed") then "pending"
+              elif any(.[]; .conclusion == "failure" or .conclusion == "timed_out" or
+                            .conclusion == "startup_failure") then "failure"
+              else "none" end'
+          }
+
+          merged=0
+          dispatched=' '
+          week_ago=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          gh pr list --base main --state open --limit 100 \
+            --json number,headRefName,headRefOid,author,isCrossRepository,createdAt,url \
+            --jq '.[] | select(.isCrossRepository | not) | select(.author.is_bot) |
+                  select(.author.login == "app/dependabot" or .author.login == "app/github-actions") |
+                  select(.headRefName | test("^(automation|upstream|dependabot)/")) |
+                  [.number, .headRefName, .headRefOid, .author.login, .createdAt, .url] | @tsv' |
+          while IFS=$'\t' read -r pr branch sha author created url; do
+            echo "::group::#$pr $branch at $sha"
+            # Fcitx pin and fork plugin bumps change native inputs, which only
+            # the package build exercises.
+            required=(core.yml)
+            case "$branch" in
+              upstream/fcitx5-pins|automation/fork-plugins) required+=(preview-package.yml) ;;
+            esac
+
+            # Checks on an old base prove little. The workflow that opened a bot
+            # branch builds it from main again, so close the stale PR and rerun
+            # that workflow. Dependabot rebases its own branches.
+            behind=$(gh api "repos/$GH_REPO/compare/main...$sha" --jq .behind_by)
+            if [ "$behind" -gt 0 ] && [ "$author" = app/github-actions ]; then
+              case "$branch" in
+                automation/rust-dependencies) generator=update-dependencies.yml ;;
+                automation/fork-plugins) generator=update-fork-plugins.yml ;;
+                upstream/*) generator=sync-upstream.yml ;;
+                *) generator= ;;
+              esac
+              if [ -n "$generator" ]; then
+                echo "Behind main by $behind commits; reopening it from $generator."
+                gh pr close "$pr" --delete-branch \
+                  --comment "Behind main by $behind commits. $generator opens a fresh PR from the current main."
+                if [[ "$dispatched" != *" $generator "* ]]; then
+                  gh workflow run "$generator" --ref main
+                  dispatched+="$generator "
+                fi
+                echo "::endgroup::"
+                continue
+              fi
+            fi
+
+            ready=1
+            failed=()
+            for workflow in "${required[@]}"; do
+              state=$(state_of "$workflow" "$sha")
+              echo "$workflow: $state"
+              case "$state" in
+                success) ;;
+                none) ready=0; gh workflow run "$workflow" --ref "$branch" ;;
+                failure) ready=0; failed+=("$workflow") ;;
+                *) ready=0 ;;
+              esac
+            done
+
+            if [ "$ready" = 1 ]; then
+              if gh pr merge "$pr" --squash --delete-branch --match-head-commit "$sha"; then
+                merged=1
+              else
+                ensure_issue "Automated update #$pr needs attention" \
+                  "$url passed its checks at $sha but could not be merged."
+              fi
+            elif [ "${#failed[@]}" -gt 0 ]; then
+              ensure_issue "Automated update #$pr needs attention" \
+                "${failed[*]} failed on the head of $url ($sha). The PR stays open until it is fixed by hand or closed; the next scheduled run of its workflow replaces it."
+            elif [[ "$created" < "$week_ago" ]]; then
+              ensure_issue "Automated update #$pr needs attention" \
+                "$url has waited more than a week without passing its checks (${required[*]})."
+            fi
+            echo "::endgroup::"
+            if [ "$merged" = 1 ]; then
+              # The merge push is made with GITHUB_TOKEN and starts no workflows.
+              gh workflow run preview-package.yml --ref main
+              # Every other bot PR is now behind main; the next sweep updates it.
+              break
             fi
           done
-
-          gh pr merge "$pr" --squash --delete-branch --match-head-commit "$SHA"
-          # The merge push is made with GITHUB_TOKEN and starts no workflows.
-          gh workflow run preview-package.yml --ref main

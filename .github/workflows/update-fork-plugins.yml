@@ -1,0 +1,65 @@
+name: Update fork plugins
+
+# Daily pin of tools/fork-plugin-inventory.json to the newest fcitx5-plugins
+# release. Preview Package re-verifies every archive against the staged
+# runtime, and auto-merge.yml merges the PR once Core and Preview Package pass.
+on:
+  schedule:
+    # Daily 08:00 UTC, after the fork's 02:00 upstream sync has built and released.
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: update-fork-plugins
+
+jobs:
+  pin:
+    name: Pin the newest fork release
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Update the fork plugin inventory
+        id: update
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo 'summary<<EOF'
+            python3 tools/update-fork-plugin-inventory.py
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the PR
+        id: pr
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: automation/fork-plugins
+          delete-branch: true
+          commit-message: 'chore(plugins): pin the newest fcitx5-plugins release'
+          title: 'chore(plugins): pin the newest fcitx5-plugins release'
+          body: |
+            Daily update from `tools/update-fork-plugin-inventory.py`.
+
+            ```
+            ${{ steps.update.outputs.summary }}
+            ```
+
+            Merged automatically once Core and Preview Package pass on this commit.
+
+      - name: Run Core and Preview Package on the PR head
+        if: steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        # Pushes made with GITHUB_TOKEN do not start pull_request workflows.
+        run: |
+          gh workflow run core.yml --ref automation/fork-plugins
+          gh workflow run preview-package.yml --ref automation/fork-plugins

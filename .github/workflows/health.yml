@@ -1,0 +1,96 @@
+name: Automation health
+
+# Daily check that the unattended workflows still work. A workflow whose latest
+# run on main failed gets an issue, which is closed again once it passes. Also
+# reminds about the yearly signing key rotation and about changes on main that
+# have waited a month for a release.
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+jobs:
+  health:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Report failing workflows and due maintenance
+        run: |
+          set -euo pipefail
+
+          open_issue() {
+            export TITLE=$1
+            gh issue list --state open --search "in:title \"$TITLE\"" --json number,title \
+              --jq '.[] | select(.title == env.TITLE) | .number' | head -n1
+          }
+          ensure_issue() {
+            local number
+            number=$(open_issue "$1")
+            if [ -z "$number" ]; then
+              gh issue create --title "$1" --body "$2"
+            fi
+          }
+          resolve_issue() {
+            local number
+            number=$(open_issue "$1")
+            if [ -n "$number" ]; then
+              gh issue close "$number" --comment "$2"
+            fi
+          }
+
+          for workflow in core.yml preview-package.yml auto-merge.yml update-dependencies.yml \
+                          update-fork-plugins.yml sync-upstream.yml refresh-plugin-index.yml; do
+            latest=$(gh run list --workflow "$workflow" --branch main --limit 20 \
+              --json status,conclusion,url,workflowName --jq '
+                [.[] | select(.status == "completed") |
+                 select(.conclusion == "success" or .conclusion == "failure" or
+                        .conclusion == "timed_out" or .conclusion == "startup_failure")][0] //
+                empty | [.conclusion, .url, .workflowName] | @tsv')
+            if [ -z "$latest" ]; then
+              echo "$workflow: no finished run on main yet."
+              continue
+            fi
+            IFS=$'\t' read -r conclusion url name <<< "$latest"
+            echo "$workflow: $conclusion"
+            if [ "$conclusion" = success ]; then
+              resolve_issue "Automation failing: $name" "Passing again: $url"
+            else
+              ensure_issue "Automation failing: $name" \
+                "The latest run of $workflow on main ended with $conclusion: $url"
+            fi
+          done
+
+          # Release keys are named official-<year>-<algorithm>; rotate them yearly.
+          year=$(date -u +%Y)
+          for key in $(jq -r '.keys[] | select(.status == "trusted") | .key_id' security/trusted-keys.template.json); do
+            key_year=$(sed -n 's/^official-\([0-9]\{4\}\)-.*/\1/p' <<< "$key")
+            if [ -n "$key_year" ] && [ "$key_year" -lt "$year" ]; then
+              ensure_issue "Rotate release signing key $key" \
+                "$key in security/trusted-keys.template.json dates from $key_year. Add an official-$year key next to it, ship a release that trusts both, then retire the old key."
+            fi
+          done
+
+          # Remind once main has carried unreleased changes for a month.
+          tag=$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // ""')
+          if [ -n "$tag" ]; then
+            ahead=$(gh api "repos/$GH_REPO/compare/$tag...main" --jq .ahead_by)
+            published=$(gh release view "$tag" --json publishedAt --jq .publishedAt)
+            if [ "$ahead" -gt 0 ] && [[ "$published" < "$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ)" ]]; then
+              ensure_issue "Unreleased changes on main" \
+                "main is $ahead commits ahead of $tag, released $published. Dispatch release.yml to ship them."
+            else
+              resolve_issue "Unreleased changes on main" "Released as $tag."
+            fi
+          fi
