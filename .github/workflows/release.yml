@@ -364,8 +364,12 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Could not replace stale tag $tag." }
           }
           $global:LASTEXITCODE = 0
-          $arguments = @('release', 'create', $tag,
-            'out/package/release-artifacts/*', '--target', '${{ github.sha }}',
+          # Top-level files only: release-artifacts also holds the
+          # system-packages directory, which is not a release asset.
+          $assets = @(Get-ChildItem -LiteralPath out/package/release-artifacts -File |
+            ForEach-Object FullName)
+          if ($assets.Count -eq 0) { throw 'No release artifacts to publish.' }
+          $arguments = @('release', 'create', $tag) + $assets + @('--target', '${{ github.sha }}',
             '--title', 'Fcitx5 for Windows ${{ inputs.version }}', '--generate-notes')
           if ('${{ inputs.channel }}' -ne 'stable' -or '${{ inputs.without_authenticode }}' -eq 'true') {
             $arguments += '--prerelease'
