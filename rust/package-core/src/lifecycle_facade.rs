@@ -374,9 +374,9 @@ impl PackageCoreFacade {
             PackageFacadeError::new("io_error", format!("package root creation failed: {error}"))
         })?;
         let _transaction_lock = self.lock_transactions()?;
-        // Holding the lock means no other operation is running, so any journal left behind
-        // belongs to a process that was killed; settle it before it blocks this install.
-        self.reconcile_transaction_journals()?;
+        // Holding the lock means no other operation is running, so a journal of this
+        // transaction belongs to a process that was killed; settle it before it blocks us.
+        self.settle_abandoned_transaction(&transaction_id);
         self.ensure_transaction_paths_available(&transaction_id)?;
         self.write_transaction_state(&transaction_id, TransactionState::Prepared)?;
         if let Err(error) = self.create_transaction_snapshot(&transaction_id) {
@@ -996,47 +996,63 @@ impl PackageCoreFacade {
                 _ => {}
             }
         }
-        let mut actions = Vec::new();
-        for transaction_id in &journals {
-            let state =
-                read_transaction_state(self.transaction_state_path(transaction_id), transaction_id);
-            let action = match state {
-                Ok(TransactionState::Prepared | TransactionState::Staged) => {
-                    self.cleanup_transaction_artifacts(transaction_id);
-                    PackageRepairAction::DiscardedIncompleteTransaction {
-                        transaction_id: transaction_id.clone(),
-                    }
-                }
-                Ok(TransactionState::Activating) => {
-                    if self.restore_transaction_snapshot(transaction_id).is_ok() {
-                        self.cleanup_transaction_artifacts(transaction_id);
-                        PackageRepairAction::RolledBackInterruptedActivation {
-                            transaction_id: transaction_id.clone(),
-                        }
-                    } else {
-                        PackageRepairAction::RecoveryRequired {
-                            transaction_id: transaction_id.clone(),
-                        }
-                    }
-                }
-                Ok(TransactionState::Committed) => {
-                    self.cleanup_transaction_artifacts(transaction_id);
-                    PackageRepairAction::FinalizedCommittedTransaction {
-                        transaction_id: transaction_id.clone(),
-                    }
-                }
-                Err(_) => PackageRepairAction::RecoveryRequired {
-                    transaction_id: transaction_id.clone(),
-                },
-            };
-            actions.push(action);
-        }
+        let actions = journals
+            .iter()
+            .map(|transaction_id| self.settle_transaction(transaction_id))
+            .collect();
         // The journal is written before the snapshot and removed after it, so a snapshot
         // without a journal is the remains of an interrupted cleanup.
         for transaction_id in snapshots.difference(&journals) {
             let _ = fs::remove_dir_all(self.transaction_snapshot_path(transaction_id));
         }
         Ok(actions)
+    }
+
+    /// Settles the journal of one transaction whose process is gone.
+    fn settle_transaction(&self, transaction_id: &str) -> PackageRepairAction {
+        let transaction_id_owned = transaction_id.to_owned();
+        match read_transaction_state(self.transaction_state_path(transaction_id), transaction_id) {
+            Ok(TransactionState::Prepared | TransactionState::Staged) => {
+                self.cleanup_transaction_artifacts(transaction_id);
+                PackageRepairAction::DiscardedIncompleteTransaction {
+                    transaction_id: transaction_id_owned,
+                }
+            }
+            Ok(TransactionState::Activating) => {
+                if self.restore_transaction_snapshot(transaction_id).is_ok() {
+                    self.cleanup_transaction_artifacts(transaction_id);
+                    PackageRepairAction::RolledBackInterruptedActivation {
+                        transaction_id: transaction_id_owned,
+                    }
+                } else {
+                    PackageRepairAction::RecoveryRequired {
+                        transaction_id: transaction_id_owned,
+                    }
+                }
+            }
+            Ok(TransactionState::Committed) => {
+                self.cleanup_transaction_artifacts(transaction_id);
+                PackageRepairAction::FinalizedCommittedTransaction {
+                    transaction_id: transaction_id_owned,
+                }
+            }
+            Err(_) => PackageRepairAction::RecoveryRequired {
+                transaction_id: transaction_id_owned,
+            },
+        }
+    }
+
+    /// Clears what an earlier, killed run of the same transaction left behind, so that it
+    /// cannot block this one. Journals of other transactions are left for Repair.
+    fn settle_abandoned_transaction(&self, transaction_id: &str) {
+        crate::remove_abandoned_temporary_files(&self.package_root().join("transactions"));
+        crate::remove_abandoned_temporary_files(&self.package_root());
+        if self.transaction_state_path(transaction_id).exists() {
+            let _ = self.settle_transaction(transaction_id);
+        } else {
+            // The journal is written before the snapshot and removed after it.
+            let _ = fs::remove_dir_all(self.transaction_snapshot_path(transaction_id));
+        }
     }
 
     fn inspect_unowned_package_directories(

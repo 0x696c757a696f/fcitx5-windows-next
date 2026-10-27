@@ -714,8 +714,6 @@ fn an_install_killed_before_activation_does_not_block_the_next_one() {
     .expect("abandoned journal should write");
     std::fs::write(transactions.join("install-rime.state.tmp-1-0"), b"partial")
         .expect("abandoned temporary state should write");
-    std::fs::create_dir_all(transactions.join("orphan.backup"))
-        .expect("orphan snapshot should create");
 
     let request = PackageInstallRequest {
         requested_ids: &["fcitx5-rime"],
@@ -733,7 +731,6 @@ fn an_install_killed_before_activation_does_not_block_the_next_one() {
         .expect("an abandoned journal must not block a new install");
     assert_eq!(executor.activations, 2);
     assert!(!transactions.join("install-rime.state.tmp-1-0").exists());
-    assert!(!transactions.join("orphan.backup").exists());
 }
 
 #[test]
