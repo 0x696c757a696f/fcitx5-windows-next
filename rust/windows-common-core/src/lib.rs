@@ -4,12 +4,8 @@
 // Rust-owned opaque candidate-select client used by the C++ Candidate
 // renderer host (078 Stage 1).
 mod candidate_select_client;
+pub mod engine_client;
 pub use candidate_select_client::safe::CandidateSelectClient;
-pub use candidate_select_client::{
-    fcitx5_windows_common_candidate_select_client_create_utf16,
-    fcitx5_windows_common_candidate_select_client_destroy,
-    fcitx5_windows_common_candidate_select_client_select,
-};
 
 use std::env;
 use std::ffi::{c_void, OsStr, OsString};
@@ -38,8 +34,6 @@ const ERROR_TIMEOUT: u32 = 1460;
 const KF_FLAG_CREATE: u32 = 0x0000_8000;
 const RRF_RT_REG_DWORD: u32 = 0x0000_0010;
 const HKEY_CURRENT_USER: *mut c_void = 0x8000_0001usize as *mut c_void;
-const DEFAULT_CHARSET: u8 = 1;
-const LF_FACESIZE: usize = 32;
 const PIPE_ACCESS_DUPLEX: u32 = 0x0000_0003;
 const FILE_FLAG_OVERLAPPED: u32 = 0x4000_0000;
 const PIPE_TYPE_BYTE: u32 = 0x0000_0000;
@@ -56,45 +50,6 @@ struct Guid {
     data2: u16,
     data3: u16,
     data4: [u8; 8],
-}
-
-#[repr(C)]
-struct LogFontW {
-    height: i32,
-    width: i32,
-    escapement: i32,
-    orientation: i32,
-    weight: i32,
-    italic: u8,
-    underline: u8,
-    strike_out: u8,
-    char_set: u8,
-    out_precision: u8,
-    clip_precision: u8,
-    quality: u8,
-    pitch_and_family: u8,
-    face_name: [u16; LF_FACESIZE],
-}
-
-impl Default for LogFontW {
-    fn default() -> Self {
-        Self {
-            height: 0,
-            width: 0,
-            escapement: 0,
-            orientation: 0,
-            weight: 0,
-            italic: 0,
-            underline: 0,
-            strike_out: 0,
-            char_set: DEFAULT_CHARSET,
-            out_precision: 0,
-            clip_precision: 0,
-            quality: 0,
-            pitch_and_family: 0,
-            face_name: [0; LF_FACESIZE],
-        }
-    }
 }
 
 const FOLDERID_LOCAL_APP_DATA: Guid = Guid {
@@ -173,18 +128,6 @@ fn write_wide_units(wide: &[u16], out: *mut u16, capacity: usize) -> usize {
         }
     }
     wide.len()
-}
-
-fn write_bytes(bytes: &[u8], out: *mut u8, capacity: usize) -> usize {
-    if !out.is_null() && capacity != 0 {
-        let count = bytes.len().min(capacity);
-        if count != 0 {
-            // SAFETY: The caller supplied writable storage for `capacity` bytes.
-            // We copy at most that many initialized bytes.
-            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, count) };
-        }
-    }
-    bytes.len()
 }
 
 fn path_from_raw(path: *const u16, len: usize) -> Option<PathBuf> {
@@ -427,7 +370,7 @@ fn default_data_root_for_module(module_path: &Path, data_directory: &Path) -> Op
 /// Channel data directory from the release-identity contract
 /// (`Fcitx5`, `Fcitx5-Beta`, `Fcitx5-Nightly`).
 #[must_use]
-pub fn release_data_directory() -> &'static str {
+pub(crate) fn release_data_directory() -> &'static str {
     match release_channel() {
         "beta" => "Fcitx5-Beta",
         "nightly" => "Fcitx5-Nightly",
@@ -509,7 +452,7 @@ fn pipe_security_descriptor(
 /// The fields are intentionally private: callers can pass this borrowed value
 /// to a native API during the borrow, but cannot safely extract or retain its
 /// descriptor pointer.
-pub struct SecurityAttributes {
+pub(crate) struct SecurityAttributes {
     n_length: u32,
     security_descriptor: *mut c_void,
     inherit_handle: i32,
@@ -530,35 +473,6 @@ pub struct CurrentUserSecurityAttributes {
 }
 
 impl CurrentUserSecurityAttributes {
-    /// Resolves the authoritative current process identity and creates its
-    /// fail-closed pipe security attributes.
-    #[must_use]
-    pub fn new() -> Option<Self> {
-        let identity = current_identity(std::ptr::null_mut(), 0, std::ptr::null_mut(), 0);
-        if identity.status == 0 || identity.user_sid_len == 0 {
-            return None;
-        }
-
-        let mut user_sid = vec![0_u16; identity.user_sid_len];
-        let identity = current_identity(
-            user_sid.as_mut_ptr(),
-            user_sid.len(),
-            std::ptr::null_mut(),
-            0,
-        );
-        if identity.status == 0 || identity.user_sid_len != user_sid.len() {
-            return None;
-        }
-
-        let user_sid = String::from_utf16(&user_sid).ok()?;
-        Self::from_identity(
-            identity.service_account != 0,
-            identity.session_id,
-            identity.secure_desktop != 0,
-            &user_sid,
-        )
-    }
-
     fn from_identity(
         service_account: bool,
         session_id: u32,
@@ -573,19 +487,6 @@ impl CurrentUserSecurityAttributes {
         Some(Self {
             state: pipe_security_state(service_account, session_id, user_sid)?,
         })
-    }
-
-    fn into_descriptor(mut self) -> *mut c_void {
-        let descriptor = self.state.descriptor;
-        self.state.descriptor = std::ptr::null_mut();
-        self.state.attributes.security_descriptor = std::ptr::null_mut();
-        descriptor
-    }
-
-    /// Borrows the native attributes for a synchronous native call.
-    #[must_use]
-    pub fn attributes(&self) -> &SecurityAttributes {
-        &self.state.attributes
     }
 
     fn native_attributes(&self) -> *mut c_void {
@@ -710,14 +611,14 @@ impl CurrentUserRuntimeIdentity {
     /// Accepts only a named-pipe client from the same interactive principal
     /// and session.
     #[must_use]
-    pub fn verifies_pipe_client(&self, pipe: BorrowedHandle<'_>) -> bool {
+    pub(crate) fn verifies_pipe_client(&self, pipe: BorrowedHandle<'_>) -> bool {
         self.verified_pipe_client_process_id(pipe).is_some()
     }
 
     /// Returns the verified named-pipe client's process ID when it belongs to
     /// this exact interactive principal and session.
     #[must_use]
-    pub fn verified_pipe_client_process_id(&self, pipe: BorrowedHandle<'_>) -> Option<u32> {
+    pub(crate) fn verified_pipe_client_process_id(&self, pipe: BorrowedHandle<'_>) -> Option<u32> {
         let peer = verified_pipe_client_peer(
             pipe.as_raw_handle(),
             self.service_account,
@@ -740,7 +641,10 @@ impl CurrentUserRuntimeIdentity {
     /// Mirrors the C++ `verifyPipeClient` two-phase query: the first call
     /// sizes the SID and path buffers, the second fills and validates them.
     #[must_use]
-    pub fn verified_pipe_client(&self, pipe: BorrowedHandle<'_>) -> Option<VerifiedPipePeer> {
+    pub(crate) fn verified_pipe_client(
+        &self,
+        pipe: BorrowedHandle<'_>,
+    ) -> Option<VerifiedPipePeer> {
         let query = verified_pipe_client_peer(
             pipe.as_raw_handle(),
             self.service_account,
@@ -1138,16 +1042,6 @@ impl NamedPipeServer {
         )
     }
 
-    /// Attempts one immediate connect: accepts an already-connected client or
-    /// fails fast when none is waiting (polling servers).
-    pub fn connect_poll(&self) -> bool {
-        pipe_connect_client(
-            self.handle.as_raw_handle(),
-            tick_milliseconds(),
-            std::ptr::null_mut(),
-        )
-    }
-
     /// Returns the connected client's process ID after enforcing the same
     /// user/session peer policy as [`Self::verifies_client`].
     #[must_use]
@@ -1218,25 +1112,14 @@ impl Drop for NamedPipeServer {
     }
 }
 
-/// Waits for an overlapped named-pipe client connection until `deadline` or
-/// the optional stop handle is signaled.
-#[must_use]
-pub fn connect_named_pipe_client(
-    pipe: BorrowedHandle<'_>,
-    deadline: u64,
-    stop_handle: Option<BorrowedHandle<'_>>,
-) -> bool {
-    pipe_connect_client(
-        pipe.as_raw_handle(),
-        deadline,
-        stop_handle.map_or(std::ptr::null_mut(), |handle| handle.as_raw_handle()),
-    )
-}
-
 /// Reads exactly `bytes.len()` bytes from an overlapped named pipe before the
 /// absolute deadline expires.
 #[must_use]
-pub fn read_named_pipe_exact(pipe: BorrowedHandle<'_>, bytes: &mut [u8], deadline: u64) -> bool {
+pub(crate) fn read_named_pipe_exact(
+    pipe: BorrowedHandle<'_>,
+    bytes: &mut [u8],
+    deadline: u64,
+) -> bool {
     pipe_transfer(
         pipe.as_raw_handle(),
         false,
@@ -1249,7 +1132,7 @@ pub fn read_named_pipe_exact(pipe: BorrowedHandle<'_>, bytes: &mut [u8], deadlin
 /// Writes all bytes to an overlapped named pipe before the absolute deadline
 /// expires.
 #[must_use]
-pub fn write_named_pipe_all(pipe: BorrowedHandle<'_>, bytes: &[u8], deadline: u64) -> bool {
+pub(crate) fn write_named_pipe_all(pipe: BorrowedHandle<'_>, bytes: &[u8], deadline: u64) -> bool {
     pipe_transfer(
         pipe.as_raw_handle(),
         true,
@@ -1313,114 +1196,6 @@ pub fn system_uses_dark_appearance() -> bool {
         )
     };
     status == ERROR_SUCCESS && size == std::mem::size_of::<u32>() as u32 && light == 0
-}
-
-fn add_unique_font_family(fonts: &mut Vec<String>, family: &str) {
-    let candidate = family.trim();
-    if candidate.is_empty() || candidate.starts_with('@') {
-        return;
-    }
-    if fonts
-        .iter()
-        .any(|existing| existing.to_lowercase() == candidate.to_lowercase())
-    {
-        return;
-    }
-    fonts.push(candidate.to_owned());
-}
-
-fn font_face_name(log_font: &LogFontW) -> String {
-    let len = log_font
-        .face_name
-        .iter()
-        .position(|code_unit| *code_unit == 0)
-        .unwrap_or(log_font.face_name.len());
-    String::from_utf16_lossy(&log_font.face_name[..len])
-}
-
-unsafe extern "system" fn collect_font_family(
-    log_font: *const LogFontW,
-    _text_metric: *const c_void,
-    _font_type: u32,
-    data: isize,
-) -> i32 {
-    if log_font.is_null() || data == 0 {
-        return 0;
-    }
-    // SAFETY: `data` is the Vec<String> pointer supplied to EnumFontFamiliesExW
-    // by `discover_system_font_families`, and it remains live for the duration
-    // of the synchronous enumeration callback.
-    let fonts = unsafe { &mut *(data as *mut Vec<String>) };
-    // SAFETY: Windows invokes the callback with a valid LOGFONTW pointer for
-    // the current font family entry.
-    let family = font_face_name(unsafe { &*log_font });
-    add_unique_font_family(fonts, &family);
-    i32::from(fonts.len() < 512)
-}
-
-fn discover_system_font_families() -> Vec<String> {
-    let mut discovered = Vec::new();
-    // SAFETY: Passing a null HWND requests a screen DC. The returned handle is
-    // released with the same null HWND below.
-    let dc = unsafe { GetDC(std::ptr::null_mut()) };
-    if !dc.is_null() {
-        let mut query = LogFontW::default();
-        // SAFETY: `query` and `discovered` are live for the synchronous GDI
-        // enumeration. The callback does not retain pointers.
-        unsafe {
-            EnumFontFamiliesExW(
-                dc,
-                &mut query,
-                Some(collect_font_family),
-                (&mut discovered as *mut Vec<String>) as isize,
-                0,
-            );
-        }
-        // SAFETY: Releases the DC acquired from GetDC(null).
-        unsafe {
-            ReleaseDC(std::ptr::null_mut(), dc);
-        }
-    }
-    discovered
-}
-
-fn ordered_system_font_families(discovered: &[String]) -> Vec<String> {
-    let mut discovered = discovered.to_owned();
-    discovered.sort_by_key(|family| family.to_lowercase());
-
-    let mut ordered = Vec::new();
-    for preset in [
-        "Microsoft YaHei",
-        "Segoe UI",
-        "Segoe UI Emoji",
-        "Noto Sans CJK SC",
-        "Cascadia Mono",
-        "Consolas",
-    ] {
-        if let Some(font) = discovered
-            .iter()
-            .find(|family| family.to_lowercase() == preset.to_lowercase())
-        {
-            add_unique_font_family(&mut ordered, font);
-        }
-    }
-    for font in &discovered {
-        add_unique_font_family(&mut ordered, font);
-    }
-    if ordered.is_empty() {
-        add_unique_font_family(&mut ordered, "Segoe UI");
-    }
-    ordered
-}
-
-fn system_font_family_payload() -> Vec<u16> {
-    let ordered = ordered_system_font_families(&discover_system_font_families());
-    let mut payload = Vec::new();
-    for family in ordered {
-        payload.extend(family.encode_utf16());
-        payload.push(0);
-    }
-    payload
 }
 
 const SDDL_REVISION_1: u32 = 1;
@@ -1570,8 +1345,6 @@ unsafe extern "system" {
 
 #[link(name = "user32")]
 unsafe extern "system" {
-    fn GetDC(window: *mut c_void) -> *mut c_void;
-    fn ReleaseDC(window: *mut c_void, dc: *mut c_void) -> i32;
     fn RegisterWindowMessageW(string: *const u16) -> u32;
     fn PostMessageW(window: *mut c_void, message: u32, wparam: usize, lparam: isize) -> i32;
     fn OpenInputDesktop(flags: u32, inherit: i32, desired_access: u32) -> *mut c_void;
@@ -1601,17 +1374,7 @@ pub fn broadcast_visual_config_changed() {
 }
 
 #[link(name = "gdi32")]
-unsafe extern "system" {
-    fn EnumFontFamiliesExW(
-        dc: *mut c_void,
-        log_font: *mut LogFontW,
-        callback: Option<
-            unsafe extern "system" fn(*const LogFontW, *const c_void, u32, isize) -> i32,
-        >,
-        data: isize,
-        flags: u32,
-    ) -> i32;
-}
+unsafe extern "system" {}
 
 #[link(name = "shell32")]
 unsafe extern "system" {
@@ -1654,17 +1417,17 @@ fn remaining_milliseconds(deadline: u64) -> Option<u32> {
     Some((deadline - now).min(MAX_DWORD_MINUS_ONE) as u32)
 }
 
-fn deadline_after_milliseconds(milliseconds: u32) -> u64 {
+pub fn deadline_after_milliseconds(milliseconds: u32) -> u64 {
     // SAFETY: Monotonic Windows tick query with no preconditions.
     unsafe { GetTickCount64() }.saturating_add(milliseconds as u64)
 }
 
-fn tick_milliseconds() -> u64 {
+pub fn tick_milliseconds() -> u64 {
     // SAFETY: Monotonic Windows tick query with no preconditions.
     unsafe { GetTickCount64() }
 }
 
-fn deadline_has_time(deadline: u64) -> bool {
+pub fn deadline_has_time(deadline: u64) -> bool {
     remaining_milliseconds(deadline).is_some()
 }
 
@@ -2919,48 +2682,7 @@ impl Drop for VerifiedPipeClient {
     }
 }
 
-fn utf8_to_wide(bytes: &[u8], output: *mut u16, capacity: usize) -> Fcitx5WindowsCommonUtf8ToWide {
-    let Ok(text) = std::str::from_utf8(bytes) else {
-        return Fcitx5WindowsCommonUtf8ToWide::default();
-    };
-    let wide: Vec<u16> = text.encode_utf16().collect();
-    write_wide_units(&wide, output, capacity);
-    Fcitx5WindowsCommonUtf8ToWide {
-        status: 1,
-        utf16_len: wide.len(),
-    }
-}
-
-fn wide_to_utf8(wide: &[u16], output: *mut u8, capacity: usize) -> Fcitx5WindowsCommonWideToUtf8 {
-    let Ok(text) = String::from_utf16(wide) else {
-        return Fcitx5WindowsCommonWideToUtf8::default();
-    };
-    let bytes = text.as_bytes();
-    write_bytes(bytes, output, capacity);
-    Fcitx5WindowsCommonWideToUtf8 {
-        status: 1,
-        utf8_len: bytes.len(),
-    }
-}
-
-fn utf8_offset_to_wide(bytes: &[u8], offset: u32) -> Fcitx5WindowsCommonUtf8OffsetToWide {
-    let offset = offset as usize;
-    if offset > bytes.len() {
-        return Fcitx5WindowsCommonUtf8OffsetToWide::default();
-    }
-    let Ok(prefix) = std::str::from_utf8(&bytes[..offset]) else {
-        return Fcitx5WindowsCommonUtf8OffsetToWide::default();
-    };
-    let Ok(utf16_offset) = u32::try_from(prefix.encode_utf16().count()) else {
-        return Fcitx5WindowsCommonUtf8OffsetToWide::default();
-    };
-    Fcitx5WindowsCommonUtf8OffsetToWide {
-        status: 1,
-        utf16_offset,
-    }
-}
-
-fn ipc_status_ok(status: u32) -> bool {
+pub fn ipc_status_ok(status: u32) -> bool {
     status == 0
 }
 
@@ -2974,7 +2696,7 @@ fn accept_hello_response(
     response_to == expected_request_id && session_id == expected_session_id && ipc_status_ok(status)
 }
 
-fn apply_hello_response_scalars(
+pub fn apply_hello_response_scalars(
     response_to: u64,
     engine_epoch: u64,
     session_id: u32,
@@ -3067,21 +2789,6 @@ fn accept_candidate_select_request(
         && candidate_id != 0
 }
 
-fn accept_engine_status_response(
-    response_to: u64,
-    engine_epoch: u64,
-    session_id: u32,
-    status: u32,
-    expected_request_id: u64,
-    expected_engine_epoch: u64,
-    expected_session_id: u32,
-) -> bool {
-    response_to == expected_request_id
-        && engine_epoch == expected_engine_epoch
-        && session_id == expected_session_id
-        && ipc_status_ok(status)
-}
-
 fn accept_launcher_response(
     response_to: u64,
     session_id: u32,
@@ -3091,11 +2798,11 @@ fn accept_launcher_response(
     response_to == expected_request_id && session_id == expected_session_id
 }
 
-fn next_pipe_client_request_id() -> u64 {
+pub fn next_pipe_client_request_id() -> u64 {
     NEXT_PIPE_CLIENT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-fn apply_key_response_scalars(
+pub fn apply_key_response_scalars(
     input: Fcitx5WindowsCommonKeyResponseScalarInput,
 ) -> Fcitx5WindowsCommonKeyResponseScalars {
     if !accept_key_response(
@@ -3142,34 +2849,7 @@ fn apply_key_response_scalars(
     }
 }
 
-fn apply_engine_status_response_scalars(
-    input: Fcitx5WindowsCommonEngineStatusResponseScalarInput,
-) -> Fcitx5WindowsCommonEngineStatusResponseScalars {
-    if !accept_engine_status_response(
-        input.response_to,
-        input.engine_epoch,
-        input.session_id,
-        input.status,
-        input.expected_request_id,
-        input.expected_engine_epoch,
-        input.expected_session_id,
-    ) {
-        return Fcitx5WindowsCommonEngineStatusResponseScalars::default();
-    }
-    Fcitx5WindowsCommonEngineStatusResponseScalars {
-        status: 1,
-        response_status: input.status,
-        request_id: input.request_id,
-        response_to: input.response_to,
-        engine_epoch: input.engine_epoch,
-        session_id: input.session_id,
-        context_id: input.context_id,
-        composition_id: input.composition_id,
-        revision: input.revision,
-    }
-}
-
-fn apply_launcher_response_scalars(
+pub fn apply_launcher_response_scalars(
     input: Fcitx5WindowsCommonLauncherResponseScalarInput,
 ) -> Fcitx5WindowsCommonLauncherResponseScalars {
     if !accept_launcher_response(
@@ -3322,7 +3002,7 @@ pub fn paths_refer_to_same_file(left: &[u16], right: &[u16]) -> bool {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Fcitx5WindowsCommonBasicFileIdentity {
+pub(crate) struct Fcitx5WindowsCommonBasicFileIdentity {
     pub status: u8,
     pub volume_serial_number: u32,
     pub file_index_high: u32,
@@ -3343,14 +3023,14 @@ pub struct Fcitx5WindowsCommonExecutableFileIdentity {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Fcitx5WindowsCommonProcessSession {
+pub(crate) struct Fcitx5WindowsCommonProcessSession {
     pub status: u8,
     pub session_id: u32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Fcitx5WindowsCommonProcessIdentity {
+pub(crate) struct Fcitx5WindowsCommonProcessIdentity {
     pub status: u8,
     pub service_account: u8,
     pub session_id: u32,
@@ -3360,7 +3040,7 @@ pub struct Fcitx5WindowsCommonProcessIdentity {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Fcitx5WindowsCommonCurrentIdentity {
+pub(crate) struct Fcitx5WindowsCommonCurrentIdentity {
     pub status: u8,
     pub service_account: u8,
     pub secure_desktop: u8,
@@ -3407,28 +3087,7 @@ pub struct Fcitx5WindowsCommonVerifiedPipeClient {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Fcitx5WindowsCommonUtf8ToWide {
-    pub status: u8,
-    pub utf16_len: usize,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Fcitx5WindowsCommonWideToUtf8 {
-    pub status: u8,
-    pub utf8_len: usize,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Fcitx5WindowsCommonUtf8OffsetToWide {
-    pub status: u8,
-    pub utf16_offset: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Fcitx5WindowsCommonPipeTransact {
+pub(crate) struct Fcitx5WindowsCommonPipeTransact {
     pub status: u8,
     pub response_len: usize,
 }
@@ -3513,36 +3172,6 @@ pub struct Fcitx5WindowsCommonKeyResponseScalars {
     pub caret_bottom: i32,
     pub caret_dpi: u32,
     pub candidate_visibility: u8,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Fcitx5WindowsCommonEngineStatusResponseScalarInput {
-    pub request_id: u64,
-    pub response_to: u64,
-    pub engine_epoch: u64,
-    pub session_id: u32,
-    pub context_id: u64,
-    pub composition_id: u64,
-    pub revision: u64,
-    pub status: u32,
-    pub expected_request_id: u64,
-    pub expected_engine_epoch: u64,
-    pub expected_session_id: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Fcitx5WindowsCommonEngineStatusResponseScalars {
-    pub status: u8,
-    pub response_status: u32,
-    pub request_id: u64,
-    pub response_to: u64,
-    pub engine_epoch: u64,
-    pub session_id: u32,
-    pub context_id: u64,
-    pub composition_id: u64,
-    pub revision: u64,
 }
 
 #[repr(C)]
@@ -4005,93 +3634,6 @@ pub unsafe extern "C" fn fcitx5_windows_common_current_generation_utf16(
 #[unsafe(no_mangle)]
 /// # Safety
 ///
-/// `output` may be null for size queries or writable UTF-16 storage for
-/// `capacity` code units. No pointer is retained.
-pub unsafe extern "C" fn fcitx5_windows_common_process_image_path_utf16(
-    process_id: u32,
-    output: *mut u16,
-    capacity: usize,
-) -> usize {
-    let Some(path) = process_image_path(process_id) else {
-        return 0;
-    };
-    write_wide_string(&path, output, capacity)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_process_session_id(
-    process_id: u32,
-) -> Fcitx5WindowsCommonProcessSession {
-    process_session_id(process_id)
-}
-
-#[unsafe(no_mangle)]
-/// # Safety
-///
-/// `service_account` may be null or point to one writable byte. `output` may
-/// be null for size queries or writable UTF-16 storage for `capacity` code
-/// units. No pointer is retained.
-pub unsafe extern "C" fn fcitx5_windows_common_process_user_sid_utf16(
-    process_id: u32,
-    service_account: *mut u8,
-    output: *mut u16,
-    capacity: usize,
-) -> usize {
-    let Some((sid, is_service_account)) = process_user_sid(process_id) else {
-        return 0;
-    };
-    if !service_account.is_null() {
-        // SAFETY: The caller supplied a writable one-byte out pointer.
-        unsafe {
-            *service_account = is_service_account as u8;
-        }
-    }
-    write_wide_units(&sid, output, capacity)
-}
-
-#[unsafe(no_mangle)]
-/// # Safety
-///
-/// Output pointers may be null for size queries or point to writable UTF-16
-/// storage for their paired capacities. No pointer is retained.
-pub unsafe extern "C" fn fcitx5_windows_common_process_identity_utf16(
-    process_id: u32,
-    user_sid_output: *mut u16,
-    user_sid_capacity: usize,
-    executable_path_output: *mut u16,
-    executable_path_capacity: usize,
-) -> Fcitx5WindowsCommonProcessIdentity {
-    process_identity(
-        process_id,
-        user_sid_output,
-        user_sid_capacity,
-        executable_path_output,
-        executable_path_capacity,
-    )
-}
-
-#[unsafe(no_mangle)]
-/// # Safety
-///
-/// Output pointers may be null for size queries or point to writable UTF-16
-/// storage for their paired capacities. No pointer is retained.
-pub unsafe extern "C" fn fcitx5_windows_common_current_identity_utf16(
-    user_sid_output: *mut u16,
-    user_sid_capacity: usize,
-    executable_path_output: *mut u16,
-    executable_path_capacity: usize,
-) -> Fcitx5WindowsCommonCurrentIdentity {
-    current_identity(
-        user_sid_output,
-        user_sid_capacity,
-        executable_path_output,
-        executable_path_capacity,
-    )
-}
-
-#[unsafe(no_mangle)]
-/// # Safety
-///
 /// Output pointers may be null for size queries or point to writable UTF-16
 /// storage for their paired capacities. No pointer is retained.
 pub unsafe extern "C" fn fcitx5_windows_common_process_identity_with_executable_file_utf16(
@@ -4135,11 +3677,6 @@ pub unsafe extern "C" fn fcitx5_windows_common_current_identity_with_executable_
         executable_final_path_output,
         executable_final_path_capacity,
     )
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_secure_input_desktop() -> u8 {
-    secure_input_desktop() as u8
 }
 
 #[unsafe(no_mangle)]
@@ -4281,56 +3818,6 @@ pub unsafe extern "C" fn fcitx5_windows_common_may_launch_user_engine_utf16(
 /// # Safety
 ///
 /// `user_sid` must be null only when `user_sid_len` is zero, or point to a valid
-/// UTF-16 buffer with exactly `user_sid_len` code units. `output` may be null
-/// for size queries or writable UTF-16 storage for `capacity` code units. No
-/// pointer is retained.
-pub unsafe extern "C" fn fcitx5_windows_common_pipe_security_sddl_utf16(
-    service_account: u8,
-    session_id: u32,
-    user_sid: *const u16,
-    user_sid_len: usize,
-    output: *mut u16,
-    capacity: usize,
-) -> usize {
-    let Some(user_sid) = wide_string_from_raw(user_sid, user_sid_len) else {
-        return 0;
-    };
-    let Some(sddl) = pipe_security_sddl(service_account != 0, session_id, &user_sid) else {
-        return 0;
-    };
-    write_wide_string(&sddl, output, capacity)
-}
-
-#[unsafe(no_mangle)]
-/// # Safety
-///
-/// `user_sid` must be null only when `user_sid_len` is zero, or point to a valid
-/// UTF-16 buffer with exactly `user_sid_len` code units. The returned pointer is
-/// null on failure; non-null pointers are allocated by Windows and must be
-/// released with `LocalFree`.
-pub unsafe extern "C" fn fcitx5_windows_common_pipe_security_descriptor_utf16(
-    service_account: u8,
-    session_id: u32,
-    user_sid: *const u16,
-    user_sid_len: usize,
-) -> *mut c_void {
-    let Some(user_sid) = wide_string_from_raw(user_sid, user_sid_len) else {
-        return std::ptr::null_mut();
-    };
-    let Some(security) = CurrentUserSecurityAttributes::from_pipe_identity(
-        service_account != 0,
-        session_id,
-        &user_sid,
-    ) else {
-        return std::ptr::null_mut();
-    };
-    security.into_descriptor()
-}
-
-#[unsafe(no_mangle)]
-/// # Safety
-///
-/// `user_sid` must be null only when `user_sid_len` is zero, or point to a valid
 /// UTF-16 buffer with exactly `user_sid_len` code units. The returned pointer is
 /// a Rust-owned opaque handle that must be released with
 /// `fcitx5_windows_common_pipe_security_destroy`.
@@ -4393,61 +3880,6 @@ pub unsafe extern "C" fn fcitx5_windows_common_pipe_security_destroy(state: *mut
 #[unsafe(no_mangle)]
 /// # Safety
 ///
-/// SID pointers must be null only when their corresponding length is zero, or
-/// point to valid UTF-16 buffers with exactly the provided lengths. No pointer
-/// is retained.
-pub unsafe extern "C" fn fcitx5_windows_common_same_principal_session_utf16(
-    peer_session_id: u32,
-    peer_service_account: u8,
-    peer_user_sid: *const u16,
-    peer_user_sid_len: usize,
-    current_session_id: u32,
-    current_user_sid: *const u16,
-    current_user_sid_len: usize,
-) -> u8 {
-    let Some(peer_user_sid) = wide_string_from_raw(peer_user_sid, peer_user_sid_len) else {
-        return 0;
-    };
-    let Some(current_user_sid) = wide_string_from_raw(current_user_sid, current_user_sid_len)
-    else {
-        return 0;
-    };
-    same_principal_and_session(
-        peer_session_id,
-        peer_service_account != 0,
-        &peer_user_sid,
-        current_session_id,
-        &current_user_sid,
-    ) as u8
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_peer_development_policy_allowed(
-    development_exception_enabled: u8,
-) -> u8 {
-    peer_development_policy_allowed(development_exception_enabled != 0) as u8
-}
-
-#[unsafe(no_mangle)]
-/// # Safety
-///
-/// `pipe` must be a live overlapped pipe handle. `data` must be null only when
-/// `size` is zero, or point to a buffer covering exactly `size` bytes. For
-/// write operations the buffer is read; for read operations the buffer is
-/// written. No pointer is retained.
-pub unsafe extern "C" fn fcitx5_windows_common_pipe_transfer(
-    pipe: *mut c_void,
-    write: u8,
-    data: *mut u8,
-    size: usize,
-    deadline: u64,
-) -> u8 {
-    pipe_transfer(pipe, write != 0, data, size, deadline) as u8
-}
-
-#[unsafe(no_mangle)]
-/// # Safety
-///
 /// `pipe` must be a live overlapped pipe handle. `data` must be null only when
 /// `size` is zero, or point to a buffer covering exactly `size` bytes. For
 /// write operations the buffer is read; for read operations the buffer is
@@ -4479,396 +3911,8 @@ pub unsafe extern "C" fn fcitx5_windows_common_pipe_connect_client(
 }
 
 #[unsafe(no_mangle)]
-/// # Safety
-///
-/// `pipe` must be a live overlapped pipe handle. `request` must be null only
-/// when `request_len` is zero, or point to a readable request buffer.
-/// `response_output` must point to writable storage for `response_capacity`
-/// bytes. No pointer is retained.
-pub unsafe extern "C" fn fcitx5_windows_common_pipe_transact(
-    pipe: *mut c_void,
-    request: *const u8,
-    request_len: usize,
-    response_output: *mut u8,
-    response_capacity: usize,
-    deadline: u64,
-) -> Fcitx5WindowsCommonPipeTransact {
-    let request = if request.is_null() {
-        if request_len != 0 {
-            return Fcitx5WindowsCommonPipeTransact::default();
-        }
-        &[]
-    } else {
-        // SAFETY: The caller supplies exactly `request_len` readable bytes.
-        unsafe { std::slice::from_raw_parts(request, request_len) }
-    };
-    pipe_transact(pipe, request, response_output, response_capacity, deadline)
-}
-
-#[unsafe(no_mangle)]
-/// # Safety
-///
-/// `pipe` must be a live named-pipe handle. `request` must point to
-/// `request_len` readable bytes. `response_output` must point to writable
-/// storage for `response_capacity` bytes. No pointer is retained.
-pub unsafe extern "C" fn fcitx5_windows_common_pipe_transact_with_error(
-    pipe: *mut c_void,
-    request: *const u8,
-    request_len: usize,
-    response_output: *mut u8,
-    response_capacity: usize,
-    deadline: u64,
-) -> Fcitx5WindowsCommonPipeTransactWithError {
-    if request.is_null() {
-        return Fcitx5WindowsCommonPipeTransactWithError {
-            failure_error: ERROR_INVALID_DATA,
-            ..Default::default()
-        };
-    }
-    // SAFETY: The caller provides exactly `request_len` readable bytes. The
-    // slice is used only during this call.
-    let request = unsafe { std::slice::from_raw_parts(request, request_len) };
-    pipe_transact_with_error(pipe, request, response_output, response_capacity, deadline)
-}
-
-#[unsafe(no_mangle)]
 pub extern "C" fn fcitx5_windows_common_deadline_after_milliseconds(milliseconds: u32) -> u64 {
     deadline_after_milliseconds(milliseconds)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_tick_milliseconds() -> u64 {
-    tick_milliseconds()
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_deadline_has_time(deadline: u64) -> u8 {
-    deadline_has_time(deadline) as u8
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_current_process_id() -> u32 {
-    // SAFETY: Retrieves the current process id and has no preconditions.
-    unsafe { GetCurrentProcessId() }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_system_uses_dark_appearance() -> u8 {
-    system_uses_dark_appearance() as u8
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_system_font_families_utf16(
-    output: *mut u16,
-    capacity: usize,
-) -> usize {
-    write_wide_units(&system_font_family_payload(), output, capacity)
-}
-
-#[unsafe(no_mangle)]
-/// # Safety
-///
-/// `pipe_name` must be null only when `pipe_name_len` is zero, or point to a
-/// readable UTF-16 buffer with exactly the provided length. No pointer is
-/// retained. The returned handle is owned by the caller and must be closed with
-/// `CloseHandle`.
-pub unsafe extern "C" fn fcitx5_windows_common_open_pipe_client_utf16(
-    pipe_name: *const u16,
-    pipe_name_len: usize,
-    deadline: u64,
-    wait_when_busy: u8,
-) -> *mut c_void {
-    let pipe_name = if pipe_name.is_null() {
-        if pipe_name_len != 0 {
-            return invalid_handle_value();
-        }
-        &[]
-    } else {
-        // SAFETY: The caller supplies exactly `pipe_name_len` readable UTF-16
-        // code units. The slice is copied before any Win32 call retains nothing.
-        unsafe { std::slice::from_raw_parts(pipe_name, pipe_name_len) }
-    };
-    open_pipe_client(pipe_name, deadline, wait_when_busy != 0)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_pipe_client_connected(pipe: *mut c_void) -> u8 {
-    u8::from(pipe_client_is_connected(pipe))
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_close_pipe_client(pipe: *mut c_void) {
-    close_pipe_client(pipe);
-}
-
-#[unsafe(no_mangle)]
-/// # Safety
-///
-/// `input` must be null only when `input_len` is zero, or point to a readable
-/// byte buffer with exactly the provided length. `output` may be null for size
-/// queries or point to writable UTF-16 storage for `capacity` code units. No
-/// pointer is retained.
-pub unsafe extern "C" fn fcitx5_windows_common_utf8_to_wide_utf16(
-    input: *const u8,
-    input_len: usize,
-    output: *mut u16,
-    capacity: usize,
-) -> Fcitx5WindowsCommonUtf8ToWide {
-    let input = if input.is_null() {
-        if input_len != 0 {
-            return Fcitx5WindowsCommonUtf8ToWide::default();
-        }
-        &[]
-    } else {
-        // SAFETY: The caller supplies exactly `input_len` readable bytes. The
-        // slice is only decoded/copied during this call.
-        unsafe { std::slice::from_raw_parts(input, input_len) }
-    };
-    utf8_to_wide(input, output, capacity)
-}
-
-#[unsafe(no_mangle)]
-/// # Safety
-///
-/// `input` must be null only when `input_len` is zero, or point to a readable
-/// UTF-16 buffer with exactly the provided length. `output` may be null for
-/// size queries or point to writable byte storage for `capacity` bytes. No
-/// pointer is retained.
-pub unsafe extern "C" fn fcitx5_windows_common_wide_utf16_to_utf8(
-    input: *const u16,
-    input_len: usize,
-    output: *mut u8,
-    capacity: usize,
-) -> Fcitx5WindowsCommonWideToUtf8 {
-    let input = if input.is_null() {
-        if input_len != 0 {
-            return Fcitx5WindowsCommonWideToUtf8::default();
-        }
-        &[]
-    } else {
-        // SAFETY: The caller supplies exactly `input_len` readable UTF-16 code
-        // units. The slice is only decoded/copied during this call.
-        unsafe { std::slice::from_raw_parts(input, input_len) }
-    };
-    wide_to_utf8(input, output, capacity)
-}
-
-#[unsafe(no_mangle)]
-/// # Safety
-///
-/// `input` must be null only when `input_len` is zero, or point to a readable
-/// byte buffer with exactly the provided length. No pointer is retained.
-pub unsafe extern "C" fn fcitx5_windows_common_utf8_offset_to_wide(
-    input: *const u8,
-    input_len: usize,
-    offset: u32,
-) -> Fcitx5WindowsCommonUtf8OffsetToWide {
-    let input = if input.is_null() {
-        if input_len != 0 {
-            return Fcitx5WindowsCommonUtf8OffsetToWide::default();
-        }
-        &[]
-    } else {
-        // SAFETY: The caller supplies exactly `input_len` readable bytes. The
-        // slice is only decoded during this call.
-        unsafe { std::slice::from_raw_parts(input, input_len) }
-    };
-    utf8_offset_to_wide(input, offset)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_accept_hello_response(
-    response_to: u64,
-    session_id: u32,
-    status: u32,
-    expected_request_id: u64,
-    expected_session_id: u32,
-) -> u8 {
-    accept_hello_response(
-        response_to,
-        session_id,
-        status,
-        expected_request_id,
-        expected_session_id,
-    ) as u8
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_apply_hello_response_scalars(
-    response_to: u64,
-    engine_epoch: u64,
-    session_id: u32,
-    status: u32,
-    expected_request_id: u64,
-    expected_session_id: u32,
-) -> Fcitx5WindowsCommonHelloResponseScalars {
-    apply_hello_response_scalars(
-        response_to,
-        engine_epoch,
-        session_id,
-        status,
-        expected_request_id,
-        expected_session_id,
-    )
-}
-
-#[unsafe(no_mangle)]
-#[allow(clippy::too_many_arguments)]
-pub extern "C" fn fcitx5_windows_common_accept_key_response(
-    response_to: u64,
-    engine_epoch: u64,
-    session_id: u32,
-    context_id: u64,
-    revision: u64,
-    status: u32,
-    expected_request_id: u64,
-    expected_engine_epoch: u64,
-    expected_session_id: u32,
-    expected_context_id: u64,
-    previous_revision: u64,
-) -> u8 {
-    accept_key_response(
-        response_to,
-        engine_epoch,
-        session_id,
-        context_id,
-        revision,
-        status,
-        expected_request_id,
-        expected_engine_epoch,
-        expected_session_id,
-        expected_context_id,
-        previous_revision,
-    ) as u8
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_apply_key_response_scalars(
-    input: Fcitx5WindowsCommonKeyResponseScalarInput,
-) -> Fcitx5WindowsCommonKeyResponseScalars {
-    apply_key_response_scalars(input)
-}
-
-#[unsafe(no_mangle)]
-#[allow(clippy::too_many_arguments)]
-pub extern "C" fn fcitx5_windows_common_accept_candidate_select_response(
-    response_to: u64,
-    engine_epoch: u64,
-    session_id: u32,
-    context_id: u64,
-    revision: u64,
-    status: u32,
-    expected_request_id: u64,
-    expected_engine_epoch: u64,
-    expected_session_id: u32,
-    expected_context_id: u64,
-    previous_revision: u64,
-) -> u8 {
-    accept_candidate_select_response(
-        response_to,
-        engine_epoch,
-        session_id,
-        context_id,
-        revision,
-        status,
-        expected_request_id,
-        expected_engine_epoch,
-        expected_session_id,
-        expected_context_id,
-        previous_revision,
-    ) as u8
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_accept_candidate_select_request(
-    current_engine_epoch: u64,
-    expected_engine_epoch: u64,
-    target_process_id: u32,
-    context_id: u64,
-    composition_id: u64,
-    revision: u64,
-    candidate_id: u64,
-) -> u8 {
-    accept_candidate_select_request(
-        current_engine_epoch,
-        expected_engine_epoch,
-        target_process_id,
-        context_id,
-        composition_id,
-        revision,
-        candidate_id,
-    ) as u8
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_accept_engine_status_response(
-    response_to: u64,
-    engine_epoch: u64,
-    session_id: u32,
-    status: u32,
-    expected_request_id: u64,
-    expected_engine_epoch: u64,
-    expected_session_id: u32,
-) -> u8 {
-    accept_engine_status_response(
-        response_to,
-        engine_epoch,
-        session_id,
-        status,
-        expected_request_id,
-        expected_engine_epoch,
-        expected_session_id,
-    ) as u8
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_apply_engine_status_response_scalars(
-    input: Fcitx5WindowsCommonEngineStatusResponseScalarInput,
-) -> Fcitx5WindowsCommonEngineStatusResponseScalars {
-    apply_engine_status_response_scalars(input)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_accept_launcher_response(
-    response_to: u64,
-    session_id: u32,
-    expected_request_id: u64,
-    expected_session_id: u32,
-) -> u8 {
-    accept_launcher_response(
-        response_to,
-        session_id,
-        expected_request_id,
-        expected_session_id,
-    ) as u8
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_apply_launcher_response_scalars(
-    input: Fcitx5WindowsCommonLauncherResponseScalarInput,
-) -> Fcitx5WindowsCommonLauncherResponseScalars {
-    apply_launcher_response_scalars(input)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_next_launcher_request_id() -> u64 {
-    next_launcher_request_id()
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_next_pipe_client_request_id() -> u64 {
-    next_pipe_client_request_id()
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_ipc_status_ok(status: u32) -> u8 {
-    ipc_status_ok(status) as u8
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_set_last_error(error: u32) {
-    // SAFETY: Sets the thread-local Win32 last-error value for the caller.
-    unsafe { SetLastError(error) };
 }
 
 #[unsafe(no_mangle)]
@@ -5006,41 +4050,6 @@ pub unsafe extern "C" fn fcitx5_windows_common_executable_files_match_utf16(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fcitx5_windows_common_basic_file_identities_match(
-    left_volume_serial_number: u32,
-    left_file_index_high: u32,
-    left_file_index_low: u32,
-    right_volume_serial_number: u32,
-    right_file_index_high: u32,
-    right_file_index_low: u32,
-) -> u8 {
-    basic_file_identities_match(
-        left_volume_serial_number,
-        left_file_index_high,
-        left_file_index_low,
-        right_volume_serial_number,
-        right_file_index_high,
-        right_file_index_low,
-    ) as u8
-}
-
-#[unsafe(no_mangle)]
-/// # Safety
-///
-/// `path` must point to exactly `path_len` readable UTF-16 code units.
-pub unsafe extern "C" fn fcitx5_windows_common_basic_file_identity_utf16(
-    path: *const u16,
-    path_len: usize,
-) -> Fcitx5WindowsCommonBasicFileIdentity {
-    if path.is_null() {
-        return Fcitx5WindowsCommonBasicFileIdentity::default();
-    }
-    // SAFETY: The caller supplies exactly `path_len` readable UTF-16 code units.
-    // The path is copied and not retained.
-    basic_file_identity(unsafe { std::slice::from_raw_parts(path, path_len) })
-}
-
-#[unsafe(no_mangle)]
 /// # Safety
 ///
 /// Both path pointers must point to exactly their corresponding readable UTF-16
@@ -5108,22 +4117,6 @@ pub unsafe extern "C" fn fcitx5_windows_common_executable_paths_match_utf16(
     // `right_path_len` UTF-16 code units; the slice is not retained.
     let right = unsafe { std::slice::from_raw_parts(right_path, right_path_len) };
     executable_paths_match(left, right) as u8
-}
-
-#[unsafe(no_mangle)]
-/// # Safety
-///
-/// `path` must point to exactly `path_len` readable UTF-16 code units. The
-/// function returns true for invalid/unreadable paths to preserve the
-/// fail-closed executable identity policy.
-pub unsafe extern "C" fn fcitx5_windows_common_path_is_reparse_point_utf16(
-    path: *const u16,
-    path_len: usize,
-) -> u8 {
-    let Some(path) = path_from_raw(path, path_len) else {
-        return 1;
-    };
-    path_is_reparse_point_or_untrusted(&path) as u8
 }
 
 #[cfg(test)]
@@ -5868,105 +4861,12 @@ mod tests {
     }
 
     #[test]
-    fn current_user_security_attributes_use_current_runtime_identity() {
-        let security =
-            CurrentUserSecurityAttributes::new().expect("current user pipe security attributes");
-
-        let attributes = security.attributes();
-
-        assert_eq!(
-            attributes.n_length,
-            std::mem::size_of::<SecurityAttributes>() as u32
-        );
-        assert!(!attributes.security_descriptor.is_null());
-        assert_eq!(attributes.inherit_handle, 0);
-    }
-
-    #[test]
     fn current_user_security_attributes_fail_closed_for_invalid_identity() {
         const USER_SID: &str = "S-1-5-21-100";
 
         assert!(CurrentUserSecurityAttributes::from_identity(true, 7, false, USER_SID).is_none());
         assert!(CurrentUserSecurityAttributes::from_identity(false, 0, false, USER_SID).is_none());
         assert!(CurrentUserSecurityAttributes::from_identity(false, 7, false, "").is_none());
-    }
-
-    #[test]
-    fn pipe_security_abi_preserves_owned_descriptor_contract() {
-        // SAFETY: GetCurrentProcessId has no pointer, ownership, or lifetime
-        // preconditions and only reads the current process identity.
-        let current_process_id = unsafe { GetCurrentProcessId() };
-        let (user_sid, _) = process_user_sid(current_process_id).expect("current process user sid");
-
-        // SAFETY: `user_sid` remains live for this length-delimited ABI call.
-        let state = unsafe {
-            fcitx5_windows_common_pipe_security_create_utf16(
-                0,
-                7,
-                user_sid.as_ptr(),
-                user_sid.len(),
-            )
-        };
-        assert!(!state.is_null());
-        // SAFETY: `state` is the still-live handle returned just above.
-        let attributes = unsafe {
-            fcitx5_windows_common_pipe_security_attributes(state).cast::<SecurityAttributes>()
-        };
-        assert!(!attributes.is_null());
-        // SAFETY: the returned attributes are borrowed from the live `state`.
-        let attributes = unsafe { &*attributes };
-        assert_eq!(
-            attributes.n_length,
-            std::mem::size_of::<SecurityAttributes>() as u32
-        );
-        assert!(!attributes.security_descriptor.is_null());
-        assert_eq!(attributes.inherit_handle, 0);
-        // SAFETY: `state` has not yet been destroyed and is released once here.
-        unsafe {
-            fcitx5_windows_common_pipe_security_destroy(state);
-        }
-
-        // SAFETY: `user_sid` remains live for this length-delimited ABI call.
-        let descriptor = unsafe {
-            fcitx5_windows_common_pipe_security_descriptor_utf16(
-                0,
-                7,
-                user_sid.as_ptr(),
-                user_sid.len(),
-            )
-        };
-        assert!(!descriptor.is_null());
-        // SAFETY: The descriptor ABI transfers the LocalAlloc allocation to
-        // the caller, which releases it exactly once here.
-        unsafe {
-            LocalFree(descriptor);
-        }
-
-        // SAFETY: the UTF-16 input remains live for the duration of each ABI call.
-        assert!(unsafe {
-            fcitx5_windows_common_pipe_security_create_utf16(
-                1,
-                7,
-                user_sid.as_ptr(),
-                user_sid.len(),
-            )
-        }
-        .is_null());
-        // SAFETY: the UTF-16 input remains live for the duration of each ABI call.
-        assert!(unsafe {
-            fcitx5_windows_common_pipe_security_create_utf16(
-                0,
-                0,
-                user_sid.as_ptr(),
-                user_sid.len(),
-            )
-        }
-        .is_null());
-        // SAFETY: a null UTF-16 pointer with zero length is permitted by this ABI.
-        assert!(unsafe {
-            fcitx5_windows_common_pipe_security_create_utf16(0, 7, std::ptr::null(), 0)
-        }
-        .is_null());
     }
 
     #[test]
@@ -6164,7 +5064,6 @@ mod tests {
     fn deadline_and_current_process_id_match_cpp_contract() {
         assert_ne!(deadline_after_milliseconds(1), 0);
         assert_ne!(tick_milliseconds(), 0);
-        assert_ne!(fcitx5_windows_common_tick_milliseconds(), 0);
         assert!(deadline_has_time(deadline_after_milliseconds(100)));
         assert!(!deadline_has_time(0));
         // SAFETY: GetCurrentProcessId has no pointer, ownership, or lifetime
@@ -6172,62 +5071,7 @@ mod tests {
         assert_ne!(unsafe { GetCurrentProcessId() }, 0);
         // SAFETY: GetCurrentProcessId has no pointer, ownership, or lifetime
         // preconditions and only reads the current process identity.
-        assert_eq!(fcitx5_windows_common_current_process_id(), unsafe {
-            GetCurrentProcessId()
-        });
-    }
-
-    #[test]
-    fn system_dark_appearance_registry_policy_matches_cpp_contract() {
-        assert!(matches!(
-            fcitx5_windows_common_system_uses_dark_appearance(),
-            0 | 1
-        ));
-        assert!(matches!(system_uses_dark_appearance(), false | true));
-    }
-
-    #[test]
-    fn system_font_family_ordering_matches_cpp_contract() {
-        let fonts = ordered_system_font_families(&[
-            "Consolas".to_owned(),
-            "@Arial".to_owned(),
-            "Segoe UI Emoji".to_owned(),
-            "Arial".to_owned(),
-            "arial".to_owned(),
-            "Microsoft YaHei".to_owned(),
-        ]);
-        assert_eq!(fonts[0], "Microsoft YaHei");
-        assert_eq!(fonts[1], "Segoe UI Emoji");
-        assert_eq!(fonts[2], "Consolas");
-        assert!(fonts.iter().any(|family| family == "Arial"));
-        assert_eq!(
-            fonts
-                .iter()
-                .filter(|family| family.eq_ignore_ascii_case("Arial"))
-                .count(),
-            1
-        );
-        assert!(!fonts.iter().any(|family| family.starts_with('@')));
-    }
-
-    #[test]
-    fn system_font_families_utf16_returns_picker_payload() {
-        let required = fcitx5_windows_common_system_font_families_utf16(std::ptr::null_mut(), 0);
-        assert!(required > 0);
-
-        let mut payload = vec![0_u16; required];
-        let filled =
-            fcitx5_windows_common_system_font_families_utf16(payload.as_mut_ptr(), payload.len());
-        assert_eq!(filled, required);
-        assert_eq!(payload.last(), Some(&0));
-
-        let families = payload
-            .split(|code_unit| *code_unit == 0)
-            .filter(|slice| !slice.is_empty())
-            .map(String::from_utf16_lossy)
-            .collect::<Vec<_>>();
-        assert!(!families.is_empty());
-        assert!(!families.iter().any(|family| family.starts_with('@')));
+        assert_eq!(std::process::id(), unsafe { GetCurrentProcessId() });
     }
 
     #[test]
@@ -6291,92 +5135,6 @@ mod tests {
     fn close_pipe_client_ignores_invalid_handle_like_cpp_contract() {
         close_pipe_client(std::ptr::null_mut());
         close_pipe_client(invalid_handle_value());
-        fcitx5_windows_common_close_pipe_client(std::ptr::null_mut());
-        fcitx5_windows_common_close_pipe_client(invalid_handle_value());
-    }
-
-    #[test]
-    fn utf8_to_wide_matches_cpp_contract() {
-        let source = "abc\u{1f600}";
-        let query = utf8_to_wide(source.as_bytes(), std::ptr::null_mut(), 0);
-        assert_eq!(query.status, 1);
-        assert_eq!(query.utf16_len, 5);
-        let mut wide = vec![0_u16; query.utf16_len];
-        let filled = utf8_to_wide(source.as_bytes(), wide.as_mut_ptr(), wide.len());
-        assert_eq!(filled.status, 1);
-        assert_eq!(filled.utf16_len, wide.len());
-        assert_eq!(String::from_utf16(&wide).expect("wide"), source);
-        assert_eq!(utf8_to_wide(&[0xff], std::ptr::null_mut(), 0).status, 0);
-    }
-
-    #[test]
-    fn wide_to_utf8_matches_cpp_contract() {
-        let source = "abc\u{1f600}";
-        let wide: Vec<u16> = source.encode_utf16().collect();
-        let query = wide_to_utf8(&wide, std::ptr::null_mut(), 0);
-        assert_eq!(query.status, 1);
-        assert_eq!(query.utf8_len, source.len());
-        let mut bytes = vec![0_u8; query.utf8_len];
-        let filled = wide_to_utf8(&wide, bytes.as_mut_ptr(), bytes.len());
-        assert_eq!(filled.status, 1);
-        assert_eq!(filled.utf8_len, bytes.len());
-        assert_eq!(String::from_utf8(bytes).expect("utf8"), source);
-        assert_eq!(wide_to_utf8(&[0xd800], std::ptr::null_mut(), 0).status, 0);
-        let empty = wide_to_utf8(&[], std::ptr::null_mut(), 0);
-        assert_eq!(empty.status, 1);
-        assert_eq!(empty.utf8_len, 0);
-    }
-
-    #[test]
-    fn utf8_offset_to_wide_matches_cpp_contract() {
-        let source = "a\u{1f600}b";
-        assert_eq!(utf8_offset_to_wide(source.as_bytes(), 0).utf16_offset, 0);
-        assert_eq!(utf8_offset_to_wide(source.as_bytes(), 1).utf16_offset, 1);
-        assert_eq!(utf8_offset_to_wide(source.as_bytes(), 5).utf16_offset, 3);
-        assert_eq!(
-            utf8_offset_to_wide(source.as_bytes(), source.len() as u32).utf16_offset,
-            4
-        );
-        assert_eq!(utf8_offset_to_wide(source.as_bytes(), 2).status, 0);
-        assert_eq!(utf8_offset_to_wide(source.as_bytes(), 99).status, 0);
-    }
-
-    #[test]
-    fn ipc_response_acceptance_matches_cpp_contract() {
-        assert!(accept_hello_response(11, 7, 0, 11, 7));
-        assert!(!accept_hello_response(12, 7, 0, 11, 7));
-        assert!(!accept_hello_response(11, 8, 0, 11, 7));
-        assert!(!accept_hello_response(11, 7, 1, 11, 7));
-
-        assert!(accept_key_response(11, 99, 7, 42, 5, 0, 11, 99, 7, 42, 4));
-        assert!(!accept_key_response(11, 98, 7, 42, 5, 0, 11, 99, 7, 42, 4));
-        assert!(!accept_key_response(11, 99, 7, 42, 4, 0, 11, 99, 7, 42, 4));
-        assert!(!accept_key_response(11, 99, 7, 43, 5, 0, 11, 99, 7, 42, 4));
-        assert!(!accept_key_response(11, 99, 7, 42, 5, 3, 11, 99, 7, 42, 4));
-
-        assert!(accept_candidate_select_response(
-            12, 99, 7, 42, 6, 0, 12, 99, 7, 42, 5
-        ));
-        assert!(!accept_candidate_select_response(
-            12, 99, 7, 42, 5, 0, 12, 99, 7, 42, 5
-        ));
-
-        assert!(accept_candidate_select_request(99, 99, 1234, 42, 6, 5, 77));
-        assert!(!accept_candidate_select_request(98, 99, 1234, 42, 6, 5, 77));
-        assert!(!accept_candidate_select_request(99, 0, 1234, 42, 6, 5, 77));
-        assert!(!accept_candidate_select_request(99, 99, 0, 42, 6, 5, 77));
-        assert!(!accept_candidate_select_request(99, 99, 1234, 0, 6, 5, 77));
-        assert!(!accept_candidate_select_request(99, 99, 1234, 42, 0, 5, 77));
-        assert!(!accept_candidate_select_request(99, 99, 1234, 42, 6, 0, 77));
-        assert!(!accept_candidate_select_request(99, 99, 1234, 42, 6, 5, 0));
-
-        assert!(accept_engine_status_response(13, 99, 7, 0, 13, 99, 7));
-        assert!(!accept_engine_status_response(13, 0, 7, 0, 13, 99, 7));
-        assert!(!accept_engine_status_response(13, 99, 7, 5, 13, 99, 7));
-
-        assert!(accept_launcher_response(14, 7, 14, 7));
-        assert!(!accept_launcher_response(15, 7, 14, 7));
-        assert!(!accept_launcher_response(14, 8, 14, 7));
     }
 
     #[test]
@@ -6394,51 +5152,15 @@ mod tests {
 
     #[test]
     fn launcher_request_id_and_status_policy_match_cpp_contract() {
-        let first = fcitx5_windows_common_next_launcher_request_id();
-        let second = fcitx5_windows_common_next_launcher_request_id();
+        let first = next_launcher_request_id();
+        let second = next_launcher_request_id();
         assert_eq!(second, first + 1);
-        let pipe_first = fcitx5_windows_common_next_pipe_client_request_id();
-        let pipe_second = fcitx5_windows_common_next_pipe_client_request_id();
+        let pipe_first = next_pipe_client_request_id();
+        let pipe_second = next_pipe_client_request_id();
         assert_ne!(pipe_first, 0);
         assert_eq!(pipe_second, pipe_first + 1);
-        assert_eq!(fcitx5_windows_common_ipc_status_ok(0), 1);
-        assert_eq!(fcitx5_windows_common_ipc_status_ok(1), 0);
-    }
-
-    #[test]
-    fn engine_status_response_scalar_application_matches_cpp_contract() {
-        let input = Fcitx5WindowsCommonEngineStatusResponseScalarInput {
-            request_id: 21,
-            response_to: 13,
-            engine_epoch: 99,
-            session_id: 7,
-            context_id: 0,
-            composition_id: 0,
-            revision: 0,
-            status: 0,
-            expected_request_id: 13,
-            expected_engine_epoch: 99,
-            expected_session_id: 7,
-        };
-        let accepted = apply_engine_status_response_scalars(input);
-        assert_eq!(accepted.status, 1);
-        assert_eq!(accepted.response_status, 0);
-        assert_eq!(accepted.request_id, 21);
-        assert_eq!(accepted.response_to, 13);
-        assert_eq!(accepted.engine_epoch, 99);
-        assert_eq!(accepted.session_id, 7);
-        assert_eq!(accepted.context_id, 0);
-        assert_eq!(accepted.composition_id, 0);
-        assert_eq!(accepted.revision, 0);
-
-        let rejected = apply_engine_status_response_scalars(
-            Fcitx5WindowsCommonEngineStatusResponseScalarInput {
-                response_to: 14,
-                ..input
-            },
-        );
-        assert_eq!(rejected.status, 0);
-        assert_eq!(rejected.engine_epoch, 0);
+        assert!(ipc_status_ok(0));
+        assert!(!ipc_status_ok(1));
     }
 
     #[test]
@@ -6478,16 +5200,6 @@ mod tests {
             });
         assert_eq!(rejected.status, 0);
         assert_eq!(rejected.launcher_state, 0);
-    }
-
-    #[test]
-    fn set_last_error_matches_cpp_contract() {
-        fcitx5_windows_common_set_last_error(1234);
-        // SAFETY: GetLastError only reads the current thread's Win32 error slot.
-        assert_eq!(unsafe { GetLastError() }, 1234);
-        fcitx5_windows_common_set_last_error(0);
-        // SAFETY: GetLastError only reads the current thread's Win32 error slot.
-        assert_eq!(unsafe { GetLastError() }, 0);
     }
 
     #[test]

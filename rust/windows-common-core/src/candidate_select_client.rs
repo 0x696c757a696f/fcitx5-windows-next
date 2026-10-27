@@ -1,24 +1,10 @@
-#![deny(unsafe_op_in_unsafe_fn)]
+#![forbid(unsafe_code)]
 
-//! C ABI surface for the Rust-owned opaque candidate-select client used by the
-//! C++ Candidate renderer host (`src/ui/ui_main.cpp`). Stage 1 of 078.
-//!
-//! The C++ `PipeClient::selectCandidate` path is replaced by one opaque handle
-//! whose connect/verify/handshake/candidate-select state lives in Rust. C++
-//! holds only the opaque pointer plus plain scalar arguments and receives a
-//! single `u8`. All peer/revision/scalar policy is the existing Rust
-//! `fcitx5_windows_common_*` logic; the wire codec is `fcitx5-protocol-core`.
-//!
-//! Safety: this file is the named low-level Win32/C-ABI exception in the
-//! repository safety policy. The safe `CandidateSelectClient` lives in the
-//! `#[forbid(unsafe_code)]` module below; the exported shims are narrow
-//! `unsafe` blocks that validate raw pointers and box/unbox the handle.
-
-use std::ffi::c_void;
+//! Rust-owned candidate-select client used by the candidate UI host
+//! (`fcitx5-ui`). Connect, peer verification, handshake and candidate-select
+//! state live here; the wire codec is `fcitx5-protocol-core`.
 
 pub mod safe {
-    #![forbid(unsafe_code)]
-
     use crate::{
         close_pipe_client, invalid_handle_value, open_pipe_client, pipe_transact,
         verify_pipe_server_peer, CurrentUserRuntimeIdentity,
@@ -138,7 +124,7 @@ pub mod safe {
                     ..Default::default()
                 },
                 client_architecture_bits: (std::mem::size_of::<usize>() * 8) as u32,
-                client_process_id: crate::fcitx5_windows_common_current_process_id(),
+                client_process_id: std::process::id(),
             };
             let Some(request_bytes) = fcitx5_protocol_core::encode_hello_request(&request) else {
                 self.disconnect();
@@ -260,149 +246,9 @@ pub mod safe {
     }
 }
 
-/// # Safety
-///
-/// `pipe_name` must be null only when `pipe_name_len` is zero, or point to a
-/// readable UTF-16 buffer of exactly `pipe_name_len` code units.
-/// `expected_peer_path` likewise must be null only when
-/// `expected_peer_path_len` is zero, or point to a readable UTF-16 buffer.
-/// Neither pointer is retained. Returns an opaque handle owned by the caller,
-/// released with `fcitx5_windows_common_candidate_select_client_destroy`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn fcitx5_windows_common_candidate_select_client_create_utf16(
-    pipe_name: *const u16,
-    pipe_name_len: usize,
-    expected_peer_path: *const u16,
-    expected_peer_path_len: usize,
-) -> *mut c_void {
-    let pipe_name = if pipe_name.is_null() {
-        if pipe_name_len != 0 {
-            return std::ptr::null_mut();
-        }
-        Vec::new()
-    } else {
-        // SAFETY: The caller supplies exactly `pipe_name_len` readable UTF-16
-        // code units; the slice is copied and not retained.
-        unsafe { std::slice::from_raw_parts(pipe_name, pipe_name_len) }.to_vec()
-    };
-    let expected_peer_path = if expected_peer_path.is_null() {
-        if expected_peer_path_len != 0 {
-            return std::ptr::null_mut();
-        }
-        Vec::new()
-    } else {
-        // SAFETY: The caller supplies exactly `expected_peer_path_len`
-        // readable UTF-16 code units; the slice is copied and not retained.
-        unsafe { std::slice::from_raw_parts(expected_peer_path, expected_peer_path_len) }.to_vec()
-    };
-    match safe::CandidateSelectClient::new(pipe_name, expected_peer_path) {
-        // SAFETY: `Box::into_raw` transfers ownership of the heap allocation
-        // to the raw handle returned to C++; `destroy` restores it.
-        Some(client) => Box::into_raw(Box::new(client)) as *mut c_void,
-        None => std::ptr::null_mut(),
-    }
-}
-
-/// # Safety
-///
-/// `handle` must be null or a value returned by
-/// `fcitx5_windows_common_candidate_select_client_create_utf16` that has not
-/// been destroyed. Returns 1 on success, 0 on any failure.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn fcitx5_windows_common_candidate_select_client_select(
-    handle: *mut c_void,
-    target_process_id: u32,
-    expected_engine_epoch: u64,
-    context_id: u64,
-    composition_id: u64,
-    revision: u64,
-    candidate_id: u64,
-) -> u8 {
-    if handle.is_null() {
-        return 0;
-    }
-    // SAFETY: The caller passes a live handle created by `_create_utf16` and
-    // not yet destroyed, so this reference is valid for the duration of the
-    // call. No other thread mutates the handle concurrently.
-    let client = unsafe { &mut *(handle as *mut safe::CandidateSelectClient) };
-    u8::from(client.select(
-        target_process_id,
-        expected_engine_epoch,
-        context_id,
-        composition_id,
-        revision,
-        candidate_id,
-    ))
-}
-
-/// # Safety
-///
-/// `handle` must be null or a value returned by
-/// `fcitx5_windows_common_candidate_select_client_create_utf16`. Null is a
-/// no-op. After this call the handle is invalid.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn fcitx5_windows_common_candidate_select_client_destroy(
-    handle: *mut c_void,
-) {
-    if handle.is_null() {
-        return;
-    }
-    // SAFETY: This restores ownership of the allocation created by
-    // `_create_utf16` and drops it, closing the pipe via `Drop`.
-    unsafe {
-        drop(Box::from_raw(handle as *mut safe::CandidateSelectClient));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn create_rejects_null_or_empty_pipe_name_and_empty_peer_path() {
-        assert!(safe::CandidateSelectClient::new(vec![], vec![0x00ff]).is_none());
-        assert!(safe::CandidateSelectClient::new(vec![0x0065], vec![]).is_none());
-        assert!(safe::CandidateSelectClient::new(vec![], vec![]).is_none());
-        // The exported shim maps a null/empty name+path to a null handle.
-        // SAFETY: the exported ABI permits null UTF-16 pointers when both
-        // lengths are zero; this test supplies no borrowed data.
-        let handle = unsafe {
-            fcitx5_windows_common_candidate_select_client_create_utf16(
-                std::ptr::null::<u16>(),
-                0,
-                std::ptr::null::<u16>(),
-                0,
-            )
-        };
-        assert!(handle.is_null());
-    }
-
-    #[test]
-    fn destroy_null_is_a_noop() {
-        // SAFETY: the exported destroy ABI explicitly accepts a null handle
-        // and performs no dereference in that case.
-        unsafe {
-            fcitx5_windows_common_candidate_select_client_destroy(std::ptr::null_mut());
-        }
-    }
-
-    #[test]
-    fn select_null_handle_returns_zero() {
-        // SAFETY: the exported select ABI checks for a null handle before any
-        // cast or dereference; this test supplies no client-owned allocation.
-        let result = unsafe {
-            fcitx5_windows_common_candidate_select_client_select(
-                std::ptr::null_mut(),
-                1,
-                1,
-                1,
-                1,
-                1,
-                1,
-            )
-        };
-        assert_eq!(result, 0);
-    }
 
     #[test]
     fn select_on_never_connected_handle_returns_zero_without_crash() {
