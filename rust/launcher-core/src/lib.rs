@@ -27,7 +27,6 @@ use fcitx5_windows_common_core::{
     CurrentUserSecurityAttributes, NamedEvent, NamedPipeServer, SingleInstance, VerifiedPipeClient,
 };
 
-const STARTUP_CRASH_WINDOW_MS: u64 = 10_000;
 const STABLE_RUNTIME_MS: u64 = 60_000;
 const INITIAL_BACKOFF_MS: u64 = 250;
 const MAXIMUM_BACKOFF_MS: u64 = 30_000;
@@ -630,7 +629,10 @@ fn engine_exited(machine: &mut Fcitx5LauncherMachine, runtime: u64, now: u64) {
     ) {
         return;
     }
-    if runtime >= STARTUP_CRASH_WINDOW_MS || runtime >= STABLE_RUNTIME_MS {
+    // Only a run that lasted counts as recovered. An addon that crashes the engine on the
+    // first keys after every start would otherwise restart it forever without ever falling
+    // back to Safe Mode, which loads no optional addons.
+    if runtime >= STABLE_RUNTIME_MS {
         machine.snapshot.state = LauncherState::Normal as u32;
         reset_crash_accounting(&mut machine.snapshot);
         return;
@@ -1425,6 +1427,31 @@ mod tests {
             );
             engine_exited(&mut machine, 0, now);
             now = machine.snapshot.next_start_allowed_milliseconds;
+        }
+        assert_eq!(machine.snapshot.state, LauncherState::SafeMode as u32);
+    }
+
+    #[test]
+    fn engines_that_crash_soon_after_starting_enter_safe_mode() {
+        let mut machine = Fcitx5LauncherMachine {
+            snapshot: Fcitx5LauncherSnapshot {
+                state: LauncherState::Normal as u32,
+                consecutive_startup_crashes: 0,
+                next_start_allowed_milliseconds: 0,
+            },
+            engine_state: EngineState::Stopped as u32,
+        };
+        let mut now = 1_u64;
+        engine_exited(&mut machine, STABLE_RUNTIME_MS, now);
+        assert_eq!(machine.snapshot.consecutive_startup_crashes, 0);
+        for _ in 0..SAFE_MODE_CRASH_THRESHOLD {
+            now = now.max(machine.snapshot.next_start_allowed_milliseconds);
+            assert_eq!(
+                request_start(&mut machine, now).disposition,
+                StartDisposition::Start as u32
+            );
+            now += 30_000;
+            engine_exited(&mut machine, 30_000, now);
         }
         assert_eq!(machine.snapshot.state, LauncherState::SafeMode as u32);
     }
