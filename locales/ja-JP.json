@@ -184,8 +184,6 @@
   "settings.shortcuts.toggle_punctuation": "句読点を切り替え",
   "settings.appearance.subtitle": "テーマ、文字組み、候補プレビュー",
   "settings.theme.section": "テーマ",
-  "settings.reload": "再読み込み",
-  "settings.save": "設定を保存",
   "settings.theme.choice": "候補ウィンドウのテーマ",
   "settings.theme.choice_hint": "組み込み・ユーザー・プラグインの候補ウィンドウテーマ",
   "settings.candidate.text_section": "候補の文字",
@@ -196,7 +194,6 @@
   "settings.candidate.font_theme": "テーマに従う",
   "settings.candidate.opacity": "不透明度",
   "settings.candidate.opacity_hint": "候補ウィンドウの不透明度",
-  "settings.reloaded": "ディスクから設定を再読み込みしました",
   "settings.saved": "設定を保存しました",
   "settings.theme.toggle": "ライト/ダークテーマを切り替え",
   "settings.placeholder.description": "このページはまだ利用できません。",
@@ -223,13 +220,9 @@
   "settings.candidate.writing.vertical_lr": "縦書き、左から右",
   "settings.candidate.writing_hint": "レイアウト方向とは独立した候補文字の方向",
   "settings.candidate.page_size_hint": "1 ページあたりの候補数（1～9）",
-  "settings.candidate.apply": "適用",
-  "settings.candidate.cancel": "キャンセル",
   "settings.candidate.reset": "リセット",
-  "settings.candidate.applied": "候補レイアウトを適用して保存しました",
-  "settings.candidate.draft_loaded": "Config Core から候補レイアウトの下書きを読み込みました",
-  "settings.candidate.draft_discarded": "候補レイアウトの変更を破棄しました",
-  "settings.candidate.draft_reset": "候補レイアウトの下書きを継承された既定値に戻しました",
+  "settings.candidate.draft_loaded": "変更はすぐに保存され適用されます",
+  "settings.candidate.draft_reset": "候補レイアウトを既定値に戻しました",
   "settings.plugins.subtitle": "fcitx5-plugins カタログと信頼済み Windows パッケージ",
   "settings.plugins.repository.loading": "公式リポジトリ · 読み込み中",
   "settings.plugins.repository.ready": "公式リポジトリ · 署名済みカタログを利用できます",
@@ -254,7 +247,7 @@
   "settings.plugins.choose_operation": "プラグインを選択すると、信頼済みパッケージ操作を実行できます",
   "settings.plugins.completed": "{operation}が完了し、Control から Windows パッケージ状態を {count} 件読み込みました",
   "settings.plugins.operation_failed": "プラグイン操作 {operation} に失敗しました",
-  "settings.candidate.draft_updated": "{control}を下書きで更新しました。適用をクリックして保存します",
+  "settings.candidate.draft_updated": "{control}を保存して適用しました",
   "settings.input.engine.wubi": "五筆",
   "settings.input.engine.pinyin": "ピンイン",
   "settings.input.engine.rime": "Rime",
@@ -273,7 +266,6 @@
   ,"settings.input.remove": "削除"
   ,"settings.input.add": "追加"
   ,"settings.input.add_hint": "インストール済みプラグインの入力メソッドもここに表示されます。"
-  ,"settings.input.apply": "適用"
   ,"settings.input.applied": "保存しました。入力メソッドエンジンを再起動しています。"
   ,"settings.input.restart_failed": "保存しましたが、入力メソッドエンジンを再起動できませんでした: {error}"
   ,"settings.shortcuts.toggle_input_method": "キーボードと既定の入力メソッドを切り替え"
@@ -282,4 +274,28 @@
   ,"settings.startup.section": "起動"
   ,"settings.startup.sign_in": "サインイン時に起動"
   ,"settings.startup.sign_in_hint": "サインイン直後から Store (UWP) アプリで入力できるようにします。"
+  ,"nav.fcitx": "詳細設定"
+  ,"settings.fcitx.subtitle": "Fcitx の全体設定と各コンポーネントの設定"
+  ,"settings.fcitx.global": "全体設定"
+  ,"settings.fcitx.global_hint": "Fcitx 自体の動作とショートカット"
+  ,"settings.fcitx.addons": "コンポーネント"
+  ,"settings.fcitx.addons_hint": "設定項目のある入力メソッドとコンポーネント。インストールしたプラグインもここに表示されます。"
+  ,"settings.fcitx.open": "設定"
+  ,"settings.fcitx.back": "戻る"
+  ,"settings.fcitx.undo": "元に戻す"
+  ,"settings.fcitx.reset": "既定値に戻す"
+  ,"settings.fcitx.reset_all": "すべて既定値に戻す"
+  ,"settings.fcitx.loading": "設定を読み込んでいます…"
+  ,"settings.fcitx.saved": "保存して適用しました"
+  ,"settings.fcitx.save_failed": "保存できませんでした：{error}"
+  ,"settings.fcitx.load_failed": "設定を読み込めませんでした：{error}"
+  ,"settings.fcitx.unsupported": "ここではまだ変更できません"
+  ,"settings.fcitx.keys_hint": "複数のキーは空白で区切る"
+  ,"settings.fcitx.lines_hint": "1 行に 1 項目"
+  ,"settings.fcitx.empty": "表示できるコンポーネントがありません。入力メソッドが動作していることを確認して再読み込みしてください。"
+  ,"settings.fcitx.retry": "再読み込み"
+  ,"settings.fcitx.error.engine_unavailable": "入力メソッドエンジンが動作していません"
+  ,"settings.fcitx.error.no_response": "入力メソッドエンジンが応答しません"
+  ,"settings.fcitx.error.invalid": "エンジンから読み取れない設定が返されました"
+  ,"settings.input.options": "設定"
 }

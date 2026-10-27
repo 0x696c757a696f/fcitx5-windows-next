@@ -179,8 +179,6 @@
   "settings.shortcuts.toggle_punctuation": "Chuyển dấu câu",
   "settings.appearance.subtitle": "Chủ đề, kiểu chữ và bản xem trước ứng viên",
   "settings.theme.section": "Chủ đề",
-  "settings.reload": "Tải lại",
-  "settings.save": "Lưu cài đặt",
   "settings.theme.choice": "Chủ đề cửa sổ ứng viên",
   "settings.theme.choice_hint": "Chủ đề tích hợp, của người dùng và từ plugin cho cửa sổ ứng viên",
   "settings.candidate.text_section": "Chữ ứng viên",
@@ -191,7 +189,6 @@
   "settings.candidate.font_theme": "Theo chủ đề",
   "settings.candidate.opacity": "Độ mờ đục",
   "settings.candidate.opacity_hint": "Mức độ mờ đục của cửa sổ ứng viên",
-  "settings.reloaded": "Đã tải lại cài đặt từ đĩa",
   "settings.saved": "Đã lưu cài đặt",
   "settings.theme.toggle": "Chuyển chủ đề sáng/tối",
   "settings.placeholder.description": "Trang này hiện chưa khả dụng.",
@@ -218,13 +215,9 @@
   "settings.candidate.writing.vertical_lr": "Chữ dọc, từ trái sang phải",
   "settings.candidate.writing_hint": "Hướng chữ ứng viên, độc lập với hướng bố cục",
   "settings.candidate.page_size_hint": "Số ứng viên tối đa mỗi trang (1–9)",
-  "settings.candidate.apply": "Áp dụng",
-  "settings.candidate.cancel": "Hủy",
   "settings.candidate.reset": "Đặt lại",
-  "settings.candidate.applied": "Đã áp dụng và lưu bố cục ứng viên",
-  "settings.candidate.draft_loaded": "Đã tải bản nháp bố cục ứng viên từ Config Core",
-  "settings.candidate.draft_discarded": "Đã hủy các thay đổi bố cục ứng viên",
-  "settings.candidate.draft_reset": "Đã đặt lại bản nháp về giá trị mặc định được kế thừa",
+  "settings.candidate.draft_loaded": "Thay đổi được lưu và áp dụng ngay",
+  "settings.candidate.draft_reset": "Đã khôi phục bố cục ứng viên mặc định",
   "settings.plugins.subtitle": "Danh mục fcitx5-plugins và gói Windows đáng tin cậy",
   "settings.plugins.repository.loading": "Kho chính thức · Đang tải",
   "settings.plugins.repository.ready": "Kho chính thức · Danh mục đã ký có sẵn",
@@ -249,7 +242,7 @@
   "settings.plugins.choose_operation": "Chọn một bổ trợ để thực hiện thao tác gói đáng tin cậy",
   "settings.plugins.completed": "Đã {operation}; đọc {count} trạng thái gói Windows từ Control",
   "settings.plugins.operation_failed": "Thao tác bổ trợ {operation} thất bại",
-  "settings.candidate.draft_updated": "Đã cập nhật {control} trong bản nháp; nhấn Áp dụng để lưu",
+  "settings.candidate.draft_updated": "Đã lưu và áp dụng {control}",
   "settings.input.engine.wubi": "Wubi",
   "settings.input.engine.pinyin": "Pinyin",
   "settings.input.engine.rime": "Rime",
@@ -268,7 +261,6 @@
   ,"settings.input.remove": "Gỡ"
   ,"settings.input.add": "Thêm"
   ,"settings.input.add_hint": "Bộ gõ từ các plugin đã cài cũng được liệt kê ở đây."
-  ,"settings.input.apply": "Áp dụng"
   ,"settings.input.applied": "Đã lưu. Bộ máy gõ đang khởi động lại."
   ,"settings.input.restart_failed": "Đã lưu, nhưng không thể khởi động lại bộ máy gõ: {error}"
   ,"settings.shortcuts.toggle_input_method": "Chuyển giữa bàn phím và bộ gõ mặc định"
@@ -282,4 +274,28 @@
   ,"theme.builtin.sakura": "Hoa anh đào"
   ,"theme.builtin.nord": "Bắc Âu"
   ,"theme.builtin.amber": "Hổ phách"
+  ,"nav.fcitx": "Nâng cao"
+  ,"settings.fcitx.subtitle": "Tùy chọn Fcitx và cài đặt thành phần"
+  ,"settings.fcitx.global": "Tùy chọn chung"
+  ,"settings.fcitx.global_hint": "Hành vi và phím tắt của chính Fcitx"
+  ,"settings.fcitx.addons": "Thành phần"
+  ,"settings.fcitx.addons_hint": "Các bộ gõ và thành phần có tùy chọn. Plugin bạn cài cũng hiện ở đây."
+  ,"settings.fcitx.open": "Tùy chọn"
+  ,"settings.fcitx.back": "Quay lại"
+  ,"settings.fcitx.undo": "Hoàn tác"
+  ,"settings.fcitx.reset": "Khôi phục mặc định"
+  ,"settings.fcitx.reset_all": "Khôi phục tất cả"
+  ,"settings.fcitx.loading": "Đang đọc tùy chọn…"
+  ,"settings.fcitx.saved": "Đã lưu và áp dụng"
+  ,"settings.fcitx.save_failed": "Không lưu được: {error}"
+  ,"settings.fcitx.load_failed": "Không đọc được tùy chọn: {error}"
+  ,"settings.fcitx.unsupported": "Chưa sửa được ở đây"
+  ,"settings.fcitx.keys_hint": "Các phím cách nhau bằng dấu cách"
+  ,"settings.fcitx.lines_hint": "Mỗi dòng một mục"
+  ,"settings.fcitx.empty": "Không có thành phần nào. Hãy chắc rằng bộ gõ đang chạy rồi đọc lại."
+  ,"settings.fcitx.retry": "Đọc lại"
+  ,"settings.fcitx.error.engine_unavailable": "bộ máy gõ không chạy"
+  ,"settings.fcitx.error.no_response": "bộ máy gõ không phản hồi"
+  ,"settings.fcitx.error.invalid": "bộ máy gửi tùy chọn không đọc được"
+  ,"settings.input.options": "Tùy chọn"
 }

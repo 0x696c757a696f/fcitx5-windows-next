@@ -22,6 +22,9 @@ use fcitx5_windows_common_core::{
 pub const COLD_START_DEADLINE_MS: u32 = 7500;
 /// Warm input deadline (mirrors `kInputDeadlineMilliseconds`).
 pub const INPUT_DEADLINE_MS: u32 = 250;
+/// The engine allows a configuration read up to 10 s (loading an addon on
+/// demand); leave room for the round trip.
+const CONFIG_REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
 /// Readiness timeout when spawning a fixture engine.
 pub const READY_TIMEOUT: Duration = Duration::from_millis(2000);
 /// Default transact timeout used by roundtrip/status probes.
@@ -128,8 +131,17 @@ impl EngineClient {
     }
 
     fn transact(&mut self, request: Vec<u8>, timeout: Duration) -> Option<Vec<u8>> {
+        self.transact_up_to(request, protocol::MAX_FRAME_SIZE, timeout)
+    }
+
+    fn transact_up_to(
+        &mut self,
+        request: Vec<u8>,
+        capacity: usize,
+        timeout: Duration,
+    ) -> Option<Vec<u8>> {
         let pipe = self.pipe.as_mut()?;
-        let mut response = vec![0_u8; protocol::MAX_FRAME_SIZE];
+        let mut response = vec![0_u8; capacity];
         let length = pipe.transact(&request, &mut response, timeout)?;
         response.truncate(length);
         Some(response)
@@ -353,6 +365,55 @@ impl EngineClient {
             input_method_native_name: response.current_input_method_native_name,
             short_label: response.current_input_method_short_label,
         })
+    }
+
+    /// Reads (`ConfigOperation::Get`) or writes one Fcitx configuration of the
+    /// running engine. Returns the response payload, empty for a write, or
+    /// `None` when the engine is unreachable or refused the request.
+    pub fn config(
+        &mut self,
+        operation: protocol::ConfigOperation,
+        uri: &str,
+        value: &str,
+    ) -> Option<Vec<u8>> {
+        let connect_timeout = Duration::from_millis(u64::from(COLD_START_DEADLINE_MS));
+        if !self.connect(connect_timeout) || !self.handshake(connect_timeout) {
+            return None;
+        }
+        let request_id = next_request_id();
+        let request = protocol::ConfigRequest {
+            metadata: protocol::Metadata {
+                request_id,
+                engine_epoch: self.engine_epoch,
+                session_id: self.session_id,
+                ..protocol::Metadata::default()
+            },
+            operation,
+            uri: uri.as_bytes().to_vec(),
+            value: value.as_bytes().to_vec(),
+        };
+        let request_bytes = protocol::encode_config_request(&request)?;
+        let Some(response_bytes) = self.transact_up_to(
+            request_bytes,
+            protocol::MAX_CONTROL_FRAME_SIZE,
+            CONFIG_REQUEST_TIMEOUT,
+        ) else {
+            self.disconnect();
+            return None;
+        };
+        let Some(frame) = protocol::decode_frame(&response_bytes) else {
+            self.disconnect();
+            return None;
+        };
+        let Some(response) = protocol::decode_config_response(&frame) else {
+            self.disconnect();
+            return None;
+        };
+        if response.metadata.response_to != request_id {
+            self.disconnect();
+            return None;
+        }
+        (response.status == protocol::Status::Ok).then_some(response.payload)
     }
 
     /// Closes the pipe so the engine observes the client disconnect.

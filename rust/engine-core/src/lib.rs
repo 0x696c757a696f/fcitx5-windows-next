@@ -44,6 +44,7 @@ pub enum Request {
     State(protocol::StateRequest),
     EngineStatus(protocol::EngineStatusRequest),
     InputMethodAction(protocol::InputMethodActionRequest),
+    Config(protocol::ConfigRequest),
 }
 
 /// Decodes and validates one Engine request frame.
@@ -69,6 +70,9 @@ pub fn decode_request(bytes: &[u8]) -> Option<Request> {
         }
         protocol::MessageType::InputMethodActionRequest => {
             protocol::decode_input_method_action_request(&frame).map(Request::InputMethodAction)
+        }
+        protocol::MessageType::ConfigRequest => {
+            protocol::decode_config_request(&frame).map(Request::Config)
         }
         _ => None,
     }

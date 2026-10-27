@@ -24,17 +24,18 @@
 //! Every exported function contains panics; a panic surfaces as return 0.
 
 use crate::{
-    decode_candidate_select_request, decode_candidate_select_response,
+    decode_candidate_select_request, decode_candidate_select_response, decode_config_request,
     decode_engine_status_request, decode_engine_status_response, decode_header,
     decode_hello_request, decode_hello_response, decode_input_method_action_request,
     decode_key_request, decode_key_response, decode_launcher_request, decode_launcher_response,
     decode_state_request, encode_candidate_select_request, encode_candidate_select_response,
-    encode_engine_status_request, encode_engine_status_response, encode_hello_request,
-    encode_hello_response, encode_key_request, encode_key_response, encode_launcher_request,
-    encode_launcher_response, encode_state_request, CandidateRecord, CandidateSelectRequest,
-    CandidateSelectResponse, CaretRect, EngineStatusRequest, EngineStatusResponse, FrameView,
-    HelloRequest, HelloResponse, KeyRequest, KeyResponse, LauncherCommand, LauncherRequest,
-    LauncherResponse, MessageType, Metadata, StateRequest, Status,
+    encode_config_response, encode_engine_status_request, encode_engine_status_response,
+    encode_hello_request, encode_hello_response, encode_key_request, encode_key_response,
+    encode_launcher_request, encode_launcher_response, encode_state_request, CandidateRecord,
+    CandidateSelectRequest, CandidateSelectResponse, CaretRect, ConfigResponse,
+    EngineStatusRequest, EngineStatusResponse, FrameView, HelloRequest, HelloResponse, KeyRequest,
+    KeyResponse, LauncherCommand, LauncherRequest, LauncherResponse, MessageType, Metadata,
+    StateRequest, Status,
 };
 use std::panic;
 
@@ -183,6 +184,24 @@ pub struct FcitxEngineStatusRequestC {
 pub struct FcitxInputMethodActionRequestC {
     pub metadata: FcitxMetadataC,
     pub action: u32,
+}
+
+/// `operation`: 0 = get, 1 = set. `value` is empty for a get.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FcitxConfigRequestC {
+    pub metadata: FcitxMetadataC,
+    pub operation: u32,
+    pub uri: FcitxBytesC,
+    pub value: FcitxBytesC,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FcitxConfigResponseC {
+    pub metadata: FcitxMetadataC,
+    pub status: u32,
+    pub payload: FcitxBytesC,
 }
 
 #[repr(C)]
@@ -743,6 +762,40 @@ pub unsafe extern "C" fn fcitx5_protocol_core_encode_engine_status_response(
             current_input_method_short_label: bytes_from_c(&m.current_input_method_short_label),
         };
         let Some(bytes) = encode_engine_status_response(&rust) else {
+            return 0;
+        };
+        // SAFETY: pointer contracts checked above.
+        unsafe { write_out(out, out_capacity, out_length, &bytes) }
+    });
+    result.unwrap_or(0)
+}
+
+/// # Safety
+/// `message` must point at a valid structure whose byte views are readable;
+/// `out`/`out_capacity` must describe a writable buffer; `out_length` must be
+/// writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_protocol_core_encode_config_response(
+    message: *const FcitxConfigResponseC,
+    out: *mut u8,
+    out_capacity: usize,
+    out_length: *mut usize,
+) -> u8 {
+    let result = panic::catch_unwind(|| {
+        if message.is_null() || out_length.is_null() || (out.is_null() && out_capacity != 0) {
+            return 0;
+        }
+        // SAFETY: `message` points at a valid structure.
+        let m = unsafe { &*message };
+        let Some(status) = status_from_c(m.status) else {
+            return 0;
+        };
+        let rust = ConfigResponse {
+            metadata: metadata_from_c(&m.metadata),
+            status,
+            payload: bytes_from_c(&m.payload),
+        };
+        let Some(bytes) = encode_config_response(&rust) else {
             return 0;
         };
         // SAFETY: pointer contracts checked above.
@@ -1352,6 +1405,67 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_input_method_action_request
             };
             *strings_needed = 0;
         }
+        1
+    });
+    result.unwrap_or(0)
+}
+
+/// # Safety
+/// `metadata`, `out`, `strings_needed` must be writable/valid pointers;
+/// `body`/`body_length` must describe a readable buffer; `strings`/
+/// `strings_capacity` must describe a writable buffer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_protocol_core_decode_config_request(
+    metadata: *const FcitxMetadataC,
+    body: *const u8,
+    body_length: usize,
+    out: *mut FcitxConfigRequestC,
+    strings: *mut u8,
+    strings_capacity: usize,
+    strings_needed: *mut usize,
+) -> u8 {
+    let result = panic::catch_unwind(|| {
+        if metadata.is_null()
+            || out.is_null()
+            || strings_needed.is_null()
+            || (body.is_null() && body_length != 0)
+            || (strings.is_null() && strings_capacity != 0)
+        {
+            return 0;
+        }
+        let frame = FrameView {
+            message_type: MessageType::ConfigRequest,
+            // SAFETY: null is rejected above; the FFI ABI requires `metadata` to be
+            // aligned, initialized, and immutable for this call's lifetime.
+            metadata: metadata_from_c(unsafe { &*metadata }),
+            body: if body_length == 0 {
+                &[][..]
+            } else {
+                // SAFETY: caller provides a valid buffer of `body_length`.
+                unsafe { std::slice::from_raw_parts(body, body_length) }
+            },
+        };
+        let Some(msg) = decode_config_request(&frame) else {
+            return 0;
+        };
+        let needed = msg.uri.len() + msg.value.len();
+        if needed > strings_capacity {
+            // SAFETY: `strings_needed` is writable (checked above).
+            unsafe { *strings_needed = needed };
+            return 0;
+        }
+        // SAFETY: `strings` is writable for `strings_capacity` bytes.
+        let mut arena = ArenaWriter::new(strings, strings_capacity);
+        // SAFETY: `out` is writable (checked above).
+        let o = unsafe { &mut *out };
+        o.metadata = metadata_to_c(&msg.metadata);
+        o.operation = msg.operation as u32;
+        // SAFETY: arena capacity pre-verified.
+        o.uri = unsafe { arena.write(&msg.uri) };
+        // SAFETY: arena capacity pre-verified.
+        o.value = unsafe { arena.write(&msg.value) };
+        // SAFETY: `strings_needed` is writable (checked above).
+        unsafe { *strings_needed = needed };
         1
     });
     result.unwrap_or(0)

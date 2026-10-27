@@ -8,6 +8,7 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -45,6 +46,10 @@ constexpr std::uint16_t kCandidateSelectRequestType = 7;
 constexpr std::uint16_t kStateRequestType = 9;
 constexpr std::uint16_t kEngineStatusRequestType = 10;
 constexpr std::uint16_t kInputMethodActionRequestType = 12;
+constexpr std::uint16_t kConfigRequestType = 13;
+constexpr std::uint32_t kConfigOperationSet = 1;
+// Loading an addon on demand to read its configuration can take a while.
+constexpr auto kConfigRequestTimeout = std::chrono::seconds(10);
 constexpr std::uint32_t kInputMethodActionToggle = 1;
 constexpr std::uint32_t kProtocolStatusOk = 0;
 constexpr std::uint32_t kProtocolStatusUnsupported = 3;
@@ -304,13 +309,12 @@ bool signalCandidateUpdate(const platform::RuntimeIdentity& identity,
     return signaled;
 }
 
-std::vector<std::uint8_t>
-handleRequest(std::span<const std::uint8_t> requestBytes, std::uint64_t engineEpoch,
-              std::atomic<std::uint64_t>& nextResponseId,
-              const platform::ProcessIdentity& clientIdentity, std::uint64_t connectionId,
-              void* session, engine::FcitxDispatcher& dispatcher,
-              PresentationPublisher& presentation, const platform::RuntimeIdentity& serverIdentity,
-              const std::wstring& uiExecutable) {
+std::vector<std::uint8_t> handleRequest(
+    std::span<const std::uint8_t> requestBytes, std::uint64_t engineEpoch,
+    std::atomic<std::uint64_t>& nextResponseId, const platform::ProcessIdentity& clientIdentity,
+    std::uint64_t connectionId, void* session, engine::FcitxDispatcher& dispatcher,
+    PresentationPublisher& presentation, const platform::RuntimeIdentity& serverIdentity,
+    const std::wstring& uiExecutable, const std::array<std::wstring, 2>& settingsExecutables) {
     WireFrameView frame;
     if (!decodeFrame(requestBytes, frame)) {
         return {};
@@ -438,6 +442,34 @@ handleRequest(std::span<const std::uint8_t> requestBytes, std::uint64_t engineEp
         return encodeEngineStatusResponse(request.metadata, nextResponseId.fetch_add(1),
                                           engineEpoch, status);
     }
+    if (frame.type == kConfigRequestType) {
+        // Only Settings may read or change Fcitx's configuration: the pipe
+        // also admits the user's sandboxed (AppContainer) apps.
+        const bool fromSettings = std::any_of(
+            settingsExecutables.begin(), settingsExecutables.end(), [&](const auto& path) {
+                return platform::pathsReferToSameFile(clientIdentity.executablePath, path);
+            });
+        FcitxConfigRequestC request{};
+        std::vector<std::uint8_t> requestStrings;
+        if (!fromSettings || !decodeMessage(frame, fcitx5_protocol_core_decode_config_request,
+                                            request, requestStrings)) {
+            return {};
+        }
+        const auto view = [](const FcitxBytesC& bytes) {
+            return bytes.data ? std::string(reinterpret_cast<const char*>(bytes.data), bytes.len)
+                              : std::string{};
+        };
+        std::string payload;
+        const bool ok =
+            dispatcher.config(request.operation == kConfigOperationSet, view(request.uri),
+                              view(request.value), payload, kConfigRequestTimeout);
+        fcitx5_engine_core_session_complete_request(session, request.metadata.requestId);
+        const FcitxConfigResponseC response{
+            FcitxMetadataC{nextResponseId.fetch_add(1), request.metadata.requestId, engineEpoch,
+                           request.metadata.sessionId, 0, 0, 0},
+            ok ? kProtocolStatusOk : kProtocolStatusUnsupported, bytesFor(payload)};
+        return encodeMessage(fcitx5_protocol_core_encode_config_response, response);
+    }
     return {};
 }
 
@@ -472,6 +504,13 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
     executable.resize(executableSize);
     const auto uiExecutable =
         (std::filesystem::path(executable).parent_path() / "fcitx5-ui.exe").wstring();
+    // Settings beside the engine, or in the installation's top-level bin when
+    // the engine runs from runtime\<generation>\bin.
+    const auto binDirectory = std::filesystem::path(executable).parent_path();
+    const std::array<std::wstring, 2> settingsExecutables{
+        (binDirectory / "fcitx5-config.exe").wstring(),
+        (binDirectory.parent_path().parent_path().parent_path() / "bin" / "fcitx5-config.exe")
+            .wstring()};
     PresentationPublisher presentation(platform::makeLocalEndpointName(identity, L"presentation"),
                                        uiExecutable);
     // E4: the engine-process session epoch is Rust-generated (100ns-since-1601
@@ -545,9 +584,10 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
                     void* session = fcitx5_engine_core_session_create();
                     std::vector<std::uint8_t> request;
                     while (readFrame(pipe, request, stopEvent)) {
-                        auto response = handleRequest(
-                            request, engineEpoch, nextResponseId, clientIdentity, connectionId,
-                            session, dispatcher, presentation, identity, uiExecutable);
+                        auto response =
+                            handleRequest(request, engineEpoch, nextResponseId, clientIdentity,
+                                          connectionId, session, dispatcher, presentation, identity,
+                                          uiExecutable, settingsExecutables);
                         if (response.empty() || !transfer(pipe, true, response.data(),
                                                           response.size(), 100, stopEvent)) {
                             break;

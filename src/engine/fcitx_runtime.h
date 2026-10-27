@@ -4,7 +4,9 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace fcitx {
@@ -101,6 +103,9 @@ class FcitxRuntime final {
     // so enabled input methods, the default and candidate options take
     // effect without restarting the engine.
     void reloadConfigIfChanged();
+    // Settings' access to Fcitx configurations; see fcitx_config_bridge.h.
+    [[nodiscard]] std::optional<std::string> configGet(std::string_view uri);
+    [[nodiscard]] bool configSet(std::string_view uri, std::string_view value);
     void forgetConnection(std::uint64_t connectionId);
 
     class Impl;

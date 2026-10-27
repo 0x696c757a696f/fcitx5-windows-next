@@ -68,6 +68,8 @@ pub enum MessageType {
     EngineStatusRequest = 10,
     EngineStatusResponse = 11,
     InputMethodActionRequest = 12,
+    ConfigRequest = 13,
+    ConfigResponse = 14,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -290,6 +292,39 @@ pub struct InputMethodActionRequest {
     pub action: InputMethodAction,
 }
 
+/// What a `ConfigRequest` does with the Fcitx configuration at `uri`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u32)]
+pub enum ConfigOperation {
+    /// Return the merged description and values of `uri` as JSON.
+    #[default]
+    Get = 0,
+    /// Apply `value` to `uri`, save it and let its owner reload it.
+    Set = 1,
+}
+
+/// Longest configuration URI, such as `fcitx://config/addon/pinyin/dictmanager`.
+pub const MAX_CONFIG_URI_UTF8: usize = 512;
+
+/// Reads or writes one Fcitx configuration (`fcitx://config/global`,
+/// `fcitx://config/addon/<addon>[/<sub>]` or
+/// `fcitx://config/inputmethod/<id>`). Answered by a `ConfigResponse`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConfigRequest {
+    pub metadata: Metadata,
+    pub operation: ConfigOperation,
+    pub uri: Vec<u8>,
+    pub value: Vec<u8>,
+}
+
+/// `payload` is the configuration as JSON for a get, and empty for a set.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConfigResponse {
+    pub metadata: Metadata,
+    pub status: Status,
+    pub payload: Vec<u8>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EngineStatusResponse {
     pub metadata: Metadata,
@@ -491,6 +526,7 @@ fn is_request(message_type: MessageType) -> bool {
             | MessageType::StateRequest
             | MessageType::EngineStatusRequest
             | MessageType::InputMethodActionRequest
+            | MessageType::ConfigRequest
     )
 }
 
@@ -703,7 +739,10 @@ fn valid_key_request_payload(message: &KeyRequest) -> bool {
 fn maximum_frame_size(message_type: MessageType) -> usize {
     if matches!(
         message_type,
-        MessageType::LauncherRequest | MessageType::LauncherResponse
+        MessageType::LauncherRequest
+            | MessageType::LauncherResponse
+            | MessageType::ConfigRequest
+            | MessageType::ConfigResponse
     ) {
         MAX_CONTROL_FRAME_SIZE
     } else {
@@ -740,6 +779,8 @@ fn message_type_from_raw(raw: u16) -> Option<MessageType> {
         10 => Some(MessageType::EngineStatusRequest),
         11 => Some(MessageType::EngineStatusResponse),
         12 => Some(MessageType::InputMethodActionRequest),
+        13 => Some(MessageType::ConfigRequest),
+        14 => Some(MessageType::ConfigResponse),
         _ => None,
     }
 }
@@ -976,6 +1017,45 @@ pub fn encode_engine_status_response(message: &EngineStatusResponse) -> Option<V
     writer.append_string(&message.current_input_method_native_name);
     writer.append_string(&message.current_input_method_short_label);
     Some(writer.finish())
+}
+
+fn valid_config_request_payload(message: &ConfigRequest) -> bool {
+    !message.uri.is_empty()
+        && message.uri.len() <= MAX_CONFIG_URI_UTF8
+        && message.uri.starts_with(b"fcitx://config/")
+        && std::str::from_utf8(&message.uri).is_ok()
+        && std::str::from_utf8(&message.value).is_ok()
+        && (message.operation == ConfigOperation::Set || message.value.is_empty())
+}
+
+pub fn encode_config_request(message: &ConfigRequest) -> Option<Vec<u8>> {
+    if !valid_metadata(MessageType::ConfigRequest, &message.metadata)
+        || !valid_engine_status_metadata(&message.metadata)
+        || !valid_config_request_payload(message)
+    {
+        return None;
+    }
+    let mut writer = Writer::new(MessageType::ConfigRequest, &message.metadata);
+    writer.append_u32(message.operation as u32);
+    writer.append_string(&message.uri);
+    writer.append_string(&message.value);
+    let bytes = writer.finish();
+    (bytes.len() <= MAX_CONTROL_FRAME_SIZE).then_some(bytes)
+}
+
+pub fn encode_config_response(message: &ConfigResponse) -> Option<Vec<u8>> {
+    if !valid_metadata(MessageType::ConfigResponse, &message.metadata)
+        || !valid_engine_status_metadata(&message.metadata)
+        || !status_in_range(message.status)
+        || std::str::from_utf8(&message.payload).is_err()
+    {
+        return None;
+    }
+    let mut writer = Writer::new(MessageType::ConfigResponse, &message.metadata);
+    writer.append_u32(message.status as u32);
+    writer.append_string(&message.payload);
+    let bytes = writer.finish();
+    (bytes.len() <= MAX_CONTROL_FRAME_SIZE).then_some(bytes)
 }
 
 pub fn encode_launcher_request(message: &LauncherRequest) -> Option<Vec<u8>> {
@@ -1370,6 +1450,51 @@ pub fn decode_engine_status_response(frame: &FrameView<'_>) -> Option<EngineStat
     Some(message)
 }
 
+pub fn decode_config_request(frame: &FrameView<'_>) -> Option<ConfigRequest> {
+    if frame.message_type != MessageType::ConfigRequest
+        || !valid_engine_status_metadata(&frame.metadata)
+    {
+        return None;
+    }
+    let mut reader = Reader::new(frame.body);
+    let operation = match reader.read_u32()? {
+        0 => ConfigOperation::Get,
+        1 => ConfigOperation::Set,
+        _ => return None,
+    };
+    let uri = reader.read_string()?;
+    let value = reader.read_string()?;
+    if !reader.done() {
+        return None;
+    }
+    let message = ConfigRequest {
+        metadata: frame.metadata,
+        operation,
+        uri,
+        value,
+    };
+    valid_config_request_payload(&message).then_some(message)
+}
+
+pub fn decode_config_response(frame: &FrameView<'_>) -> Option<ConfigResponse> {
+    if frame.message_type != MessageType::ConfigResponse
+        || !valid_engine_status_metadata(&frame.metadata)
+    {
+        return None;
+    }
+    let mut reader = Reader::new(frame.body);
+    let status = reader.read_u32()?;
+    let payload = reader.read_string()?;
+    if !reader.done() || status > STATUS_ACCESS_DENIED || std::str::from_utf8(&payload).is_err() {
+        return None;
+    }
+    Some(ConfigResponse {
+        metadata: frame.metadata,
+        status: status_from_raw(status),
+        payload,
+    })
+}
+
 pub fn decode_launcher_request(frame: &FrameView<'_>) -> Option<LauncherRequest> {
     if frame.message_type != MessageType::LauncherRequest
         || !valid_launcher_metadata(&frame.metadata)
@@ -1475,6 +1600,8 @@ pub fn decode_and_reencode(bytes: &[u8]) -> Option<Vec<u8>> {
         MessageType::InputMethodActionRequest => {
             encode_input_method_action_request(&decode_input_method_action_request(&frame)?)
         }
+        MessageType::ConfigRequest => encode_config_request(&decode_config_request(&frame)?),
+        MessageType::ConfigResponse => encode_config_response(&decode_config_response(&frame)?),
     }
 }
 

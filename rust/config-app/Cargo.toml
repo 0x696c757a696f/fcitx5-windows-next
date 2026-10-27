@@ -11,8 +11,10 @@ path = "src/bin/fcitx5_config.rs"
 [dependencies]
 fcitx5-config-core = { path = "../config-core" }
 fcitx5-control-core = { path = "../control-core" }
+fcitx5-ipc-client = { path = "../ipc-client" }
 fcitx5-package-core = { path = "../package-core" }
 fcitx5-process-execution-core = { path = "../process-execution-core" }
+fcitx5-protocol-core = { path = "../protocol-core" }
 fcitx5-windows-common-core = { path = "../windows-common-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

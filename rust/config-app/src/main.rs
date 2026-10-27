@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod fcitx_config;
+mod fcitx_config_page;
 mod input_methods;
 mod settings_locale;
 use input_methods::{discover_input_methods, input_method_directories, InputMethodChoice};
@@ -10,6 +12,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use fcitx5_config_core::{
     CandidateOrientation as CoreCandidateOrientation, ConfigCommand, ConfigCore, ConfigEdit,
@@ -21,7 +24,10 @@ use fcitx5_control_core::{
 };
 use fcitx5_package_core::PackageId;
 use fcitx5_process_execution_core::run_process_bounded;
+use fcitx_config::{addon_uri, input_method_uri, AddonEntry, GLOBAL_URI};
+use fcitx_config_page::FcitxConfigPages;
 use serde::Deserialize;
+use windui::core::EventCtx as WindUiEventCtx;
 use windui::icon::WindowIcon as WindUiWindowIcon;
 use windui::prelude::{
     signal as windui_signal, Align as WindUiAlign, App as WindUiApp, Color as WindUiColor,
@@ -50,7 +56,18 @@ fn windui_settings_shell_theme(dark: bool) -> WindUiTheme {
     theme
 }
 
+type SettingsTick = Box<dyn FnMut(&mut WindUiEventCtx)>;
+
+/// How often Settings checks its controls for edits to save.
+const SETTINGS_TICK: Duration = Duration::from_millis(100);
+/// Quiet time after the last change of a slider, stepper or text before it
+/// is saved, so dragging or typing saves once.
+const SETTINGS_SAVE_DELAY: Duration = Duration::from_millis(350);
+
 thread_local! {
+    /// Controls that save themselves, polled every `SETTINGS_TICK`.
+    static SETTINGS_TICKS: std::cell::RefCell<Vec<SettingsTick>> =
+        const { std::cell::RefCell::new(Vec::new()) };
     /// The running Settings window's theme, so every place that changes the
     /// appearance-mode draft can repaint the shell without threading a handle.
     static SHELL_THEME: std::cell::RefCell<Option<WindUiThemeHandle>> =
@@ -67,6 +84,44 @@ fn shell_uses_dark(mode: &str, system_dark: bool) -> bool {
 }
 
 /// Repaints the Settings shell for the draft's appearance mode.
+fn on_settings_tick(tick: impl FnMut(&mut WindUiEventCtx) + 'static) {
+    SETTINGS_TICKS.with(|ticks| ticks.borrow_mut().push(Box::new(tick)));
+}
+
+fn run_settings_ticks(ctx: &mut WindUiEventCtx) {
+    let mut ticks = SETTINGS_TICKS.with(|ticks| std::mem::take(&mut *ticks.borrow_mut()));
+    for tick in &mut ticks {
+        tick(ctx);
+    }
+    SETTINGS_TICKS.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        ticks.append(&mut slot);
+        *slot = ticks;
+    });
+}
+
+/// Calls `save` once `version` has stayed the same for `delay` after it
+/// changed: the controls behind `version` save themselves.
+fn save_on_change(
+    version: impl Fn() -> u64 + 'static,
+    delay: Duration,
+    mut save: impl FnMut(&mut WindUiEventCtx) + 'static,
+) {
+    let mut seen = version();
+    let mut changed_at: Option<Instant> = None;
+    on_settings_tick(move |ctx| {
+        let current = version();
+        if current != seen {
+            seen = current;
+            changed_at = Some(Instant::now());
+        }
+        if changed_at.is_some_and(|at| at.elapsed() >= delay) {
+            changed_at = None;
+            save(ctx);
+        }
+    });
+}
+
 fn sync_settings_shell_theme(adapter: WindUiSignal<WindUiConfigAdapter>) {
     let mode = adapter.with(|adapter| adapter.preview().appearance().mode().to_owned());
     let dark = shell_uses_dark(&mode, windui::event::system_prefers_dark());
@@ -198,6 +253,7 @@ fn windui_settings_nav_item(
     glyph: &'static str,
     i: usize,
     selected: WindUiSignal<usize>,
+    fcitx_pages: FcitxConfigPages,
 ) -> WindUiElement {
     let chip = |active: bool| {
         WindUiElement::stack()
@@ -228,6 +284,8 @@ fn windui_settings_nav_item(
         .spacing(10)
         .padding_xy(10, 0)
         .bg_role_alpha(WindUiRole::Accent, 0.12)
+        .clickable()
+        .on_click(move |_| fcitx_pages.close())
         .child(chip(true))
         .child(
             WindUiElement::label(&name)
@@ -241,7 +299,15 @@ fn windui_settings_nav_item(
 
     let off = WindUiElement::row()
         .clickable()
-        .on_click(move |_| selected.set(i))
+        .on_click(move |_| {
+            fcitx_pages.close();
+            // Plugins page and Advanced show which addons have options; a
+            // plugin installed or enabled since may have added some.
+            if i >= 2 {
+                fcitx_pages.refresh_lists();
+            }
+            selected.set(i);
+        })
         .width_match()
         .height(38)
         .corner(9.0)
@@ -1029,9 +1095,20 @@ fn windui_plugin_row(
     row: PluginCatalogRow,
     selected: WindUiSignal<String>,
     snapshot: WindUiSignal<PluginManagerSnapshot>,
+    fcitx_pages: FcitxConfigPages,
     locale: LocaleCatalog,
 ) -> WindUiElement {
     let status = plugin_status(&row, &locale);
+    // A plugin package "fcitx5-<addon>" carries the Fcitx addon "<addon>";
+    // its options open here once the engine runs it.
+    let addon = row.id.strip_prefix("fcitx5-").unwrap_or(&row.id).to_owned();
+    let configurable_addon = addon.clone();
+    let options_title = row.title.clone();
+    let options = WindUiElement::button(locale.text("settings.fcitx.open"))
+        .small()
+        .outline()
+        .visible_when(move || fcitx_pages.addon_configurable(&configurable_addon))
+        .on_click(move |_| fcitx_pages.open(addon_uri(&addon), options_title.clone()));
     let row_id = row.id.clone();
     let title = row.title.clone();
     let summary = format!("{} · {}", row.id, row.summary);
@@ -1077,6 +1154,7 @@ fn windui_plugin_row(
                 .fg_role(WindUiRole::TextMuted)
                 .width(72),
         )
+        .child(options)
         .child(WindUiElement::badge_intent(status, WindUiIntent::Neutral))
 }
 
@@ -1116,6 +1194,7 @@ fn windui_plugins_page(
     busy: WindUiSignal<bool>,
     operation_status: WindUiSignal<String>,
     sender: WindUiSender<PluginResponse>,
+    fcitx_pages: FcitxConfigPages,
     locale: LocaleCatalog,
 ) -> WindUiElement {
     let selected = windui_signal("fcitx5-chinese-addons".to_owned());
@@ -1169,7 +1248,7 @@ fn windui_plugins_page(
     let list = WindUiElement::list_signal(
         rows,
         |row| row.id.clone(),
-        move |row| windui_plugin_row(row, selected, snapshot, row_locale.clone()),
+        move |row| windui_plugin_row(row, selected, snapshot, fcitx_pages, row_locale.clone()),
     )
     .width_match();
     let refresh_sender = sender.clone();
@@ -1461,8 +1540,16 @@ fn windui_engine_restart_channel(
 fn windui_input_method_row(
     row: InputMethodRow,
     draft: WindUiSignal<InputMethodDraft>,
+    fcitx_pages: FcitxConfigPages,
     locale: LocaleCatalog,
 ) -> WindUiElement {
+    let (options_id, options_title) = (row.id.clone(), row.name.clone());
+    let configurable_id = row.id.clone();
+    let options = WindUiElement::button(locale.text("settings.input.options"))
+        .small()
+        .outline()
+        .visible_when(move || fcitx_pages.input_method_configurable(&configurable_id))
+        .on_click(move |_| fcitx_pages.open(input_method_uri(&options_id), options_title.clone()));
     let (default_id, up_id, remove_id) = (row.id.clone(), row.id.clone(), row.id.clone());
     let default_control = if row.is_default {
         WindUiElement::badge_intent(locale.text("settings.input.default"), WindUiIntent::Success)
@@ -1497,6 +1584,7 @@ fn windui_input_method_row(
                         .max_lines(1),
                 ),
         )
+        .child(options)
         .child(default_control)
         .child(
             WindUiElement::button(locale.text("settings.input.move_up"))
@@ -1517,11 +1605,12 @@ fn windui_input_method_row(
 }
 
 /// The input method list and switch hotkeys, written to config.toml through
-/// Config Core. The engine reads both at startup, so applying restarts it.
+/// Config Core as soon as they change.
 fn windui_input_method_settings(
     adapter: WindUiSignal<WindUiConfigAdapter>,
     choices: Vec<InputMethodChoice>,
     restart_sender: WindUiSender<Result<(), String>>,
+    fcitx_pages: FcitxConfigPages,
     locale: &LocaleCatalog,
 ) -> WindUiElement {
     let snapshot = adapter.with(|adapter| adapter.preview());
@@ -1541,7 +1630,7 @@ fn windui_input_method_settings(
     let list = WindUiElement::list_signal(
         rows,
         |row| row.id.clone(),
-        move |row| windui_input_method_row(row, draft, row_locale.clone()),
+        move |row| windui_input_method_row(row, draft, fcitx_pages, row_locale.clone()),
     )
     .width_match()
     .height(208);
@@ -1582,52 +1671,80 @@ fn windui_input_method_settings(
         );
 
     let hotkey_labels = INPUT_METHOD_HOTKEYS.map(str::to_owned).to_vec();
-    let pending_message = locale.text("status.unsaved");
-    let same_message = locale.text("settings.shortcuts.same");
-    let apply = WindUiElement::button(locale.text("settings.input.apply"))
-        .small()
-        .on_click(move |ctx| {
-            if adapter.with(|adapter| !adapter.core.diff().is_empty()) {
-                ctx.toast_err(pending_message.clone());
+    // The engine reloads config.toml, so a change to the list or the default
+    // applies at once. Only an input method the engine did not start with
+    // needs a restart: its addon is loaded at startup.
+    let mut applied = draft.get();
+    let saved_message = locale.text("settings.fcitx.saved");
+    save_on_change(
+        move || draft.version(),
+        Duration::ZERO,
+        move |ctx| {
+            let next = draft.get();
+            if next == applied {
                 return;
             }
-            let (toggle, next) = (toggle.get(), next.get());
-            if toggle == next {
-                ctx.toast_err(same_message.clone());
-                return;
-            }
-            let draft = draft.get();
-            let mut result = Ok(());
-            adapter.update(|adapter| {
-                result = adapter
-                    .set(ConfigEdit::InputMethods {
-                        enabled: draft.enabled.clone(),
-                        default: draft.default.clone(),
-                    })
-                    .and_then(|()| {
-                        adapter.set(ConfigEdit::HotkeyToggleInputMethod(
-                            INPUT_METHOD_HOTKEYS[toggle.min(3)].to_owned(),
-                        ))
-                    })
-                    .and_then(|()| {
-                        adapter.set(ConfigEdit::HotkeyNextInputMethod(
-                            INPUT_METHOD_HOTKEYS[next.min(3)].to_owned(),
-                        ))
-                    })
-                    .and_then(|()| adapter.apply());
-                if result.is_err() {
-                    adapter.cancel();
-                }
+            let result = apply_config_edits(adapter, |adapter| {
+                adapter.set(ConfigEdit::InputMethods {
+                    enabled: next.enabled.clone(),
+                    default: next.default.clone(),
+                })
             });
             if let Err(error) = result {
                 ctx.toast_err(error);
+                draft.set(applied.clone());
                 return;
             }
-            let sender = restart_sender.clone();
-            thread::spawn(move || {
-                let _ = sender.send(run_control(&[OsString::from("--restart-engine")]).map(|_| ()));
+            let added = next.enabled.iter().any(|id| !applied.enabled.contains(id));
+            applied = next;
+            if added {
+                let sender = restart_sender.clone();
+                thread::spawn(move || {
+                    let _ =
+                        sender.send(run_control(&[OsString::from("--restart-engine")]).map(|_| ()));
+                });
+            } else {
+                ctx.toast_ok(saved_message.clone());
+            }
+        },
+    );
+    let same_message = locale.text("settings.shortcuts.same");
+    let mut applied_hotkeys = (toggle.get(), next.get());
+    save_on_change(
+        move || toggle.version().wrapping_add(next.version()),
+        Duration::ZERO,
+        move |ctx| {
+            let hotkeys = (toggle.get(), next.get());
+            if hotkeys == applied_hotkeys {
+                return;
+            }
+            if hotkeys.0 == hotkeys.1 {
+                ctx.toast_err(same_message.clone());
+                toggle.set(applied_hotkeys.0);
+                next.set(applied_hotkeys.1);
+                return;
+            }
+            let result = apply_config_edits(adapter, |adapter| {
+                adapter
+                    .set(ConfigEdit::HotkeyToggleInputMethod(
+                        INPUT_METHOD_HOTKEYS[hotkeys.0.min(3)].to_owned(),
+                    ))
+                    .and_then(|()| {
+                        adapter.set(ConfigEdit::HotkeyNextInputMethod(
+                            INPUT_METHOD_HOTKEYS[hotkeys.1.min(3)].to_owned(),
+                        ))
+                    })
             });
-        });
+            match result {
+                Ok(()) => applied_hotkeys = hotkeys,
+                Err(error) => {
+                    ctx.toast_err(error);
+                    toggle.set(applied_hotkeys.0);
+                    next.set(applied_hotkeys.1);
+                }
+            }
+        },
+    );
 
     WindUiElement::col()
         .width_match()
@@ -1668,8 +1785,7 @@ fn windui_input_method_settings(
                 .child(WindUiElement::setting_row(
                     locale.text("settings.shortcuts.next_input_method"),
                     WindUiElement::dropdown(hotkey_labels, next).width(180),
-                ))
-                .child(apply),
+                )),
         ))
 }
 
@@ -1705,6 +1821,7 @@ fn windui_settings_root(
     candidate_status: WindUiSignal<String>,
     input_method_choices: Vec<InputMethodChoice>,
     engine_restart_sender: WindUiSender<Result<(), String>>,
+    fcitx_pages: FcitxConfigPages,
     locale: LocaleCatalog,
 ) -> WindUiElement {
     candidate_status.set(locale.text("settings.candidate.draft_loaded"));
@@ -1713,12 +1830,28 @@ fn windui_settings_root(
         candidate_adapter,
         input_method_choices,
         engine_restart_sender,
+        fcitx_pages,
         &locale,
     );
     let themes = candidate_adapter.with(WindUiConfigAdapter::theme_choices);
     let fonts = candidate_font_choices(&locale, fcitx5_windows_common_core::system_font_families());
     let appearance = AppearanceControls::new();
     appearance.sync(candidate_adapter, &themes, &fonts);
+    {
+        let (themes, fonts, locale) = (themes.clone(), fonts.clone(), locale.clone());
+        save_on_change(
+            move || appearance.version(),
+            SETTINGS_SAVE_DELAY,
+            move |ctx| match appearance.save(candidate_adapter, &themes, &fonts) {
+                Ok(true) => candidate_status.set(locale.text("settings.saved")),
+                Ok(false) => {}
+                Err(error) => {
+                    appearance.sync(candidate_adapter, &themes, &fonts);
+                    ctx.toast_err(error);
+                }
+            },
+        );
+    }
     let theme_names: Vec<String> = themes
         .iter()
         .map(|theme| {
@@ -1740,7 +1873,7 @@ fn windui_settings_root(
         windui_settings_language_controls(candidate_adapter, candidate_status, &locale);
     let plugin_locale = locale.clone();
 
-    const NAV_GLYPHS: [&str; 3] = ["\u{270E}", "\u{25D0}", "\u{25A4}"];
+    const NAV_GLYPHS: [&str; 4] = ["\u{270E}", "\u{25D0}", "\u{25A4}", "\u{2699}"];
     let mut nav_col = WindUiElement::col().width_match().spacing(3);
     for (i, (name, glyph)) in locale
         .navigation_labels()
@@ -1748,7 +1881,7 @@ fn windui_settings_root(
         .zip(NAV_GLYPHS)
         .enumerate()
     {
-        nav_col = nav_col.child(windui_settings_nav_item(name, glyph, i, nav));
+        nav_col = nav_col.child(windui_settings_nav_item(name, glyph, i, nav, fcitx_pages));
     }
 
     let sidebar = WindUiElement::col()
@@ -1841,20 +1974,28 @@ fn windui_settings_root(
             )),
     );
 
+    let shows = move |page: usize| nav.get() == page && !fcitx_pages.is_open();
     let content = WindUiElement::stack()
         .height_match()
         .weight(1.0)
-        .child(input_page.visible_when(move || nav.get() == 0))
-        .child(appearance_page.visible_when(move || nav.get() == 1))
+        .child(input_page.visible_when(move || shows(0)))
+        .child(appearance_page.visible_when(move || shows(1)))
         .child(
             windui_plugins_page(
                 plugin_snapshot,
                 plugin_busy,
                 plugin_status,
                 plugin_sender,
+                fcitx_pages,
                 plugin_locale,
             )
-            .visible_when(move || nav.get() == 2),
+            .visible_when(move || shows(2)),
+        )
+        .child(windui_fcitx_page(fcitx_pages, &locale).visible_when(move || shows(3)))
+        .child(
+            fcitx_pages
+                .page(&locale)
+                .visible_when(move || fcitx_pages.is_open()),
         );
 
     let footer = WindUiElement::row()
@@ -1881,68 +2022,6 @@ fn windui_settings_root(
             WindUiElement::label_signal(candidate_status)
                 .font_size(12.5)
                 .fg_role(WindUiRole::TextMuted),
-        )
-        .child(WindUiElement::flex_spacer())
-        .child(
-            WindUiElement::button(locale.text("settings.reload"))
-                .small()
-                .outline()
-                .neutral()
-                .on_click({
-                    let locale = locale.clone();
-                    let themes = themes.clone();
-                    let fonts = fonts.clone();
-                    move |ctx| {
-                        let mut result = Ok(());
-                        candidate_adapter.update(|adapter| result = adapter.reload());
-                        match result {
-                            Ok(()) => {
-                                appearance.sync(candidate_adapter, &themes, &fonts);
-                                sync_settings_shell_theme(candidate_adapter);
-                                candidate_status.set(locale.text("settings.reloaded"));
-                            }
-                            Err(error) => ctx.toast_err(error),
-                        }
-                    }
-                })
-                .visible_when(move || nav.get() == 1),
-        )
-        .child(
-            WindUiElement::button(locale.text("settings.save"))
-                .small()
-                .on_click({
-                    let locale = locale.clone();
-                    move |ctx| {
-                        let mut edits = candidate_adapter
-                            .with(|adapter| appearance.pending_edits(&adapter.preview(), &themes));
-                        let font_change = appearance.font_change(&fonts);
-                        if let CandidateFontChange::Use(font) = &font_change {
-                            edits.push(ConfigEdit::CandidateFontFamilies(vec![
-                                font.clone(),
-                                "system".to_owned(),
-                            ]));
-                        }
-                        let mut result = Ok(());
-                        candidate_adapter.update(|adapter| {
-                            if font_change == CandidateFontChange::FollowTheme {
-                                adapter.reset(ConfigField::CandidateFontFamilies);
-                            }
-                            result = edits
-                                .into_iter()
-                                .try_for_each(|edit| adapter.set(edit))
-                                .and_then(|()| adapter.apply());
-                        });
-                        match result {
-                            Ok(()) => {
-                                appearance.font_loaded.set(appearance.font.get());
-                                candidate_status.set(locale.text("settings.saved"));
-                                ctx.toast_ok(locale.text("settings.saved"));
-                            }
-                            Err(error) => ctx.toast_err(error),
-                        }
-                    }
-                })
-                .visible_when(move || nav.get() == 1),
         );
 
     let body = WindUiElement::col()
@@ -1967,6 +2046,127 @@ fn windui_settings_root(
         .fill()
         .bg_role(WindUiRole::Bg)
         .child(windui_settings_shell_wrap(&locale.text("app.title"), body))
+}
+
+fn windui_fcitx_addon_row(
+    addon: AddonEntry,
+    fcitx_pages: FcitxConfigPages,
+    locale: &LocaleCatalog,
+) -> WindUiElement {
+    let (uri, title) = (addon_uri(&addon.id), addon.name.clone());
+    WindUiElement::row()
+        .width_match()
+        .height(48)
+        .cross(WindUiAlign::Center)
+        .spacing(8)
+        .padding_xy(12, 4)
+        .child(
+            WindUiElement::col()
+                .weight(1.0)
+                .spacing(2)
+                .child(
+                    WindUiElement::label(addon.name)
+                        .font_size(13.5)
+                        .font_weight(600)
+                        .max_lines(1)
+                        .truncate(WindUiTruncate::End),
+                )
+                .child(
+                    WindUiElement::label(addon.id)
+                        .font_size(12.0)
+                        .fg_role(WindUiRole::TextMuted)
+                        .max_lines(1),
+                ),
+        )
+        .child(
+            WindUiElement::button(locale.text("settings.fcitx.open"))
+                .small()
+                .outline()
+                .on_click(move |_| fcitx_pages.open(uri.clone(), title.clone())),
+        )
+}
+
+/// Fcitx's own options: the global configuration and every addon that has
+/// options, including the ones plugins install.
+fn windui_fcitx_page(fcitx_pages: FcitxConfigPages, locale: &LocaleCatalog) -> WindUiElement {
+    let global_title = locale.text("settings.fcitx.global");
+    let configurable = fcitx_pages.addons.map(|addons| {
+        addons
+            .iter()
+            // An addon that is not running cannot show its options.
+            .filter(|addon| addon.configurable && addon.loaded)
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    let row_locale = locale.clone();
+    let addons = WindUiElement::list_signal(
+        configurable,
+        |addon| addon.id.clone(),
+        move |addon| windui_fcitx_addon_row(addon, fcitx_pages, &row_locale),
+    )
+    .width_match()
+    .weight(1.0);
+    let empty = fcitx_pages.lists_error_or_empty(locale.text("settings.fcitx.empty"));
+    WindUiElement::col()
+        .fill()
+        .padding(24)
+        .spacing(20)
+        .child(windui_settings_page_title(
+            &locale.text("nav.fcitx"),
+            &locale.text("settings.fcitx.subtitle"),
+        ))
+        .child(windui_settings_card(WindUiElement::setting_row_desc(
+            global_title.clone(),
+            locale.text("settings.fcitx.global_hint"),
+            WindUiElement::button(locale.text("settings.fcitx.open"))
+                .small()
+                .outline()
+                .on_click(move |_| fcitx_pages.open(GLOBAL_URI.to_owned(), global_title.clone())),
+        )))
+        .child(
+            WindUiElement::col()
+                .width_match()
+                .weight(1.0)
+                .bg_role(WindUiRole::Surface)
+                .corner(12.0)
+                .border_role(WindUiRole::Border, 1)
+                .padding(20)
+                .spacing(12)
+                .child(
+                    WindUiElement::row()
+                        .width_match()
+                        .cross(WindUiAlign::Center)
+                        .spacing(10)
+                        .child(
+                            WindUiElement::col()
+                                .weight(1.0)
+                                .spacing(4)
+                                .child(windui_settings_section_title(
+                                    &locale.text("settings.fcitx.addons"),
+                                ))
+                                .child(
+                                    WindUiElement::label(locale.text("settings.fcitx.addons_hint"))
+                                        .font_size(12.5)
+                                        .fg_role(WindUiRole::TextMuted)
+                                        .width_match(),
+                                ),
+                        )
+                        .child(
+                            WindUiElement::button(locale.text("settings.fcitx.retry"))
+                                .small()
+                                .outline()
+                                .neutral()
+                                .on_click(move |_| fcitx_pages.refresh_lists()),
+                        ),
+                )
+                .child(
+                    WindUiElement::label_signal(empty)
+                        .font_size(12.5)
+                        .fg_role(WindUiRole::TextMuted)
+                        .visible_when(move || configurable.with(Vec::is_empty)),
+                )
+                .child(addons),
+        )
 }
 
 fn windui_settings_language_controls(
@@ -2000,44 +2200,58 @@ fn windui_settings_language_controls(
             other => LANGUAGE_NAMES[other - 3].to_owned(),
         })
         .collect::<Vec<_>>();
-    let apply_label = locale.text("action.apply");
-    let pending_message = locale.text("status.unsaved");
     let restart_message = locale.text("language.restart_required");
-
+    let ids = LANGUAGES.map(|(id, _)| id);
+    let control = windui_settings_language_control(
+        adapter,
+        status,
+        (ids, labels, selection),
+        restart_message.clone(),
+    );
     WindUiElement::col()
         .width_match()
         .spacing(10)
         .child(WindUiElement::setting_row_desc(
             locale.text("language.selector"),
             &restart_message,
-            WindUiElement::dropdown(labels, selection).width(230),
+            control.width(230),
         ))
-        .child(
-            WindUiElement::button(apply_label)
-                .small()
-                .on_click(move |ctx| {
-                    let has_pending_changes =
-                        adapter.with(|adapter| !adapter.core.diff().is_empty());
-                    if has_pending_changes {
-                        ctx.toast_err(pending_message.clone());
-                        return;
-                    }
-                    let index = selection.get().min(LANGUAGES.len() - 1);
-                    let mut result = Ok(());
-                    adapter.update(|adapter| {
-                        result = adapter
-                            .set(ConfigEdit::UiLanguage(LANGUAGES[index].0.to_owned()))
-                            .and_then(|()| adapter.apply());
-                    });
-                    match result {
-                        Ok(()) => {
-                            status.set(restart_message.clone());
-                            ctx.toast_ok(restart_message.clone());
-                        }
-                        Err(error) => ctx.toast_err(error),
-                    }
-                }),
-        )
+}
+
+/// The language dropdown; a choice is saved at once and shows after Settings
+/// restarts.
+fn windui_settings_language_control<const N: usize>(
+    adapter: WindUiSignal<WindUiConfigAdapter>,
+    status: WindUiSignal<String>,
+    (ids, labels, selection): ([&'static str; N], Vec<String>, WindUiSignal<usize>),
+    restart_message: String,
+) -> WindUiElement {
+    let mut applied = selection.get();
+    save_on_change(
+        move || selection.version(),
+        Duration::ZERO,
+        move |ctx| {
+            let index = selection.get().min(N - 1);
+            if index == applied {
+                return;
+            }
+            let language = ids[index].to_owned();
+            match apply_config_edits(adapter, |adapter| {
+                adapter.set(ConfigEdit::UiLanguage(language))
+            }) {
+                Ok(()) => {
+                    applied = index;
+                    status.set(restart_message.clone());
+                    ctx.toast_ok(restart_message.clone());
+                }
+                Err(error) => {
+                    selection.set(applied);
+                    ctx.toast_err(error);
+                }
+            }
+        },
+    );
+    WindUiElement::dropdown(labels, selection)
 }
 
 fn windui_plugin_manager(
@@ -2124,6 +2338,24 @@ fn windui_config_path() -> Result<PathBuf, String> {
         .ok_or_else(|| "unable to resolve the Fcitx5 user configuration path".to_owned())
 }
 
+/// Applies `edits` to config.toml at once. Settings has no draft: every
+/// change is saved and reaches the engine and the Candidate window, which
+/// reload the file. A failed save is discarded so the page shows the file.
+fn apply_config_edits(
+    adapter: WindUiSignal<WindUiConfigAdapter>,
+    edits: impl FnOnce(&mut WindUiConfigAdapter) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut result = Ok(());
+    adapter.update(|adapter| {
+        result = edits(adapter).and_then(|()| adapter.apply());
+        if result.is_err() {
+            adapter.cancel();
+        }
+    });
+    sync_settings_shell_theme(adapter);
+    result
+}
+
 fn update_candidate_draft(
     adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
@@ -2131,43 +2363,22 @@ fn update_candidate_draft(
     edit: ConfigEdit,
     locale: &LocaleCatalog,
 ) -> Result<(), String> {
-    let mut result = Ok(());
-    adapter.update(|adapter| result = adapter.set(edit));
-    result?;
-    sync_settings_shell_theme(adapter);
+    apply_config_edits(adapter, |adapter| adapter.set(edit))?;
     status.set(locale.format("settings.candidate.draft_updated", &[("control", label)]));
     Ok(())
-}
-
-fn apply_candidate_draft(
-    adapter: WindUiSignal<WindUiConfigAdapter>,
-    status: WindUiSignal<String>,
-    locale: &LocaleCatalog,
-) -> Result<(), String> {
-    let mut result = Ok(());
-    adapter.update(|adapter| result = adapter.apply());
-    result?;
-    status.set(locale.text("settings.candidate.applied"));
-    Ok(())
-}
-
-fn cancel_candidate_draft(
-    adapter: WindUiSignal<WindUiConfigAdapter>,
-    status: WindUiSignal<String>,
-    locale: &LocaleCatalog,
-) {
-    adapter.update(WindUiConfigAdapter::cancel);
-    sync_settings_shell_theme(adapter);
-    status.set(locale.text("settings.candidate.draft_discarded"));
 }
 
 fn reset_candidate_draft(
     adapter: WindUiSignal<WindUiConfigAdapter>,
     status: WindUiSignal<String>,
     locale: &LocaleCatalog,
-) {
-    adapter.update(WindUiConfigAdapter::reset_candidate_layout);
+) -> Result<(), String> {
+    apply_config_edits(adapter, |adapter| {
+        adapter.reset_candidate_layout();
+        Ok(())
+    })?;
     status.set(locale.text("settings.candidate.draft_reset"));
+    Ok(())
 }
 
 /// Decodes the current snapshot into the two-axis UI state exactly as Config
@@ -2205,15 +2416,13 @@ fn commit_candidate_layout_ui(
     edit: impl Fn(CandidateLayoutUiOptions) -> CandidateLayoutUiOptions + 'static,
     locale: &LocaleCatalog,
 ) -> Result<(), String> {
-    let mut result = Ok(());
-    adapter.update(|adapter| {
+    apply_config_edits(adapter, |adapter| {
         let current = candidate_layout_ui_options(&adapter.preview());
         let next = edit(current);
-        result = adapter.set(ConfigEdit::CandidateLayoutType(
+        adapter.set(ConfigEdit::CandidateLayoutType(
             next.layout_type().to_owned(),
-        ));
-    });
-    result?;
+        ))
+    })?;
     status.set(locale.format("settings.candidate.draft_updated", &[("control", control)]));
     Ok(())
 }
@@ -2764,40 +2973,18 @@ fn windui_config_core_candidate_layout_controls(
                 )),
         )
         .child(
-            WindUiElement::row()
-                .spacing(8)
-                .child(
-                    WindUiElement::button(locale.text("settings.candidate.apply")).on_click({
+            WindUiElement::row().spacing(8).child(
+                WindUiElement::button(locale.text("settings.candidate.reset"))
+                    .outline_soft()
+                    .on_click({
                         let locale = locale.clone();
                         move |ctx| {
-                            if let Err(error) = apply_candidate_draft(adapter, status, &locale) {
+                            if let Err(error) = reset_candidate_draft(adapter, status, &locale) {
                                 ctx.toast_err(error);
-                            } else {
-                                ctx.toast_ok(locale.text("settings.candidate.applied"));
                             }
                         }
                     }),
-                )
-                .child(
-                    WindUiElement::button(locale.text("settings.candidate.cancel"))
-                        .outline_soft()
-                        .on_click({
-                            let locale = locale.clone();
-                            move |_| {
-                                cancel_candidate_draft(adapter, status, &locale);
-                            }
-                        }),
-                )
-                .child(
-                    WindUiElement::button(locale.text("settings.candidate.reset"))
-                        .outline_soft()
-                        .on_click({
-                            let locale = locale.clone();
-                            move |_| {
-                                reset_candidate_draft(adapter, status, &locale);
-                            }
-                        }),
-                ),
+            ),
         )
         .child(
             WindUiElement::label_signal(status)
@@ -2881,12 +3068,6 @@ impl WindUiConfigAdapter {
         Ok(())
     }
 
-    /// Discards the draft and reads the configuration from disk again.
-    fn reload(&mut self) -> Result<(), String> {
-        *self = Self::load(self.path.clone())?;
-        Ok(())
-    }
-
     fn theme_choices(&self) -> Vec<ThemeChoice> {
         control_themes_list_json_for_paths(&self.installation_root, &self.data_root)
             .ok()
@@ -2925,7 +3106,7 @@ fn slider_from_opacity(opacity: f32) -> f32 {
     ((opacity - CANDIDATE_OPACITY_MIN) / (1.0 - CANDIDATE_OPACITY_MIN)).clamp(0.0, 1.0)
 }
 
-/// Appearance values edited in place on the page and written to Config Core on Save.
+/// Appearance values edited on the page; each change is saved to Config Core.
 #[derive(Clone, Copy)]
 struct AppearanceControls {
     theme: WindUiSignal<usize>,
@@ -2936,7 +3117,7 @@ struct AppearanceControls {
     opacity: WindUiSignal<f32>,
 }
 
-/// What Save does with the candidate font choice.
+/// What saving does with the candidate font choice.
 #[derive(Clone, Debug, PartialEq)]
 enum CandidateFontChange {
     Keep,
@@ -3034,6 +3215,45 @@ impl AppearanceControls {
 
     fn font_change(self, fonts: &[String]) -> CandidateFontChange {
         candidate_font_change(fonts, self.font_loaded.get(), self.font.get())
+    }
+
+    fn version(self) -> u64 {
+        [
+            self.theme.version(),
+            self.font.version(),
+            self.font_size.version(),
+            self.opacity.version(),
+        ]
+        .into_iter()
+        .fold(0, u64::wrapping_add)
+    }
+
+    /// Saves what differs from config.toml; `Ok(false)` when nothing did.
+    fn save(
+        self,
+        adapter: WindUiSignal<WindUiConfigAdapter>,
+        themes: &[ThemeChoice],
+        fonts: &[String],
+    ) -> Result<bool, String> {
+        let mut edits = adapter.with(|adapter| self.pending_edits(&adapter.preview(), themes));
+        let font_change = self.font_change(fonts);
+        if let CandidateFontChange::Use(font) = &font_change {
+            edits.push(ConfigEdit::CandidateFontFamilies(vec![
+                font.clone(),
+                "system".to_owned(),
+            ]));
+        }
+        if edits.is_empty() && font_change == CandidateFontChange::Keep {
+            return Ok(false);
+        }
+        apply_config_edits(adapter, |adapter| {
+            if font_change == CandidateFontChange::FollowTheme {
+                adapter.reset(ConfigField::CandidateFontFamilies);
+            }
+            edits.into_iter().try_for_each(|edit| adapter.set(edit))
+        })?;
+        self.font_loaded.set(self.font.get());
+        Ok(true)
     }
 }
 
@@ -3439,6 +3659,15 @@ fn run_windui_settings_window(
     let (snapshot, busy, status, sender) =
         windui_plugin_manager(&mut app, !screenshot_from_args, locale.clone());
     let restart_sender = windui_engine_restart_channel(&mut app, locale.clone());
+    let fcitx_pages = FcitxConfigPages::new(
+        &mut app,
+        settings_installation_root().unwrap_or_default(),
+        locale.clone(),
+    );
+    if !screenshot_from_args {
+        fcitx_pages.refresh_lists();
+    }
+    app = app.on_interval(SETTINGS_TICK, run_settings_ticks);
     let input_method_choices = installed_input_method_choices(&locale);
     app.content(windui_settings_root(
         snapshot,
@@ -3449,6 +3678,7 @@ fn run_windui_settings_window(
         candidate_status,
         input_method_choices,
         restart_sender,
+        fcitx_pages,
         locale,
     ))
     .run();

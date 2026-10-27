@@ -1,4 +1,5 @@
 #include "fcitx_runtime.h"
+#include "fcitx_config_bridge.h"
 #include "config_snapshot_ffi.h"
 #include "engine_core_ffi.h"
 #include "key_event.h"
@@ -1422,6 +1423,23 @@ void FcitxRuntime::reloadConfigIfChanged() {
         throw;
     }
     impl_->configReadStamp = stamp;
+}
+
+std::optional<std::string> FcitxRuntime::configGet(std::string_view uri) {
+    if (!impl_->instance)
+        return std::nullopt;
+    return fcitxConfigGet(*impl_->instance, uri);
+}
+
+bool FcitxRuntime::configSet(std::string_view uri, std::string_view value) {
+    if (!impl_->instance)
+        return false;
+    const bool saved = fcitxConfigSet(*impl_->instance, uri, value);
+    // Reloading the global configuration resets the page size that
+    // config.toml overrides.
+    impl_->applyFcitxPageSize();
+    impl_->dispatchPendingEvents();
+    return saved;
 }
 
 bool FcitxRuntime::setDefaultInputMethod(std::string_view id) {

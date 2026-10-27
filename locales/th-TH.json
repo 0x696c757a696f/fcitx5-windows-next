@@ -179,8 +179,6 @@
   "settings.shortcuts.toggle_punctuation": "สลับเครื่องหมายวรรคตอน",
   "settings.appearance.subtitle": "ธีม การจัดตัวอักษร และตัวอย่างตัวเลือก",
   "settings.theme.section": "ธีม",
-  "settings.reload": "โหลดใหม่",
-  "settings.save": "บันทึกการตั้งค่า",
   "settings.theme.choice": "ธีมหน้าต่างตัวเลือก",
   "settings.theme.choice_hint": "ธีมในตัว ของผู้ใช้ และจากปลั๊กอินสำหรับหน้าต่างตัวเลือก",
   "settings.candidate.text_section": "ข้อความตัวเลือก",
@@ -191,7 +189,6 @@
   "settings.candidate.font_theme": "ตามธีม",
   "settings.candidate.opacity": "ความทึบ",
   "settings.candidate.opacity_hint": "ระดับความทึบของหน้าต่างตัวเลือก",
-  "settings.reloaded": "โหลดการตั้งค่าจากดิสก์ใหม่แล้ว",
   "settings.saved": "บันทึกการตั้งค่าแล้ว",
   "settings.theme.toggle": "สลับธีมสว่างและมืด",
   "settings.placeholder.description": "หน้านี้ยังไม่พร้อมใช้งาน",
@@ -218,13 +215,9 @@
   "settings.candidate.writing.vertical_lr": "ข้อความแนวตั้ง จากซ้ายไปขวา",
   "settings.candidate.writing_hint": "ทิศทางข้อความของตัวเลือก ซึ่งแยกจากทิศทางเค้าโครง",
   "settings.candidate.page_size_hint": "จำนวนตัวเลือกสูงสุดต่อหน้า (1–9)",
-  "settings.candidate.apply": "นำไปใช้",
-  "settings.candidate.cancel": "ยกเลิก",
   "settings.candidate.reset": "รีเซ็ต",
-  "settings.candidate.applied": "นำเค้าโครงตัวเลือกไปใช้และบันทึกแล้ว",
-  "settings.candidate.draft_loaded": "โหลดฉบับร่างเค้าโครงตัวเลือกจาก Config Core แล้ว",
-  "settings.candidate.draft_discarded": "ละทิ้งการเปลี่ยนแปลงเค้าโครงตัวเลือกแล้ว",
-  "settings.candidate.draft_reset": "รีเซ็ตฉบับร่างเป็นค่าเริ่มต้นที่สืบทอดมาแล้ว",
+  "settings.candidate.draft_loaded": "การเปลี่ยนแปลงจะบันทึกและใช้ทันที",
+  "settings.candidate.draft_reset": "คืนค่าเค้าโครงตัวเลือกเป็นค่าเริ่มต้นแล้ว",
   "settings.plugins.subtitle": "แค็ตตาล็อก fcitx5-plugins และแพ็กเกจ Windows ที่เชื่อถือได้",
   "settings.plugins.repository.loading": "ที่เก็บทางการ · กำลังโหลด",
   "settings.plugins.repository.ready": "ที่เก็บทางการ · ใช้แค็ตตาล็อกที่ลงลายเซ็นแล้วได้",
@@ -249,7 +242,7 @@
   "settings.plugins.choose_operation": "เลือกปลั๊กอินเพื่อดำเนินการกับแพ็กเกจที่เชื่อถือได้",
   "settings.plugins.completed": "{operation}เสร็จแล้ว อ่านสถานะแพ็กเกจ Windows {count} รายการจาก Control",
   "settings.plugins.operation_failed": "การดำเนินการปลั๊กอิน {operation} ล้มเหลว",
-  "settings.candidate.draft_updated": "อัปเดต{control}ในฉบับร่างแล้ว คลิกนำไปใช้เพื่อบันทึก",
+  "settings.candidate.draft_updated": "บันทึกและใช้ {control} แล้ว",
   "settings.input.engine.wubi": "อู่ปี่",
   "settings.input.engine.pinyin": "พินอิน",
   "settings.input.engine.rime": "Rime",
@@ -268,7 +261,6 @@
   ,"settings.input.remove": "นำออก"
   ,"settings.input.add": "เพิ่ม"
   ,"settings.input.add_hint": "วิธีป้อนข้อมูลจากปลั๊กอินที่ติดตั้งจะแสดงที่นี่ด้วย"
-  ,"settings.input.apply": "นำไปใช้"
   ,"settings.input.applied": "บันทึกแล้ว กำลังเริ่มเอนจินวิธีป้อนข้อมูลใหม่"
   ,"settings.input.restart_failed": "บันทึกแล้ว แต่เริ่มเอนจินวิธีป้อนข้อมูลใหม่ไม่สำเร็จ: {error}"
   ,"settings.shortcuts.toggle_input_method": "สลับระหว่างแป้นพิมพ์กับวิธีป้อนข้อมูลเริ่มต้น"
@@ -282,4 +274,28 @@
   ,"theme.builtin.sakura": "ซากุระ"
   ,"theme.builtin.nord": "นอร์ด"
   ,"theme.builtin.amber": "อำพัน"
+  ,"nav.fcitx": "ขั้นสูง"
+  ,"settings.fcitx.subtitle": "ตัวเลือก Fcitx และการตั้งค่าส่วนประกอบ"
+  ,"settings.fcitx.global": "ตัวเลือกทั่วไป"
+  ,"settings.fcitx.global_hint": "พฤติกรรมและปุ่มลัดของ Fcitx เอง"
+  ,"settings.fcitx.addons": "ส่วนประกอบ"
+  ,"settings.fcitx.addons_hint": "วิธีป้อนข้อมูลและส่วนประกอบที่มีตัวเลือก ปลั๊กอินที่ติดตั้งจะแสดงที่นี่ด้วย"
+  ,"settings.fcitx.open": "ตัวเลือก"
+  ,"settings.fcitx.back": "ย้อนกลับ"
+  ,"settings.fcitx.undo": "เลิกทำ"
+  ,"settings.fcitx.reset": "คืนค่าเริ่มต้น"
+  ,"settings.fcitx.reset_all": "คืนค่าเริ่มต้นทั้งหมด"
+  ,"settings.fcitx.loading": "กำลังอ่านตัวเลือก…"
+  ,"settings.fcitx.saved": "บันทึกและใช้แล้ว"
+  ,"settings.fcitx.save_failed": "บันทึกไม่ได้: {error}"
+  ,"settings.fcitx.load_failed": "อ่านตัวเลือกไม่ได้: {error}"
+  ,"settings.fcitx.unsupported": "ยังแก้ไขที่นี่ไม่ได้"
+  ,"settings.fcitx.keys_hint": "คั่นปุ่มด้วยช่องว่าง"
+  ,"settings.fcitx.lines_hint": "บรรทัดละหนึ่งรายการ"
+  ,"settings.fcitx.empty": "ไม่มีส่วนประกอบให้แสดง ตรวจสอบว่าวิธีป้อนข้อมูลกำลังทำงาน แล้วอ่านใหม่"
+  ,"settings.fcitx.retry": "อ่านใหม่"
+  ,"settings.fcitx.error.engine_unavailable": "เอนจินวิธีป้อนข้อมูลไม่ได้ทำงาน"
+  ,"settings.fcitx.error.no_response": "เอนจินวิธีป้อนข้อมูลไม่ตอบสนอง"
+  ,"settings.fcitx.error.invalid": "เอนจินส่งตัวเลือกที่อ่านไม่ได้"
+  ,"settings.input.options": "ตัวเลือก"
 }

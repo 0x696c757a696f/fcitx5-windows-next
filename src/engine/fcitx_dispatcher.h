@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 
 namespace fcitx {
@@ -45,6 +46,10 @@ class FcitxDispatcher final {
     [[nodiscard]] bool inputMethodAction(const ClientContextKey& key, bool toggle,
                                          InputMethodStatus& result,
                                          std::chrono::milliseconds timeout);
+    // Reads (`set == false`) or writes one Fcitx configuration; see
+    // fcitx_config_bridge.h for the URIs and formats. A read fills `payload`.
+    [[nodiscard]] bool config(bool set, std::string uri, std::string value, std::string& payload,
+                              std::chrono::milliseconds timeout);
     void forgetConnection(std::uint64_t connectionId);
     void stop();
 

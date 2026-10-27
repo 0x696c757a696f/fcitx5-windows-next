@@ -883,3 +883,61 @@ fn hello_request_notification_event_is_optional() {
     let decoded = decode_hello_request(&decode_frame(&plain).expect("frame")).expect("hello");
     assert_eq!(decoded.notification_event, 0);
 }
+
+#[test]
+fn config_request_and_response_round_trip() {
+    let metadata = Metadata {
+        request_id: 21,
+        response_to: 0,
+        engine_epoch: 99,
+        session_id: 3,
+        context_id: 0,
+        composition_id: 0,
+        revision: 0,
+    };
+    let get = ConfigRequest {
+        metadata,
+        operation: ConfigOperation::Get,
+        uri: b"fcitx://config/inputmethod/shuangpin".to_vec(),
+        value: Vec::new(),
+    };
+    let bytes = encode_config_request(&get).expect("encoded");
+    let frame = decode_frame(&bytes).expect("frame");
+    assert_eq!(frame.message_type, MessageType::ConfigRequest);
+    assert_eq!(decode_config_request(&frame).expect("decoded"), get);
+
+    let set = ConfigRequest {
+        operation: ConfigOperation::Set,
+        value: br#"{"ShuangpinProfile":"Xiaohe"}"#.to_vec(),
+        ..get.clone()
+    };
+    let bytes = encode_config_request(&set).expect("encoded");
+    let frame = decode_frame(&bytes).expect("frame");
+    assert_eq!(decode_config_request(&frame).expect("decoded"), set);
+
+    // Only Fcitx configuration URIs, and no value on a get.
+    let mut foreign = get.clone();
+    foreign.uri = b"file:///C:/Windows".to_vec();
+    assert!(encode_config_request(&foreign).is_none());
+    let mut get_with_value = get.clone();
+    get_with_value.value = b"{}".to_vec();
+    assert!(encode_config_request(&get_with_value).is_none());
+    let mut with_context = get.clone();
+    with_context.metadata.context_id = 7;
+    assert!(encode_config_request(&with_context).is_none());
+
+    // A configuration tree may exceed the hot frame limit.
+    let response = ConfigResponse {
+        metadata: Metadata {
+            request_id: 22,
+            response_to: 21,
+            ..metadata
+        },
+        status: Status::Ok,
+        payload: vec![b'x'; MAX_HOT_FRAME_SIZE],
+    };
+    let bytes = encode_config_response(&response).expect("encoded");
+    let frame = decode_frame(&bytes).expect("frame");
+    assert_eq!(frame.message_type, MessageType::ConfigResponse);
+    assert_eq!(decode_config_response(&frame).expect("decoded"), response);
+}
