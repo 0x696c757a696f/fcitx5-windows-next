@@ -56,6 +56,8 @@ struct RuntimeResult {
     FcitxCaretRectC caret{0, 0, 0, 0, 0, 96};
     bool popupAllowed{true};
     std::string contentLocaleUtf8;
+    // The engine connection that owns the context, set by selectCandidate.
+    std::uint64_t ownerConnectionId{};
 };
 
 struct InputMethodInfo {

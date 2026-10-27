@@ -319,6 +319,7 @@ mod tests {
             },
             client_process_id: 41,
             client_architecture_bits: usize::BITS,
+            notification_event: 0,
         };
         let bytes = protocol::encode_hello_request(&request).expect("hello should encode");
         let mut state = ClientState::default();

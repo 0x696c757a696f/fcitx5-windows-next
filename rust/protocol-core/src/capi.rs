@@ -80,6 +80,7 @@ pub struct FcitxHelloRequestC {
     pub metadata: FcitxMetadataC,
     pub client_architecture_bits: u32,
     pub client_process_id: u32,
+    pub notification_event: u64,
 }
 
 #[repr(C)]
@@ -443,6 +444,7 @@ pub unsafe extern "C" fn fcitx5_protocol_core_encode_hello_request(
             metadata: metadata_from_c(&m.metadata),
             client_architecture_bits: m.client_architecture_bits,
             client_process_id: m.client_process_id,
+            notification_event: m.notification_event,
         };
         let Some(bytes) = encode_hello_request(&rust) else {
             return 0;
@@ -868,6 +870,7 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_hello_request(
         let o = unsafe { &mut *out };
         o.client_architecture_bits = msg.client_architecture_bits;
         o.client_process_id = msg.client_process_id;
+        o.notification_event = msg.notification_event;
         // SAFETY: `strings_needed` is writable (checked above).
         unsafe { *strings_needed = 0 };
         1

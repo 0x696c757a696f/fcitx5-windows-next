@@ -15,9 +15,11 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <mutex>
 #include <span>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 extern "C" std::uint64_t
@@ -232,6 +234,62 @@ std::vector<std::uint8_t> encodeEngineStatusResponse(const FcitxMetadataC& reque
     return encodeMessage(fcitx5_protocol_core_encode_engine_status_response, response);
 }
 
+// Candidate-click events by connection. Each text-service thread sends the
+// handle value of its own event in hello, so a click wakes only the thread
+// that owns the clicked context; the per-process named event is the fallback.
+class NotificationEvents {
+  public:
+    void set(std::uint64_t connectionId, std::uint32_t processId, std::uint64_t handle) {
+        if (handle == 0)
+            return;
+        const std::lock_guard lock(mutex_);
+        events_[connectionId] = Entry{processId, handle};
+    }
+
+    void erase(std::uint64_t connectionId) {
+        const std::lock_guard lock(mutex_);
+        events_.erase(connectionId);
+    }
+
+    bool signal(std::uint64_t connectionId, std::uint32_t processId) {
+        Entry entry{};
+        {
+            const std::lock_guard lock(mutex_);
+            const auto found = events_.find(connectionId);
+            if (found == events_.end() || found->second.processId != processId)
+                return false;
+            entry = found->second;
+        }
+        const HANDLE process = OpenProcess(PROCESS_DUP_HANDLE, FALSE, entry.processId);
+        if (!process)
+            return false;
+        HANDLE event = nullptr;
+        const bool duplicated =
+            DuplicateHandle(process,
+                            reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(entry.handle)),
+                            GetCurrentProcess(), &event, EVENT_MODIFY_STATE, FALSE, 0) != FALSE;
+        CloseHandle(process);
+        if (!duplicated)
+            return false;
+        const bool signaled = SetEvent(event) != FALSE;
+        CloseHandle(event);
+        return signaled;
+    }
+
+  private:
+    struct Entry {
+        std::uint32_t processId;
+        std::uint64_t handle;
+    };
+    std::mutex mutex_;
+    std::unordered_map<std::uint64_t, Entry> events_;
+};
+
+NotificationEvents& notificationEvents() {
+    static NotificationEvents events;
+    return events;
+}
+
 bool signalCandidateUpdate(const platform::RuntimeIdentity& identity,
                            std::uint32_t targetProcessId) noexcept {
     const std::wstring name =
@@ -270,6 +328,7 @@ handleRequest(std::span<const std::uint8_t> requestBytes, std::uint64_t engineEp
                 clientIdentity.sessionId, request.clientProcessId, clientIdentity.processId) == 0) {
             return {};
         }
+        notificationEvents().set(connectionId, clientIdentity.processId, request.notificationEvent);
         const FcitxHelloResponseC response{FcitxMetadataC{nextResponseId.fetch_add(1),
                                                           request.metadata.requestId, engineEpoch,
                                                           request.metadata.sessionId, 0, 0, 0},
@@ -323,7 +382,9 @@ handleRequest(std::span<const std::uint8_t> requestBytes, std::uint64_t engineEp
         if (encodedState.empty())
             return {};
         presentation.publish(encodedState);
-        const bool notified = signalCandidateUpdate(serverIdentity, request.targetProcessId);
+        const bool notified =
+            notificationEvents().signal(runtimeResult.ownerConnectionId, request.targetProcessId) ||
+            signalCandidateUpdate(serverIdentity, request.targetProcessId);
         const FcitxCandidateSelectResponseC response{
             FcitxMetadataC{nextResponseId.fetch_add(1), request.metadata.requestId, engineEpoch,
                            request.metadata.sessionId, request.metadata.contextId,
@@ -493,6 +554,7 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
                         }
                     }
                     fcitx5_engine_core_session_destroy(session);
+                    notificationEvents().erase(connectionId);
                     dispatcher.forgetConnection(connectionId);
                 }
                 DisconnectNamedPipe(pipe);

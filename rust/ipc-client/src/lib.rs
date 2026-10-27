@@ -148,6 +148,7 @@ impl EngineClient {
             },
             client_architecture_bits: (std::mem::size_of::<usize>() * 8) as u32,
             client_process_id: self.process_id,
+            notification_event: 0,
         };
         let Some(request_bytes) = protocol::encode_hello_request(&request) else {
             self.disconnect();

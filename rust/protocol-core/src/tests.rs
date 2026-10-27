@@ -104,6 +104,7 @@ fn hello_request_input() -> HelloRequest {
         },
         client_architecture_bits: 64,
         client_process_id: 100,
+        notification_event: 0,
     }
 }
 
@@ -866,4 +867,19 @@ fn frames_are_accepted_and_reencoded_byte_identically() {
     let mut bad = bytes.clone();
     bad[4] = (VERSION + 1) as u8;
     assert!(decode_frame(&bad).is_none());
+}
+
+#[test]
+fn hello_request_notification_event_is_optional() {
+    let plain = encode_hello_request(&hello_request_input()).expect("encoded");
+    let with_event_input = HelloRequest {
+        notification_event: 0x1234,
+        ..hello_request_input()
+    };
+    let with_event = encode_hello_request(&with_event_input).expect("encoded");
+    assert_eq!(with_event.len(), plain.len() + 8);
+    let decoded = decode_hello_request(&decode_frame(&with_event).expect("frame")).expect("hello");
+    assert_eq!(decoded, with_event_input);
+    let decoded = decode_hello_request(&decode_frame(&plain).expect("frame")).expect("hello");
+    assert_eq!(decoded.notification_event, 0);
 }

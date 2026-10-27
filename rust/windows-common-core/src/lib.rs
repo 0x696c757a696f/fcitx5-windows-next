@@ -990,6 +990,19 @@ impl LocalEvent {
         }
         Ok(())
     }
+
+    /// Returns the event to the non-signaled state.
+    ///
+    /// # Errors
+    ///
+    /// Returns the Win32 reset error.
+    pub fn reset(&self) -> io::Result<()> {
+        // SAFETY: `handle` owns a live event handle for this synchronous call.
+        if unsafe { ResetEvent(self.handle.as_raw_handle()) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
 }
 
 impl AsHandle for LocalEvent {
