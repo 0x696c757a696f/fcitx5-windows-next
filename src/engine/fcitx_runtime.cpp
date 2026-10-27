@@ -1268,13 +1268,12 @@ std::vector<InputMethodInfo> FcitxRuntime::inputMethods() const {
     return output;
 }
 
-InputMethodStatus FcitxRuntime::currentInputMethod() const {
+namespace {
+
+InputMethodStatus inputMethodStatusFor(Instance& instance, InputContext* context) {
     InputMethodStatus output;
-    if (!impl_->instance)
-        return output;
-    auto* context = impl_->focused ? impl_->focused : impl_->warmupContext.get();
-    auto& manager = impl_->instance->inputMethodManager();
-    const std::string id = context ? impl_->instance->inputMethod(context)
+    auto& manager = instance.inputMethodManager();
+    const std::string id = context ? instance.inputMethod(context)
                                    : manager.currentGroup().defaultInputMethod();
     if (id.empty())
         return output;
@@ -1289,7 +1288,7 @@ InputMethodStatus FcitxRuntime::currentInputMethod() const {
     output.nativeName = entry->nativeName();
     std::string display;
     if (context) {
-        if (auto* engine = impl_->instance->inputMethodEngine(context)) {
+        if (auto* engine = instance.inputMethodEngine(context)) {
             display = engine->subModeLabel(*entry, *context);
         }
     }
@@ -1299,6 +1298,26 @@ InputMethodStatus FcitxRuntime::currentInputMethod() const {
         display = output.nativeName.empty() ? output.name : output.nativeName;
     output.shortLabel = shortLabelFromRust(display);
     return output;
+}
+
+} // namespace
+
+InputMethodStatus FcitxRuntime::currentInputMethod() const {
+    if (!impl_->instance)
+        return {};
+    return inputMethodStatusFor(*impl_->instance,
+                                impl_->focused ? impl_->focused : impl_->warmupContext.get());
+}
+
+InputMethodStatus FcitxRuntime::inputMethodAction(const ClientContextKey& key, bool toggle) {
+    if (!impl_->instance)
+        return {};
+    auto& context = impl_->contextFor(key);
+    if (toggle) {
+        impl_->toggleInputMethod(impl_->config, key, context);
+        impl_->dispatchPendingEvents();
+    }
+    return inputMethodStatusFor(*impl_->instance, &context);
 }
 
 bool FcitxRuntime::setDefaultInputMethod(std::string_view id) {

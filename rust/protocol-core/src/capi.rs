@@ -26,9 +26,9 @@
 use crate::{
     decode_candidate_select_request, decode_candidate_select_response,
     decode_engine_status_request, decode_engine_status_response, decode_header,
-    decode_hello_request, decode_hello_response, decode_key_request, decode_key_response,
-    decode_launcher_request, decode_launcher_response, decode_state_request,
-    encode_candidate_select_request, encode_candidate_select_response,
+    decode_hello_request, decode_hello_response, decode_input_method_action_request,
+    decode_key_request, decode_key_response, decode_launcher_request, decode_launcher_response,
+    decode_state_request, encode_candidate_select_request, encode_candidate_select_response,
     encode_engine_status_request, encode_engine_status_response, encode_hello_request,
     encode_hello_response, encode_key_request, encode_key_response, encode_launcher_request,
     encode_launcher_response, encode_state_request, CandidateRecord, CandidateSelectRequest,
@@ -174,6 +174,14 @@ pub struct FcitxStateRequestC {
 #[derive(Clone, Copy)]
 pub struct FcitxEngineStatusRequestC {
     pub metadata: FcitxMetadataC,
+}
+
+/// `action`: 0 = query, 1 = toggle between keyboard and default input method.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FcitxInputMethodActionRequestC {
+    pub metadata: FcitxMetadataC,
+    pub action: u32,
 }
 
 #[repr(C)]
@@ -1290,6 +1298,57 @@ pub unsafe extern "C" fn fcitx5_protocol_core_decode_engine_status_request(
         };
         // SAFETY: `strings_needed` is writable (checked above).
         unsafe { *strings_needed = 0 };
+        1
+    });
+    result.unwrap_or(0)
+}
+
+/// # Safety
+/// `metadata`, `out`, `strings_needed` must be writable/valid pointers;
+/// `body`/`body_length` must describe a readable buffer; `strings`/
+/// `strings_capacity` must describe a writable buffer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcitx5_protocol_core_decode_input_method_action_request(
+    metadata: *const FcitxMetadataC,
+    body: *const u8,
+    body_length: usize,
+    out: *mut FcitxInputMethodActionRequestC,
+    strings: *mut u8,
+    strings_capacity: usize,
+    strings_needed: *mut usize,
+) -> u8 {
+    let result = panic::catch_unwind(|| {
+        if metadata.is_null()
+            || out.is_null()
+            || strings_needed.is_null()
+            || (body.is_null() && body_length != 0)
+            || (strings.is_null() && strings_capacity != 0)
+        {
+            return 0;
+        }
+        let frame = FrameView {
+            message_type: MessageType::InputMethodActionRequest,
+            // SAFETY: null is rejected above; the FFI ABI requires `metadata` to be
+            // aligned, initialized, and immutable for this call's lifetime.
+            metadata: metadata_from_c(unsafe { &*metadata }),
+            body: if body_length == 0 {
+                &[][..]
+            } else {
+                // SAFETY: caller provides a valid buffer of `body_length`.
+                unsafe { std::slice::from_raw_parts(body, body_length) }
+            },
+        };
+        let Some(msg) = decode_input_method_action_request(&frame) else {
+            return 0;
+        };
+        // SAFETY: `out` and `strings_needed` are writable (checked above).
+        unsafe {
+            *out = FcitxInputMethodActionRequestC {
+                metadata: metadata_to_c(&msg.metadata),
+                action: msg.action as u32,
+            };
+            *strings_needed = 0;
+        }
         1
     });
     result.unwrap_or(0)

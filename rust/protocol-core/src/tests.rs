@@ -310,6 +310,36 @@ fn state_and_engine_status_roundtrip() {
     let status_output = decode_engine_status_request(&frame).expect("decoded");
     assert_eq!(status_output.metadata, status_input.metadata);
 
+    for action in [InputMethodAction::Query, InputMethodAction::Toggle] {
+        let action_input = InputMethodActionRequest {
+            metadata: Metadata {
+                request_id: 8,
+                response_to: 0,
+                engine_epoch: 99,
+                session_id: 3,
+                context_id: 7,
+                composition_id: 0,
+                revision: 0,
+            },
+            action,
+        };
+        let bytes = encode_input_method_action_request(&action_input).expect("encoded");
+        let frame = decode_frame(&bytes).expect("frame");
+        assert_eq!(frame.message_type, MessageType::InputMethodActionRequest);
+        let action_output = decode_input_method_action_request(&frame).expect("decoded");
+        assert_eq!(action_output, action_input);
+        // An action names the context it acts on.
+        let mut no_context = action_input.clone();
+        no_context.metadata.context_id = 0;
+        assert!(encode_input_method_action_request(&no_context).is_none());
+        // Unknown actions are rejected.
+        let mut unknown = bytes.clone();
+        let last = unknown.len() - 4;
+        unknown[last..].copy_from_slice(&7u32.to_le_bytes());
+        let frame = decode_frame(&unknown).expect("frame");
+        assert!(decode_input_method_action_request(&frame).is_none());
+    }
+
     let status_response_input = EngineStatusResponse {
         metadata: Metadata {
             request_id: 7,

@@ -67,6 +67,7 @@ pub enum MessageType {
     StateRequest = 9,
     EngineStatusRequest = 10,
     EngineStatusResponse = 11,
+    InputMethodActionRequest = 12,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -264,6 +265,25 @@ pub struct StateRequest {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EngineStatusRequest {
     pub metadata: Metadata,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u32)]
+pub enum InputMethodAction {
+    /// Report the input method of the context without changing it.
+    #[default]
+    Query = 0,
+    /// Switch between the keyboard and the default input method, as the
+    /// toggle hotkey does.
+    Toggle = 1,
+}
+
+/// Acts on the input method of `metadata.context_id`. The engine answers
+/// with an `EngineStatusResponse` describing that context afterwards.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InputMethodActionRequest {
+    pub metadata: Metadata,
+    pub action: InputMethodAction,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -466,6 +486,7 @@ fn is_request(message_type: MessageType) -> bool {
             | MessageType::CandidateSelectRequest
             | MessageType::StateRequest
             | MessageType::EngineStatusRequest
+            | MessageType::InputMethodActionRequest
     )
 }
 
@@ -714,6 +735,7 @@ fn message_type_from_raw(raw: u16) -> Option<MessageType> {
         9 => Some(MessageType::StateRequest),
         10 => Some(MessageType::EngineStatusRequest),
         11 => Some(MessageType::EngineStatusResponse),
+        12 => Some(MessageType::InputMethodActionRequest),
         _ => None,
     }
 }
@@ -918,6 +940,17 @@ pub fn encode_engine_status_request(message: &EngineStatusRequest) -> Option<Vec
         return None;
     }
     let writer = Writer::new(MessageType::EngineStatusRequest, &message.metadata);
+    Some(writer.finish())
+}
+
+pub fn encode_input_method_action_request(message: &InputMethodActionRequest) -> Option<Vec<u8>> {
+    if !valid_metadata(MessageType::InputMethodActionRequest, &message.metadata)
+        || !valid_key_metadata(&message.metadata)
+    {
+        return None;
+    }
+    let mut writer = Writer::new(MessageType::InputMethodActionRequest, &message.metadata);
+    writer.append_u32(message.action as u32);
     Some(writer.finish())
 }
 
@@ -1276,6 +1309,29 @@ pub fn decode_engine_status_request(frame: &FrameView<'_>) -> Option<EngineStatu
     })
 }
 
+pub fn decode_input_method_action_request(
+    frame: &FrameView<'_>,
+) -> Option<InputMethodActionRequest> {
+    if frame.message_type != MessageType::InputMethodActionRequest
+        || !valid_key_metadata(&frame.metadata)
+    {
+        return None;
+    }
+    let mut reader = Reader::new(frame.body);
+    let action = match reader.read_u32()? {
+        0 => InputMethodAction::Query,
+        1 => InputMethodAction::Toggle,
+        _ => return None,
+    };
+    if !reader.done() {
+        return None;
+    }
+    Some(InputMethodActionRequest {
+        metadata: frame.metadata,
+        action,
+    })
+}
+
 pub fn decode_engine_status_response(frame: &FrameView<'_>) -> Option<EngineStatusResponse> {
     if frame.message_type != MessageType::EngineStatusResponse
         || !valid_engine_status_metadata(&frame.metadata)
@@ -1406,6 +1462,9 @@ pub fn decode_and_reencode(bytes: &[u8]) -> Option<Vec<u8>> {
         }
         MessageType::EngineStatusResponse => {
             encode_engine_status_response(&decode_engine_status_response(&frame)?)
+        }
+        MessageType::InputMethodActionRequest => {
+            encode_input_method_action_request(&decode_input_method_action_request(&frame)?)
         }
     }
 }

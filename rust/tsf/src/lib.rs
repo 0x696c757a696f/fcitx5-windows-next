@@ -23,8 +23,11 @@ use std::sync::OnceLock;
 use std::thread::{sleep, JoinHandle};
 use std::time::Duration;
 
+mod input_mode;
+
 use fcitx5_protocol_core as protocol;
 use fcitx5_windows_common_core as common;
+use input_mode::{Fcitx5InputModeItem, InputModeStatus};
 use windows::Win32::Foundation::{
     CLASS_E_CLASSNOTAVAILABLE, E_FAIL, E_INVALIDARG, E_NOTIMPL, E_POINTER, E_UNEXPECTED, HMODULE,
     POINT, RECT, S_OK, WIN32_ERROR,
@@ -57,13 +60,14 @@ use windows::Win32::UI::TextServices::{
     ITfCandidateListUIElement_Impl, ITfCategoryMgr, ITfComposition, ITfCompositionSink,
     ITfCompositionSink_Impl, ITfContext, ITfContextComposition, ITfDocumentMgr, ITfEditSession,
     ITfEditSession_Impl, ITfInputProcessorProfileMgr, ITfInputProcessorProfiles, ITfInputScope,
-    ITfKeyEventSink, ITfKeyEventSink_Impl, ITfKeystrokeMgr, ITfRange, ITfSource,
-    ITfTextInputProcessor, ITfTextInputProcessorEx, ITfTextInputProcessorEx_Impl,
-    ITfTextInputProcessor_Impl, ITfThreadFocusSink, ITfThreadFocusSink_Impl, ITfThreadMgr,
-    ITfThreadMgrEventSink, ITfThreadMgrEventSink_Impl, ITfUIElement, ITfUIElementMgr,
-    ITfUIElement_Impl, InputScope, GUID_PROP_INPUTSCOPE, GUID_TFCAT_TIP_KEYBOARD,
-    IS_ALPHANUMERIC_PIN, IS_ALPHANUMERIC_PIN_SET, IS_NUMERIC_PASSWORD, IS_NUMERIC_PIN, IS_PASSWORD,
-    IS_PRIVATE, TF_DEFAULT_SELECTION, TF_ES_READ, TF_ES_READWRITE, TF_ES_SYNC, TF_SELECTION,
+    ITfKeyEventSink, ITfKeyEventSink_Impl, ITfKeystrokeMgr, ITfLangBarItem, ITfLangBarItemMgr,
+    ITfRange, ITfSource, ITfTextInputProcessor, ITfTextInputProcessorEx,
+    ITfTextInputProcessorEx_Impl, ITfTextInputProcessor_Impl, ITfThreadFocusSink,
+    ITfThreadFocusSink_Impl, ITfThreadMgr, ITfThreadMgrEventSink, ITfThreadMgrEventSink_Impl,
+    ITfUIElement, ITfUIElementMgr, ITfUIElement_Impl, InputScope, GUID_PROP_INPUTSCOPE,
+    GUID_TFCAT_TIP_KEYBOARD, IS_ALPHANUMERIC_PIN, IS_ALPHANUMERIC_PIN_SET, IS_NUMERIC_PASSWORD,
+    IS_NUMERIC_PIN, IS_PASSWORD, IS_PRIVATE, TF_DEFAULT_SELECTION, TF_ES_READ, TF_ES_READWRITE,
+    TF_ES_SYNC, TF_SELECTION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetGUIThreadInfo, GUITHREADINFO};
 use windows_core::{
@@ -1011,6 +1015,8 @@ const ENGINE_RETRY_BASE_MILLISECONDS: u64 = 1000;
 const ENGINE_RETRY_MAX_MILLISECONDS: u64 = 30000;
 // The engine drops a connection after 60 seconds without a request.
 const ENGINE_IDLE_RECONNECT_MILLISECONDS: u64 = 45000;
+const INPUT_MODE_QUERY_MILLISECONDS: u32 = 60;
+const INPUT_MODE_RETRY_MILLISECONDS: u64 = 5000;
 const SURROUNDING_LIMIT_UTF16: i32 = 128;
 const PEER_POLICY_EXACT_EXECUTABLE: u32 = 0;
 const PEER_POLICY_DEVELOPMENT_SAME_USER_SESSION: u32 = 1;
@@ -1389,6 +1395,7 @@ struct EngineClient {
     failure_streak: u32,
     retry_at: u64,
     last_used: u64,
+    mode_retry_at: u64,
 }
 
 impl EngineClient {
@@ -2034,6 +2041,81 @@ impl EngineClient {
             .tap_trace(),
         )
     }
+
+    /// Reports or toggles the input method of one context for the taskbar
+    /// indicator. A query only attaches to an engine that is already
+    /// running, so focus changes never launch it or wait on a cold start;
+    /// a click on the indicator may launch it like a key press would.
+    fn input_method_action(
+        &mut self,
+        context_id: u64,
+        action: protocol::InputMethodAction,
+    ) -> Option<InputModeStatus> {
+        let deadline = if action == protocol::InputMethodAction::Query {
+            self.attach_for_input_mode()?
+        } else {
+            self.begin_request(false)?
+        };
+        let request_id = common::fcitx5_windows_common_next_pipe_client_request_id();
+        let request = protocol::InputMethodActionRequest {
+            metadata: protocol::Metadata {
+                request_id,
+                engine_epoch: self.engine_epoch,
+                session_id: self.identity.session_id,
+                context_id,
+                ..protocol::Metadata::default()
+            },
+            action,
+        };
+        let request = protocol::encode_input_method_action_request(&request)?;
+        let response_bytes = self.transact(request, deadline)?;
+        let frame = protocol::decode_frame(&response_bytes)?;
+        let response = protocol::decode_engine_status_response(&frame)?;
+        if response.status != protocol::Status::Ok
+            || response.metadata.response_to != request_id
+            || response.metadata.session_id != self.identity.session_id
+        {
+            trace_event("engine_client_input_mode_rejected");
+            self.disconnect();
+            return None;
+        }
+        Some(InputModeStatus {
+            id: String::from_utf8(response.current_input_method_id).ok()?,
+            name: String::from_utf8(response.current_input_method_name).ok()?,
+            native_name: String::from_utf8(response.current_input_method_native_name).ok()?,
+            short_label: String::from_utf8(response.current_input_method_short_label).ok()?,
+        })
+    }
+
+    fn attach_for_input_mode(&mut self) -> Option<u64> {
+        let now = common::fcitx5_windows_common_tick_milliseconds();
+        if (self.failure_streak > 0 && now < self.retry_at) || now < self.mode_retry_at {
+            return None;
+        }
+        self.drop_stale_connection(now);
+        if self.pipe.is_none() {
+            self.follow_current_generation();
+        }
+        let deadline = common::fcitx5_windows_common_deadline_after_milliseconds(
+            INPUT_MODE_QUERY_MILLISECONDS,
+        );
+        if self.connect(deadline) && self.handshake(deadline) {
+            return Some(deadline);
+        }
+        // Keep the key path's own back-off untouched: a missing engine must
+        // still be launched by the next key press.
+        self.disconnect();
+        self.mode_retry_at = now.saturating_add(INPUT_MODE_RETRY_MILLISECONDS);
+        None
+    }
+
+    fn settings_path(&self) -> Option<PathBuf> {
+        if self.expected_launcher_path.is_empty() {
+            return None;
+        }
+        let launcher = PathBuf::from(String::from_utf16(&self.expected_launcher_path).ok()?);
+        Some(launcher.parent()?.join("fcitx5-config.exe"))
+    }
 }
 
 trait TraceEngineKeyResult {
@@ -2193,6 +2275,9 @@ struct TsfRuntimeState {
     candidate_notification_stop: Option<Arc<common::LocalEvent>>,
     candidate_notification_thread: Option<JoinHandle<()>>,
     popup_allowed: bool,
+    thread_manager: Option<ITfThreadMgr>,
+    langbar_manager: Option<ITfLangBarItemMgr>,
+    input_mode_item: Option<ComObject<Fcitx5InputModeItem>>,
 }
 
 impl TsfRuntimeState {
@@ -2217,6 +2302,9 @@ impl TsfRuntimeState {
         self.candidate_notification_stop = None;
         self.candidate_notification_thread = None;
         self.popup_allowed = true;
+        self.thread_manager = None;
+        self.langbar_manager = None;
+        self.input_mode_item = None;
     }
 }
 
@@ -2887,6 +2975,18 @@ impl Fcitx5TsfService {
         runtime.ui_element_manager = ui_element_manager;
         runtime.engine_client = engine_client;
         runtime.popup_allowed = true;
+        runtime.langbar_manager = thread_manager_ref.cast::<ITfLangBarItemMgr>().ok();
+        runtime.thread_manager = Some(thread_manager_ref.clone());
+        if let Some(manager) = &runtime.langbar_manager {
+            let item = ComObject::new(Fcitx5InputModeItem::new(service as *const _));
+            // SAFETY: the item is a live COM object; TSF keeps its own
+            // reference until RemoveItem on Deactivate.
+            if unsafe { manager.AddItem(&item.to_interface::<ITfLangBarItem>()) }.is_ok() {
+                runtime.input_mode_item = Some(item);
+            } else {
+                trace_event("input_mode_item_add_failed");
+            }
+        }
         let dispatch_window = create_candidate_dispatch_window(service as *const _);
         if dispatch_window.is_null() {
             trace_event("candidate_notification_window_create_failed");
@@ -2930,6 +3030,7 @@ impl Fcitx5TsfService {
 
     fn deactivate_runtime(&self) -> Result<()> {
         self.stop_candidate_notification_watch();
+        self.remove_input_mode_item();
         let mut runtime = self.runtime.borrow_mut();
         if let (Some(manager), id) = (&runtime.ui_element_manager, runtime.candidate_ui_element_id)
         {
@@ -2961,6 +3062,76 @@ impl Fcitx5TsfService {
         runtime.reset_local_state();
         self.state.borrow_mut().deactivate();
         Ok(())
+    }
+
+    fn remove_input_mode_item(&self) {
+        let (manager, item) = {
+            let mut runtime = self.runtime.borrow_mut();
+            (
+                runtime.langbar_manager.take(),
+                runtime.input_mode_item.take(),
+            )
+        };
+        let Some(item) = item else {
+            return;
+        };
+        item.detach();
+        if let Some(manager) = manager {
+            // SAFETY: the item was added to this manager on Activate.
+            let _ = unsafe { manager.RemoveItem(&item.to_interface::<ITfLangBarItem>()) };
+        }
+    }
+
+    fn focused_context_id(&self) -> Option<u64> {
+        let thread_manager = self.runtime.borrow().thread_manager.clone()?;
+        // SAFETY: the thread manager is live while the service is active and
+        // this runs on its thread.
+        let context = unsafe { thread_manager.GetFocus().ok()?.GetTop().ok()? };
+        Some(Self::context_id(&context))
+    }
+
+    fn run_input_mode_action(&self, context_id: u64, action: protocol::InputMethodAction) {
+        let (status, item) = {
+            let mut runtime = self.runtime.borrow_mut();
+            let Some(item) = runtime.input_mode_item.clone() else {
+                return;
+            };
+            let Some(client) = runtime.engine_client.as_mut() else {
+                return;
+            };
+            (client.input_method_action(context_id, action), item)
+        };
+        // The runtime borrow is released first: OnUpdate calls back into
+        // the item for its icon and text.
+        if let Some(status) = status {
+            item.set_status(status);
+        }
+    }
+
+    fn refresh_input_mode(&self, context_id: u64) {
+        self.run_input_mode_action(context_id, protocol::InputMethodAction::Query);
+    }
+
+    fn toggle_input_mode(&self) {
+        if let Some(context_id) = self.focused_context_id() {
+            self.run_input_mode_action(context_id, protocol::InputMethodAction::Toggle);
+        }
+    }
+
+    fn open_settings(&self) {
+        let path = self
+            .runtime
+            .borrow()
+            .engine_client
+            .as_ref()
+            .and_then(EngineClient::settings_path);
+        let Some(path) = path else {
+            trace_event("open_settings_no_path");
+            return;
+        };
+        if let Err(error) = Command::new(&path).spawn() {
+            trace_event(&format!("open_settings_failed error={error}"));
+        }
     }
 
     fn should_test_eat_key(&self, wparam: WPARAM) -> bool {
@@ -3371,6 +3542,13 @@ impl ITfThreadMgrEventSink_Impl for Fcitx5TsfService_Impl {
         previous_focused_document_manager: Ref<ITfDocumentMgr>,
     ) -> Result<()> {
         com_guard(Err(E_UNEXPECTED.into()), || {
+            if let Some(focused) = focused_document_manager.as_ref() {
+                // SAFETY: TSF supplies the focused document manager for this
+                // callback; GetTop returns its live top context when present.
+                if let Ok(context) = unsafe { focused.GetTop() } {
+                    self.refresh_input_mode(Fcitx5TsfService::context_id(&context));
+                }
+            }
             if focused_document_manager.is_null() {
                 if let Some(previous) = previous_focused_document_manager.as_ref() {
                     // SAFETY: The document manager is supplied by TSF for this
@@ -3496,7 +3674,18 @@ impl ITfKeyEventSink_Impl for Fcitx5TsfService_Impl {
                 result.preedit.chars().count(),
                 result.candidates.len()
             ));
+            // A handled key that produced no text is usually a mode switch
+            // such as Ctrl+Space; keep the taskbar indicator in step.
+            let mode_may_have_changed = result.handled
+                && !result.forward_key
+                && !result.delete_surrounding_text
+                && result.commit.is_empty()
+                && result.preedit.is_empty()
+                && result.candidates.is_empty();
             let eaten = self.apply_engine_result(context, result)?;
+            if mode_may_have_changed {
+                self.refresh_input_mode(Fcitx5TsfService::context_id(context));
+            }
             trace_event(if eaten {
                 "on_key_down_eaten"
             } else {

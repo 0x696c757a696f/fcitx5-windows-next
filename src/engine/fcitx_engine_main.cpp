@@ -41,6 +41,8 @@ constexpr std::uint16_t kKeyRequestType = 3;
 constexpr std::uint16_t kCandidateSelectRequestType = 7;
 constexpr std::uint16_t kStateRequestType = 9;
 constexpr std::uint16_t kEngineStatusRequestType = 10;
+constexpr std::uint16_t kInputMethodActionRequestType = 12;
+constexpr std::uint32_t kInputMethodActionToggle = 1;
 constexpr std::uint32_t kProtocolStatusOk = 0;
 constexpr std::uint32_t kProtocolStatusUnsupported = 3;
 constexpr std::uint16_t kWireProtocolVersion = 14;
@@ -351,6 +353,23 @@ handleRequest(std::span<const std::uint8_t> requestBytes, std::uint64_t engineEp
         if (!decodeMessage(frame, fcitx5_protocol_core_decode_engine_status_request, request,
                            requestStrings) ||
             !dispatcher.queryInputMethodStatus(status, std::chrono::milliseconds(75))) {
+            return {};
+        }
+        fcitx5_engine_core_session_complete_request(session, request.metadata.requestId);
+        return encodeEngineStatusResponse(request.metadata, nextResponseId.fetch_add(1),
+                                          engineEpoch, status);
+    }
+    if (frame.type == kInputMethodActionRequestType) {
+        FcitxInputMethodActionRequestC request{};
+        std::vector<std::uint8_t> requestStrings;
+        engine::InputMethodStatus status;
+        if (!decodeMessage(frame, fcitx5_protocol_core_decode_input_method_action_request, request,
+                           requestStrings) ||
+            !dispatcher.inputMethodAction(engine::ClientContextKey{clientIdentity.processId,
+                                                                   connectionId,
+                                                                   request.metadata.contextId},
+                                          request.action == kInputMethodActionToggle, status,
+                                          std::chrono::milliseconds(75))) {
             return {};
         }
         fcitx5_engine_core_session_complete_request(session, request.metadata.requestId);
