@@ -383,6 +383,7 @@ mod axis_layout_ffi_tests {
             font_family: crate::renderer::DEFAULT_CANDIDATE_FAMILY,
             high_contrast: false,
             selected: Some(1),
+            hovered: None,
         };
         let render = render_frame(&frame);
         assert_eq!((render.width, render.height), (120, 150));
