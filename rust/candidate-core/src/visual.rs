@@ -1,6 +1,6 @@
 //! Builds per-candidate visual text (label, text, comment) into a reusable arena.
 
-#![deny(unsafe_op_in_unsafe_fn)]
+#![forbid(unsafe_code)]
 
 use super::*;
 
@@ -11,12 +11,11 @@ use super::*;
 /// and a non-empty comment gains the fixed two-space prefix. Scroll-label
 /// reservations (081D slice 3) apply only to generated labels: action 1
 /// reserves the configured slot label, action 2 also shows it.
-#[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct Fcitx5CandidateVisualBuildInput {
-    pub label: Fcitx5CandidateUtf8,
-    pub text: Fcitx5CandidateUtf8,
-    pub comment: Fcitx5CandidateUtf8,
+pub(crate) struct Fcitx5CandidateVisualBuildInput<'a> {
+    pub label: &'a [u8],
+    pub text: &'a [u8],
+    pub comment: &'a [u8],
     pub label_style: u32,
     pub labels_visible: u8,
     pub reservation_action: u8,
@@ -24,42 +23,25 @@ pub struct Fcitx5CandidateVisualBuildInput {
 }
 
 /// Build-wide configuration: the configured label sequence (1-based slots).
-#[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct Fcitx5CandidateVisualBuildConfig {
-    pub configured_labels: *const Fcitx5CandidateUtf8,
-    pub configured_label_count: usize,
+pub(crate) struct Fcitx5CandidateVisualBuildConfig<'a> {
+    pub configured_labels: &'a [String],
 }
 
-/// Resolved visual fields; string storage is owned by the Rust arena.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
+/// Resolved visual fields.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Fcitx5CandidateVisualBuildOutput {
-    pub label: Fcitx5CandidateUtf8,
-    pub reserved_label: Fcitx5CandidateUtf8,
-    pub text: Fcitx5CandidateUtf8,
-    pub comment: Fcitx5CandidateUtf8,
+    pub label: String,
+    pub reserved_label: String,
+    pub text: String,
+    pub comment: String,
     /// 1 when the candidate carries its own formatted label.
     pub source_label: u8,
 }
 
-impl Fcitx5CandidateVisualBuildOutput {
-    #[must_use]
-    pub fn null_output() -> Self {
-        Self {
-            label: Fcitx5CandidateUtf8::default(),
-            reserved_label: Fcitx5CandidateUtf8::default(),
-            text: Fcitx5CandidateUtf8::default(),
-            comment: Fcitx5CandidateUtf8::default(),
-            source_label: 0,
-        }
-    }
-}
-
-/// Arena that owns built visual strings for the current composition.
+/// Visual records built for the current composition.
 #[derive(Default)]
 pub struct CandidateVisualArena {
-    strings: Vec<Vec<u8>>,
     outputs: Vec<Fcitx5CandidateVisualBuildOutput>,
 }
 
@@ -69,47 +51,21 @@ impl CandidateVisualArena {
         Self::default()
     }
 
-    /// Built outputs from the last [`Self::build`] call; string pointers stay
-    /// arena-owned and valid until the next build.
+    /// Built outputs from the last [`Self::build`] call.
     pub fn built_outputs(&self) -> &[Fcitx5CandidateVisualBuildOutput] {
         &self.outputs
     }
 
     pub(crate) fn build(
         &mut self,
-        inputs: &[Fcitx5CandidateVisualBuildInput],
-        config: &Fcitx5CandidateVisualBuildConfig,
+        inputs: &[Fcitx5CandidateVisualBuildInput<'_>],
+        config: &Fcitx5CandidateVisualBuildConfig<'_>,
     ) -> usize {
-        self.strings.clear();
         self.outputs.clear();
-        // Each visual record owns four byte buffers. Reserve the outer vector
-        // before exposing any pointers; a later Vec reallocation would leave
-        // every previously returned `Fcitx5CandidateUtf8::ptr` dangling.
-        self.strings.reserve(inputs.len().saturating_mul(4));
-        let mut owned = |text: &[u8]| -> Fcitx5CandidateUtf8 {
-            self.strings.push(text.to_vec());
-            let stored = self.strings.last().expect("pushed above");
-            Fcitx5CandidateUtf8 {
-                ptr: stored.as_ptr(),
-                len: stored.len(),
-            }
-        };
-        // SAFETY: the C ABI contract requires configured_labels to cover
-        // configured_label_count elements when non-zero.
-        let configured_labels: &[Fcitx5CandidateUtf8] = if config.configured_label_count == 0 {
-            &[]
-        } else {
-            // SAFETY: the C ABI contract requires configured_labels to cover this non-zero count.
-            unsafe {
-                std::slice::from_raw_parts(config.configured_labels, config.configured_label_count)
-            }
-        };
+        let configured_labels = config.configured_labels;
         for input in inputs {
-            let label_bytes = utf8_slice(input.label);
-            let text_bytes = utf8_slice(input.text);
-            let comment_bytes = utf8_slice(input.comment);
-            let label_text = String::from_utf8_lossy(label_bytes).into_owned();
-            let comment_text = String::from_utf8_lossy(comment_bytes).into_owned();
+            let label_text = String::from_utf8_lossy(input.label).into_owned();
+            let comment_text = String::from_utf8_lossy(input.comment).into_owned();
             let Some(style) = label_style_from_ffi(input.label_style) else {
                 return self.outputs.len();
             };
@@ -127,7 +83,7 @@ impl CandidateVisualArena {
                 let slot_index = input.reservation_slot.max(1) as usize - 1;
                 let slot_source = configured_labels
                     .get(slot_index)
-                    .map(|value| String::from_utf8_lossy(utf8_slice(*value)).into_owned())
+                    .cloned()
                     .unwrap_or_default();
                 (
                     format_candidate_label(input.reservation_slot, &slot_source, style, "", ""),
@@ -149,10 +105,10 @@ impl CandidateVisualArena {
                 format!("  {comment_text}")
             };
             let output = Fcitx5CandidateVisualBuildOutput {
-                label: owned(label.as_bytes()),
-                reserved_label: owned(reserved.as_bytes()),
-                text: owned(text_bytes),
-                comment: owned(comment.as_bytes()),
+                label,
+                reserved_label: reserved,
+                text: String::from_utf8_lossy(input.text).into_owned(),
+                comment,
                 source_label,
             };
             self.outputs.push(output);
@@ -161,95 +117,20 @@ impl CandidateVisualArena {
     }
 }
 
-pub(crate) fn utf8_slice(value: Fcitx5CandidateUtf8) -> &'static [u8] {
-    if value.len == 0 {
-        return &[];
-    }
-    // SAFETY: the C ABI contract requires valid `len` readable bytes.
-    unsafe { std::slice::from_raw_parts(value.ptr, value.len) }
-}
-
-#[no_mangle]
-pub extern "C" fn fcitx5_candidate_visual_arena_create() -> *mut c_void {
-    Box::into_raw(Box::<CandidateVisualArena>::default()).cast()
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `arena` must be null or a pointer returned by
-/// `fcitx5_candidate_visual_arena_create` that has not already been destroyed.
-pub unsafe extern "C" fn fcitx5_candidate_visual_arena_destroy(arena: *mut c_void) {
-    if !arena.is_null() {
-        // SAFETY: caller guarantees this is the unique allocation from create.
-        unsafe { drop(Box::from_raw(arena.cast::<CandidateVisualArena>())) };
-    }
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `arena` must be a valid arena pointer; `inputs` must be valid for
-/// `input_count` elements when non-zero; `config.configured_labels` must be
-/// valid for `config.configured_label_count` elements when non-zero;
-/// `out_outputs` must point to writable storage for `input_count` outputs when
-/// non-zero. Returned string pointers remain valid until the next build call
-/// or arena destruction.
-pub unsafe extern "C" fn fcitx5_candidate_visual_build(
-    arena: *mut c_void,
-    inputs: *const Fcitx5CandidateVisualBuildInput,
-    input_count: usize,
-    config: *const Fcitx5CandidateVisualBuildConfig,
-    out_outputs: *mut Fcitx5CandidateVisualBuildOutput,
-) -> usize {
-    if arena.is_null()
-        || config.is_null()
-        || (input_count > 0 && (inputs.is_null() || out_outputs.is_null()))
-    {
-        return 0;
-    }
-    // SAFETY: caller guarantees the arena allocation is valid for this call.
-    let arena = unsafe { &mut *arena.cast::<CandidateVisualArena>() };
-    // SAFETY: the C ABI contract requires this slice to be valid.
-    let inputs = if input_count == 0 {
-        &[]
-    } else {
-        // SAFETY: non-null was checked above and the ABI provides `input_count` readable records.
-        unsafe { std::slice::from_raw_parts(inputs, input_count) }
-    };
-    // SAFETY: non-null checked above; callers provide an initialized config.
-    let config = unsafe { *config };
-    let built = arena.build(inputs, &config);
-    if built > 0 {
-        // SAFETY: out_outputs is non-null for non-zero counts and covers all `built` outputs.
-        unsafe { std::ptr::copy_nonoverlapping(arena.outputs.as_ptr(), out_outputs, built) };
-    }
-    built
-}
-
 #[cfg(test)]
 mod candidate_visual_arena_tests {
     use super::*;
 
-    fn input(
-        label: &str,
-        text: &str,
-        comment: &str,
+    fn input<'a>(
+        label: &'a str,
+        text: &'a str,
+        comment: &'a str,
         visible: u8,
-    ) -> Fcitx5CandidateVisualBuildInput {
+    ) -> Fcitx5CandidateVisualBuildInput<'a> {
         Fcitx5CandidateVisualBuildInput {
-            label: Fcitx5CandidateUtf8 {
-                ptr: label.as_ptr(),
-                len: label.len(),
-            },
-            text: Fcitx5CandidateUtf8 {
-                ptr: text.as_ptr(),
-                len: text.len(),
-            },
-            comment: Fcitx5CandidateUtf8 {
-                ptr: comment.as_ptr(),
-                len: comment.len(),
-            },
+            label: label.as_bytes(),
+            text: text.as_bytes(),
+            comment: comment.as_bytes(),
             label_style: 1,
             labels_visible: visible,
             reservation_action: 0,
@@ -257,39 +138,27 @@ mod candidate_visual_arena_tests {
         }
     }
 
-    fn empty_config() -> Fcitx5CandidateVisualBuildConfig {
+    fn empty_config() -> Fcitx5CandidateVisualBuildConfig<'static> {
         Fcitx5CandidateVisualBuildConfig {
-            configured_labels: core::ptr::null(),
-            configured_label_count: 0,
+            configured_labels: &[],
         }
     }
 
-    fn read(value: &Fcitx5CandidateUtf8) -> String {
-        // SAFETY: arena-owned pointers from a live build are valid.
-        String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(value.ptr, value.len) })
-            .into_owned()
+    fn read(value: &str) -> String {
+        value.to_owned()
     }
 
     #[test]
     fn build_formats_labels_and_prefixes_comments() {
-        let arena = CandidateVisualArena::default();
+        let mut arena = CandidateVisualArena::default();
         let inputs = [
             input("1", "你", "nǐ", 1),
             input("", "好", "", 1),
             input("2", "汉", "hàn", 0),
         ];
-        let mut outputs = [Fcitx5CandidateVisualBuildOutput::null_output(); 3];
         let config = empty_config();
-        // SAFETY: this test supplies live arena/input/config/output storage for the declared count.
-        let built = unsafe {
-            fcitx5_candidate_visual_build(
-                &arena as *const _ as *mut c_void,
-                inputs.as_ptr(),
-                3,
-                &config,
-                outputs.as_mut_ptr(),
-            )
-        };
+        let built = arena.build(&inputs[..3], &config);
+        let outputs = arena.built_outputs().to_vec();
         assert_eq!(built, 3);
         assert_eq!(read(&outputs[0].label), "1.");
         assert_eq!(read(&outputs[0].reserved_label), "1.");
@@ -304,7 +173,7 @@ mod candidate_visual_arena_tests {
 
     #[test]
     fn build_keeps_text_pointers_valid_across_the_full_candidate_batch() {
-        let arena = CandidateVisualArena::default();
+        let mut arena = CandidateVisualArena::default();
         let texts: Vec<String> = (0..32).map(|index| format!("候选{index}🙂")).collect();
         let labels: Vec<String> = (1..=32).map(|index| index.to_string()).collect();
         let inputs: Vec<_> = texts
@@ -312,18 +181,9 @@ mod candidate_visual_arena_tests {
             .enumerate()
             .map(|(index, text)| input(&labels[index], text, "注释", 1))
             .collect();
-        let mut outputs = vec![Fcitx5CandidateVisualBuildOutput::null_output(); inputs.len()];
         let config = empty_config();
-        // SAFETY: this test supplies live arena/input/config/output storage for the declared count.
-        let built = unsafe {
-            fcitx5_candidate_visual_build(
-                &arena as *const _ as *mut c_void,
-                inputs.as_ptr(),
-                inputs.len(),
-                &config,
-                outputs.as_mut_ptr(),
-            )
-        };
+        let built = arena.build(&inputs[..inputs.len()], &config);
+        let outputs = arena.built_outputs().to_vec();
         assert_eq!(built, inputs.len());
         for (output, expected) in outputs.iter().zip(texts) {
             assert_eq!(read(&output.text), expected);
@@ -332,55 +192,21 @@ mod candidate_visual_arena_tests {
     }
 
     #[test]
-    fn build_rejects_invalid_style_and_null_arena() {
-        let arena = CandidateVisualArena::default();
+    fn build_rejects_invalid_style() {
+        let mut arena = CandidateVisualArena::default();
         let mut bad = input("1", "你", "", 1);
         bad.label_style = 99;
-        let mut outputs = [Fcitx5CandidateVisualBuildOutput::null_output(); 1];
         let config = empty_config();
-        // SAFETY: this test supplies live arena/input/config/output storage for the declared count.
-        let built = unsafe {
-            fcitx5_candidate_visual_build(
-                &arena as *const _ as *mut c_void,
-                &bad,
-                1,
-                &config,
-                outputs.as_mut_ptr(),
-            )
-        };
+        let built = arena.build(std::slice::from_ref(&bad), &config);
         assert_eq!(built, 0, "invalid style stops the build at the offender");
-        assert_eq!(
-            // SAFETY: null arena is intentional while all other test buffers remain live.
-            unsafe {
-                fcitx5_candidate_visual_build(
-                    core::ptr::null_mut(),
-                    &bad,
-                    1,
-                    &config,
-                    outputs.as_mut_ptr(),
-                )
-            },
-            0
-        );
     }
 
     #[test]
     fn build_applies_scroll_label_reservations_to_generated_labels() {
-        let arena = CandidateVisualArena::default();
-        let configured = ["甲", "乙"];
-        let configured_refs = [
-            Fcitx5CandidateUtf8 {
-                ptr: configured[0].as_ptr(),
-                len: configured[0].len(),
-            },
-            Fcitx5CandidateUtf8 {
-                ptr: configured[1].as_ptr(),
-                len: configured[1].len(),
-            },
-        ];
+        let mut arena = CandidateVisualArena::default();
+        let configured = ["甲".to_owned(), "乙".to_owned()];
         let config = Fcitx5CandidateVisualBuildConfig {
-            configured_labels: configured_refs.as_ptr(),
-            configured_label_count: configured_refs.len(),
+            configured_labels: &configured,
         };
         let mut inputs = [
             input("1", "你", "", 1),
@@ -391,17 +217,8 @@ mod candidate_visual_arena_tests {
         inputs[1].reservation_slot = 1; // configured 甲
         inputs[2].reservation_action = 1;
         inputs[2].reservation_slot = 5; // out of range → slot number 5
-        let mut outputs = [Fcitx5CandidateVisualBuildOutput::null_output(); 3];
-        // SAFETY: this test supplies live arena/input/config/output storage for the declared count.
-        let built = unsafe {
-            fcitx5_candidate_visual_build(
-                &arena as *const _ as *mut c_void,
-                inputs.as_ptr(),
-                3,
-                &config,
-                outputs.as_mut_ptr(),
-            )
-        };
+        let built = arena.build(&inputs[..3], &config);
+        let outputs = arena.built_outputs().to_vec();
         assert_eq!(built, 3);
         // Source labels keep their own formatted label.
         assert_eq!(read(&outputs[0].label), "1.");

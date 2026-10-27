@@ -1,6 +1,6 @@
 //! Pointer, wheel, click-guard and focus-watch state for the candidate window, plus hit testing and selection intents.
 
-#![deny(unsafe_op_in_unsafe_fn)]
+#![forbid(unsafe_code)]
 
 use super::*;
 
@@ -13,15 +13,6 @@ pub struct CandidateScrollState {
 
 impl CandidateScrollState {
     const LINE_HEIGHT: f32 = 28.0;
-    const MAX_OFFSET: f32 = 8000.0;
-
-    pub fn wheel(&mut self, delta: i32) -> f32 {
-        let current = self.override_px.unwrap_or(0.0);
-        let next =
-            (current + (delta as f32 / 120.0) * Self::LINE_HEIGHT).clamp(0.0, Self::MAX_OFFSET);
-        self.override_px = Some(next);
-        next
-    }
 
     /// One wheel step from the viewport's current offset, kept inside
     /// `0..=max`. Turning the wheel forward (positive delta) scrolls back
@@ -33,70 +24,12 @@ impl CandidateScrollState {
     }
 
     #[must_use]
-    pub fn override_px(&self) -> f32 {
+    pub(crate) fn override_px(&self) -> f32 {
         self.override_px.unwrap_or(-1.0)
     }
 
     pub fn reset(&mut self) {
         self.override_px = None;
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn fcitx5_candidate_scroll_state_create() -> *mut c_void {
-    Box::into_raw(Box::<CandidateScrollState>::default()).cast()
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `state` must be null or a pointer returned by
-/// `fcitx5_candidate_scroll_state_create` that has not already been destroyed.
-pub unsafe extern "C" fn fcitx5_candidate_scroll_state_destroy(state: *mut c_void) {
-    if !state.is_null() {
-        // SAFETY: caller guarantees this is the unique allocation from create.
-        unsafe { drop(Box::from_raw(state.cast::<CandidateScrollState>())) };
-    }
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `state` must be a valid pointer returned by
-/// `fcitx5_candidate_scroll_state_create`.
-pub unsafe extern "C" fn fcitx5_candidate_scroll_state_wheel(
-    state: *mut c_void,
-    delta: i32,
-) -> f32 {
-    if state.is_null() {
-        return 0.0;
-    }
-    // SAFETY: caller guarantees the state allocation is valid for this call.
-    unsafe { (&mut *state.cast::<CandidateScrollState>()).wheel(delta) }
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `state` must be a valid pointer returned by
-/// `fcitx5_candidate_scroll_state_create`.
-pub unsafe extern "C" fn fcitx5_candidate_scroll_state_override(state: *mut c_void) -> f32 {
-    if state.is_null() {
-        return -1.0;
-    }
-    // SAFETY: caller guarantees the state allocation is valid for this call.
-    unsafe { (*(state.cast::<CandidateScrollState>())).override_px() }
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `state` must be a valid pointer returned by
-/// `fcitx5_candidate_scroll_state_create`.
-pub unsafe extern "C" fn fcitx5_candidate_scroll_state_reset(state: *mut c_void) {
-    if !state.is_null() {
-        // SAFETY: caller guarantees the state allocation is valid for this call.
-        unsafe { (&mut *state.cast::<CandidateScrollState>()).reset() };
     }
 }
 
@@ -115,12 +48,6 @@ mod candidate_focus_watch_tests {
         state.target_process_id = 1234;
         assert!(state.is_valid(1234, false));
         assert!(!state.is_valid(5678, false));
-        state.target_process_id = 0;
-        assert!(state.should_dismiss(0, true), "broadcast pid 0 dismisses");
-        state.target_process_id = 1234;
-        assert!(state.should_dismiss(1234, true));
-        assert!(!state.should_dismiss(5678, true));
-        assert!(!state.should_dismiss(1234, false));
     }
 }
 
@@ -147,17 +74,6 @@ mod candidate_scroll_state_tests {
     use super::CandidateScrollState;
 
     #[test]
-    fn wheel_accumulates_clamped_line_offsets() {
-        let mut state = CandidateScrollState::default();
-        assert_eq!(state.override_px(), -1.0);
-        assert_eq!(state.wheel(120), 28.0);
-        assert_eq!(state.wheel(-120), 0.0);
-        assert_eq!(state.wheel(-120), 0.0, "clamped at zero");
-        state.reset();
-        assert_eq!(state.override_px(), -1.0, "reset restores auto scroll");
-    }
-
-    #[test]
     fn viewport_wheel_starts_from_the_shown_offset_and_stays_in_range() {
         let mut state = CandidateScrollState::default();
         assert_eq!(
@@ -173,15 +89,6 @@ mod candidate_scroll_state_tests {
         assert_eq!(state.wheel_viewport(190.0, 200.0, -240), 200.0);
         assert_eq!(state.wheel_viewport(10.0, 200.0, 120), 0.0);
         assert_eq!(state.override_px(), 0.0);
-    }
-
-    #[test]
-    fn wheel_respects_maximum_offset() {
-        let mut state = CandidateScrollState::default();
-        for _ in 0..10_000 {
-            state.wheel(120);
-        }
-        assert_eq!(state.override_px(), CandidateScrollState::MAX_OFFSET);
     }
 }
 
@@ -222,7 +129,7 @@ impl CandidateFocusWatchState {
         self.target_process_id = 0;
     }
 
-    pub fn set_target(&mut self, pid: u32) {
+    pub(crate) fn set_target(&mut self, pid: u32) {
         self.target_process_id = pid;
     }
 }
@@ -238,157 +145,6 @@ impl CandidateFocusWatchState {
         }
         self.target_process_id != 0 && self.target_process_id == foreground_pid
     }
-
-    /// Whether a dismissal broadcast should dismiss this popup.
-    #[must_use]
-    pub fn should_dismiss(&self, broadcast_pid: u32, same_context: bool) -> bool {
-        (broadcast_pid == 0 || broadcast_pid == self.target_process_id) && same_context
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn fcitx5_candidate_focus_watch_create() -> *mut c_void {
-    Box::into_raw(Box::<CandidateFocusWatchState>::default()).cast()
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `state` must be null or a pointer returned by
-/// `fcitx5_candidate_focus_watch_create` that has not already been destroyed.
-pub unsafe extern "C" fn fcitx5_candidate_focus_watch_destroy(state: *mut c_void) {
-    if !state.is_null() {
-        // SAFETY: caller guarantees this is the unique allocation from create.
-        unsafe { drop(Box::from_raw(state.cast::<CandidateFocusWatchState>())) };
-    }
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `state` must be a valid pointer returned by
-/// `fcitx5_candidate_focus_watch_create`.
-pub unsafe extern "C" fn fcitx5_candidate_focus_watch_set_target(state: *mut c_void, pid: u32) {
-    if !state.is_null() {
-        // SAFETY: caller guarantees the state allocation is valid for this call.
-        unsafe { (*state.cast::<CandidateFocusWatchState>()).target_process_id = pid };
-    }
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `state` must be a valid pointer returned by
-/// `fcitx5_candidate_focus_watch_create`.
-pub unsafe extern "C" fn fcitx5_candidate_focus_watch_target(state: *mut c_void) -> u32 {
-    if state.is_null() {
-        return 0;
-    }
-    // SAFETY: caller guarantees the state allocation is valid for this call.
-    unsafe { (*state.cast::<CandidateFocusWatchState>()).target_process_id }
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `state` must be a valid pointer returned by
-/// `fcitx5_candidate_focus_watch_create`.
-pub unsafe extern "C" fn fcitx5_candidate_focus_watch_is_valid(
-    state: *mut c_void,
-    foreground_pid: u32,
-    interaction_test: u8,
-) -> u8 {
-    if state.is_null() {
-        return 0;
-    }
-    // SAFETY: caller guarantees the state allocation is valid for this call.
-    let state = unsafe { &*state.cast::<CandidateFocusWatchState>() };
-    u8::from(state.is_valid(foreground_pid, interaction_test != 0))
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `state` must be a valid pointer returned by
-/// `fcitx5_candidate_focus_watch_create`.
-pub unsafe extern "C" fn fcitx5_candidate_focus_watch_should_dismiss(
-    state: *mut c_void,
-    broadcast_pid: u32,
-    same_context: u8,
-) -> u8 {
-    if state.is_null() {
-        return 0;
-    }
-    // SAFETY: caller guarantees the state allocation is valid for this call.
-    let state = unsafe { &*state.cast::<CandidateFocusWatchState>() };
-    u8::from(state.should_dismiss(broadcast_pid, same_context != 0))
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `state` must be a valid pointer returned by
-/// `fcitx5_candidate_focus_watch_create`.
-pub unsafe extern "C" fn fcitx5_candidate_focus_watch_reset(state: *mut c_void) {
-    if !state.is_null() {
-        // SAFETY: caller guarantees the state allocation is valid for this call.
-        unsafe { (*state.cast::<CandidateFocusWatchState>()).target_process_id = 0 };
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn fcitx5_candidate_click_guard_create() -> *mut c_void {
-    Box::into_raw(Box::<CandidateClickGuardState>::default()).cast()
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `state` must be null or a pointer returned by
-/// `fcitx5_candidate_click_guard_create` that has not already been destroyed.
-pub unsafe extern "C" fn fcitx5_candidate_click_guard_destroy(state: *mut c_void) {
-    if !state.is_null() {
-        // SAFETY: caller guarantees this is the unique allocation from create.
-        unsafe { drop(Box::from_raw(state.cast::<CandidateClickGuardState>())) };
-    }
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `state` must be a valid pointer returned by
-/// `fcitx5_candidate_click_guard_create`.
-pub unsafe extern "C" fn fcitx5_candidate_click_guard_begin(state: *mut c_void) -> u8 {
-    if state.is_null() {
-        return 0;
-    }
-    // SAFETY: caller guarantees the state allocation is valid for this call.
-    u8::from(unsafe { (&mut *state.cast::<CandidateClickGuardState>()).begin() })
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `state` must be a valid pointer returned by
-/// `fcitx5_candidate_click_guard_create`.
-pub unsafe extern "C" fn fcitx5_candidate_click_guard_clear(state: *mut c_void) {
-    if !state.is_null() {
-        // SAFETY: caller guarantees the state allocation is valid for this call.
-        unsafe { (&mut *state.cast::<CandidateClickGuardState>()).clear() };
-    }
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `state` must be a valid pointer returned by
-/// `fcitx5_candidate_click_guard_create`.
-pub unsafe extern "C" fn fcitx5_candidate_click_guard_expire(state: *mut c_void) -> u8 {
-    if state.is_null() {
-        return 0;
-    }
-    // SAFETY: caller guarantees the state allocation is valid for this call.
-    u8::from(unsafe { (&mut *state.cast::<CandidateClickGuardState>()).expire() })
 }
 
 #[derive(Default)]
@@ -415,80 +171,6 @@ impl CandidatePointerState {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn fcitx5_candidate_pointer_state_create() -> *mut c_void {
-    Box::into_raw(Box::<CandidatePointerState>::default()).cast()
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `state` must be null or a pointer returned by
-/// `fcitx5_candidate_pointer_state_create` that has not already been destroyed.
-pub unsafe extern "C" fn fcitx5_candidate_pointer_state_destroy(state: *mut c_void) {
-    if !state.is_null() {
-        // SAFETY: caller guarantees this is the unique allocation from create.
-        unsafe { drop(Box::from_raw(state.cast::<CandidatePointerState>())) };
-    }
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `state` must be a valid pointer returned by
-/// `fcitx5_candidate_pointer_state_create`.
-pub unsafe extern "C" fn fcitx5_candidate_pointer_state_press(
-    state: *mut c_void,
-    has_index: u8,
-    index: usize,
-) {
-    if state.is_null() {
-        return;
-    }
-    // SAFETY: caller guarantees the state allocation is valid for this call.
-    unsafe {
-        (&mut *state.cast::<CandidatePointerState>()).press((has_index != 0).then_some(index))
-    };
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `state` and `out_index` must be valid pointers. The state must have been
-/// returned by `fcitx5_candidate_pointer_state_create`.
-pub unsafe extern "C" fn fcitx5_candidate_pointer_state_release(
-    state: *mut c_void,
-    has_index: u8,
-    index: usize,
-    out_index: *mut usize,
-) -> u8 {
-    if state.is_null() || out_index.is_null() {
-        return 0;
-    }
-    // SAFETY: caller guarantees the state allocation is valid for this call.
-    let selected = unsafe {
-        (&mut *state.cast::<CandidatePointerState>()).release((has_index != 0).then_some(index))
-    };
-    let Some(selected) = selected else {
-        return 0;
-    };
-    // SAFETY: non-null checked above and caller provides writable output storage.
-    unsafe { *out_index = selected };
-    1
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `state` must be a valid pointer returned by
-/// `fcitx5_candidate_pointer_state_create`.
-pub unsafe extern "C" fn fcitx5_candidate_pointer_state_clear(state: *mut c_void) {
-    if !state.is_null() {
-        // SAFETY: caller guarantees the state allocation is valid for this call.
-        unsafe { (&mut *state.cast::<CandidatePointerState>()).clear() };
-    }
-}
-
 #[cfg(test)]
 mod candidate_pointer_state_tests {
     use super::CandidatePointerState;
@@ -506,41 +188,6 @@ mod candidate_pointer_state_tests {
     }
 }
 
-#[no_mangle]
-/// # Safety
-///
-/// `rects` must be valid for `rect_count` elements when `rect_count` is
-/// non-zero. `out_index` must point to writable storage. Pointers are not
-/// retained.
-pub unsafe extern "C" fn fcitx5_candidate_hit_test(
-    rects: *const Fcitx5CandidateLayoutRect,
-    rect_count: usize,
-    x: f32,
-    y: f32,
-    out_index: *mut usize,
-) -> u8 {
-    if out_index.is_null() || (rect_count > 0 && rects.is_null()) {
-        return 0;
-    }
-    let rects = if rect_count == 0 {
-        &[]
-    } else {
-        // SAFETY: the validated rect pointer covers `rect_count` readable rectangles.
-        unsafe { std::slice::from_raw_parts(rects, rect_count) }
-    };
-    for (index, rect) in rects.iter().enumerate() {
-        if x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom {
-            // SAFETY: the non-null output pointer is writable for one index.
-            unsafe {
-                *out_index = index;
-            }
-            return 1;
-        }
-    }
-    0
-}
-
-#[no_mangle]
 pub extern "C" fn fcitx5_candidate_selection_intent(
     target_process_id: u32,
     engine_epoch: u64,
