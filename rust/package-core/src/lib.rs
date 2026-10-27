@@ -7298,6 +7298,62 @@ pub fn read_installed_lockfile(
     parse_lockfile(&bytes)
 }
 
+/// Extension prefix of the temporary files [`write_file_replacing`] renames into place.
+const TEMPORARY_EXTENSION_PREFIX: &str = "tmp-";
+
+/// Replaces `path` with `bytes` so that a crash leaves either the old or the new content.
+///
+/// The temporary name is unique per process and call, so a file left by a killed writer never
+/// blocks a later write, and the data reaches the disk before the rename publishes it.
+#[cfg(windows)]
+fn write_file_replacing(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(0);
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "replaced file has no name"))?;
+    let mut temporary_name = file_name.to_os_string();
+    temporary_name.push(format!(
+        ".{TEMPORARY_EXTENSION_PREFIX}{}-{}",
+        std::process::id(),
+        NEXT_TEMPORARY.fetch_add(1, Ordering::Relaxed)
+    ));
+    let temporary = path.with_file_name(temporary_name);
+    let written = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()
+    })();
+    let published = written.and_then(|()| win32_fs_adapter::replace_file(&temporary, path));
+    if published.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    published
+}
+
+/// Removes temporary files a killed [`write_file_replacing`] left directly inside `directory`.
+#[cfg(windows)]
+fn remove_abandoned_temporary_files(directory: &Path) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let abandoned = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.starts_with(TEMPORARY_EXTENSION_PREFIX));
+        if abandoned && entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
 #[cfg(windows)]
 pub fn write_installed_lockfile_atomic(
     install_root: impl AsRef<Path>,
@@ -7305,11 +7361,8 @@ pub fn write_installed_lockfile_atomic(
 ) -> Result<(), StagingError> {
     let install_root = install_root.as_ref();
     fs::create_dir_all(install_root).map_err(staging_io_error)?;
-    let temporary = install_root.join("packages.lock.new");
     let lock_path = install_root.join("packages.lock");
-    fs::write(&temporary, lockfile_to_json(entries)).map_err(staging_io_error)?;
-    win32_fs_adapter::replace_file(&temporary, &lock_path).map_err(|error| {
-        let _ = fs::remove_file(&temporary);
+    write_file_replacing(&lock_path, lockfile_to_json(entries).as_bytes()).map_err(|error| {
         staging_error(
             "activation_failed",
             format!("unable to atomically publish packages.lock: {error}"),

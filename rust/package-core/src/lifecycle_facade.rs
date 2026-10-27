@@ -373,6 +373,10 @@ impl PackageCoreFacade {
         fs::create_dir_all(&package_root).map_err(|error| {
             PackageFacadeError::new("io_error", format!("package root creation failed: {error}"))
         })?;
+        let _transaction_lock = self.lock_transactions()?;
+        // Holding the lock means no other operation is running, so any journal left behind
+        // belongs to a process that was killed; settle it before it blocks this install.
+        self.reconcile_transaction_journals()?;
         self.ensure_transaction_paths_available(&transaction_id)?;
         self.write_transaction_state(&transaction_id, TransactionState::Prepared)?;
         if let Err(error) = self.create_transaction_snapshot(&transaction_id) {
@@ -465,12 +469,14 @@ impl PackageCoreFacade {
         package_id: &str,
         state: crate::PackageLifecycleState,
     ) -> Result<(), PackageFacadeError> {
+        let _transaction_lock = self.lock_transactions()?;
         crate::set_installed_package_state(self.package_root(), package_id, state)
             .map_err(|error| PackageFacadeError::new(error.code(), error.to_string()))
     }
 
     /// Removes a package only after the existing reverse-dependency checks have passed.
     pub fn remove_package(&self, package_id: &str) -> Result<(), PackageFacadeError> {
+        let _transaction_lock = self.lock_transactions()?;
         crate::mark_installed_package_for_removal(self.package_root(), package_id)
             .map_err(|error| PackageFacadeError::new(error.code(), error.to_string()))?;
         crate::finalize_installed_package_removal(self.package_root(), package_id)
@@ -599,6 +605,7 @@ impl PackageCoreFacade {
 
     /// Reads the production keyring, checks installed ownership, and safely cleans abandoned work.
     pub fn repair(&self) -> Result<PackageRepairReport, PackageFacadeError> {
+        let _transaction_lock = self.lock_transactions()?;
         let trusted_keys = self.read_production_trusted_keys()?;
         let package_root = self.package_root();
         let verification = match verify_installed_packages_for_repair(&package_root, &trusted_keys)
@@ -787,6 +794,46 @@ impl PackageCoreFacade {
         Ok(())
     }
 
+    /// Takes the cross-process lock every operation that changes installed packages holds.
+    ///
+    /// The operating system releases it when the owning process exits, including when the
+    /// settings app gives up on a slow install and kills it, so a lock is never left behind.
+    fn lock_transactions(&self) -> Result<fs::File, PackageFacadeError> {
+        let package_root = self.package_root();
+        fs::create_dir_all(&package_root).map_err(|error| {
+            PackageFacadeError::new("io_error", format!("package root creation failed: {error}"))
+        })?;
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(package_root.join("transactions.lock"))
+            .map_err(|error| {
+                PackageFacadeError::new(
+                    "io_error",
+                    format!("package transaction lock failed: {error}"),
+                )
+            })?;
+        match file.try_lock() {
+            Ok(()) => Ok(file),
+            Err(fs::TryLockError::WouldBlock) => Err(PackageFacadeError::new(
+                "transaction_busy",
+                "another package operation is still running",
+            )),
+            Err(fs::TryLockError::Error(error)) => Err(PackageFacadeError::new(
+                "io_error",
+                format!("package transaction lock failed: {error}"),
+            )),
+        }
+    }
+
+    /// Records what a rollback needs without copying package payloads.
+    ///
+    /// Activation only adds new version directories and rewrites manifests and
+    /// `packages.lock`; existing version directories are never changed in place. The snapshot
+    /// therefore lists the version directories that exist and copies only the small metadata,
+    /// so its cost no longer grows with every installed plugin.
     fn create_transaction_snapshot(&self, transaction_id: &str) -> Result<(), PackageFacadeError> {
         let package_root = self.package_root();
         let snapshot = self.transaction_snapshot_path(transaction_id);
@@ -797,7 +844,8 @@ impl PackageCoreFacade {
             )
         })?;
         let result = (|| {
-            copy_optional_tree(&package_root.join("versions"), &snapshot.join("versions"))?;
+            let listing = list_version_directories(&package_root.join("versions"))?;
+            write_atomic_file(&snapshot.join(VERSION_LISTING), listing.as_bytes())?;
             copy_optional_tree(&package_root.join("manifests"), &snapshot.join("manifests"))?;
             copy_optional_file(
                 &package_root.join("packages.lock"),
@@ -818,18 +866,17 @@ impl PackageCoreFacade {
     fn restore_transaction_snapshot(&self, transaction_id: &str) -> Result<(), PackageFacadeError> {
         let package_root = self.package_root();
         let snapshot = self.transaction_snapshot_path(transaction_id);
-        if !snapshot.is_dir() {
-            return Err(PackageFacadeError::new(
-                "recovery_required",
-                "transaction snapshot is missing",
-            ));
-        }
-        remove_path_if_present(&package_root.join("versions")).map_err(|error| {
-            PackageFacadeError::new(
-                "io_error",
-                format!("old package versions removal failed: {error}"),
-            )
+        let listing = fs::read_to_string(snapshot.join(VERSION_LISTING)).map_err(|_| {
+            PackageFacadeError::new("recovery_required", "transaction snapshot is missing")
         })?;
+        remove_unlisted_version_directories(&package_root.join("versions"), &listing).map_err(
+            |error| {
+                PackageFacadeError::new(
+                    "io_error",
+                    format!("new package versions removal failed: {error}"),
+                )
+            },
+        )?;
         remove_path_if_present(&package_root.join("manifests")).map_err(|error| {
             PackageFacadeError::new(
                 "io_error",
@@ -842,14 +889,6 @@ impl PackageCoreFacade {
                 format!("old package lock removal failed: {error}"),
             )
         })?;
-        copy_optional_tree(&snapshot.join("versions"), &package_root.join("versions")).map_err(
-            |error| {
-                PackageFacadeError::new(
-                    "io_error",
-                    format!("package versions restore failed: {error}"),
-                )
-            },
-        )?;
         copy_optional_tree(&snapshot.join("manifests"), &package_root.join("manifests")).map_err(
             |error| {
                 PackageFacadeError::new(
@@ -911,6 +950,8 @@ impl PackageCoreFacade {
         }
     }
 
+    /// Settles journals left by a process that stopped mid-transaction. Callers hold the
+    /// transaction lock, so no journal here belongs to a running operation.
     fn reconcile_transaction_journals(
         &self,
     ) -> Result<Vec<PackageRepairAction>, PackageFacadeError> {
@@ -918,13 +959,17 @@ impl PackageCoreFacade {
         if !root.exists() {
             return Ok(Vec::new());
         }
-        let entries = fs::read_dir(root).map_err(|error| {
+        let entries = fs::read_dir(&root).map_err(|error| {
             PackageFacadeError::new(
                 "io_error",
                 format!("transaction inspection failed: {error}"),
             )
         })?;
-        let mut actions = Vec::new();
+        // State and lockfile writes that never reached their rename.
+        crate::remove_abandoned_temporary_files(&root);
+        crate::remove_abandoned_temporary_files(&self.package_root());
+        let mut journals = BTreeSet::new();
+        let mut snapshots = BTreeSet::new();
         for entry in entries {
             let entry = entry.map_err(|error| {
                 PackageFacadeError::new(
@@ -941,26 +986,55 @@ impl PackageCoreFacade {
             else {
                 continue;
             };
-            let state = read_transaction_state(path, &transaction_id)?;
-            match state {
-                TransactionState::Prepared | TransactionState::Staged => {
-                    self.cleanup_transaction_artifacts(&transaction_id);
-                    actions.push(PackageRepairAction::DiscardedIncompleteTransaction {
-                        transaction_id: transaction_id.to_owned(),
-                    });
+            match path.extension().and_then(|extension| extension.to_str()) {
+                Some("state") => {
+                    journals.insert(transaction_id);
                 }
-                TransactionState::Activating => {
-                    actions.push(PackageRepairAction::RecoveryRequired {
-                        transaction_id: transaction_id.to_owned(),
-                    });
+                Some("backup") => {
+                    snapshots.insert(transaction_id);
                 }
-                TransactionState::Committed => {
-                    self.cleanup_transaction_artifacts(&transaction_id);
-                    actions.push(PackageRepairAction::FinalizedCommittedTransaction {
-                        transaction_id: transaction_id.to_owned(),
-                    });
-                }
+                _ => {}
             }
+        }
+        let mut actions = Vec::new();
+        for transaction_id in &journals {
+            let state =
+                read_transaction_state(self.transaction_state_path(transaction_id), transaction_id);
+            let action = match state {
+                Ok(TransactionState::Prepared | TransactionState::Staged) => {
+                    self.cleanup_transaction_artifacts(transaction_id);
+                    PackageRepairAction::DiscardedIncompleteTransaction {
+                        transaction_id: transaction_id.clone(),
+                    }
+                }
+                Ok(TransactionState::Activating) => {
+                    if self.restore_transaction_snapshot(transaction_id).is_ok() {
+                        self.cleanup_transaction_artifacts(transaction_id);
+                        PackageRepairAction::RolledBackInterruptedActivation {
+                            transaction_id: transaction_id.clone(),
+                        }
+                    } else {
+                        PackageRepairAction::RecoveryRequired {
+                            transaction_id: transaction_id.clone(),
+                        }
+                    }
+                }
+                Ok(TransactionState::Committed) => {
+                    self.cleanup_transaction_artifacts(transaction_id);
+                    PackageRepairAction::FinalizedCommittedTransaction {
+                        transaction_id: transaction_id.clone(),
+                    }
+                }
+                Err(_) => PackageRepairAction::RecoveryRequired {
+                    transaction_id: transaction_id.clone(),
+                },
+            };
+            actions.push(action);
+        }
+        // The journal is written before the snapshot and removed after it, so a snapshot
+        // without a journal is the remains of an interrupted cleanup.
+        for transaction_id in snapshots.difference(&journals) {
+            let _ = fs::remove_dir_all(self.transaction_snapshot_path(transaction_id));
         }
         Ok(actions)
     }
@@ -1222,6 +1296,11 @@ pub enum PackageRepairAction {
     },
     /// An already committed transaction only had stale journal/cache residue.
     FinalizedCommittedTransaction {
+        /// Journal transaction id.
+        transaction_id: String,
+    },
+    /// An activation interrupted by a process exit was rolled back to its snapshot.
+    RolledBackInterruptedActivation {
         /// Journal transaction id.
         transaction_id: String,
     },
@@ -1545,20 +1624,77 @@ fn write_atomic_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         )
     })?;
     fs::create_dir_all(parent)?;
-    let temporary = path.with_extension("new");
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?;
-    let write = (|| {
-        file.write_all(bytes)?;
-        file.flush()?;
-        crate::win32_fs_adapter::replace_file(&temporary, path)
-    })();
-    if write.is_err() {
-        let _ = fs::remove_file(temporary);
+    crate::write_file_replacing(path, bytes)
+}
+
+const VERSION_LISTING: &str = "versions.list";
+
+/// Lists `<package>` and `<package>/<version>` entries under `versions`, one per line.
+fn list_version_directories(versions: &Path) -> std::io::Result<String> {
+    let mut listing = String::new();
+    let packages = match fs::read_dir(versions) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(listing),
+        Err(error) => return Err(error),
+    };
+    for package in packages {
+        let package = package?;
+        let Some(package_name) = listed_name(&package.file_name()) else {
+            continue;
+        };
+        listing.push_str(&package_name);
+        listing.push('\n');
+        if !package.file_type()?.is_dir() {
+            continue;
+        }
+        for version in fs::read_dir(package.path())? {
+            let version = version?;
+            if let Some(version_name) = listed_name(&version.file_name()) {
+                listing.push_str(&format!("{package_name}/{version_name}\n"));
+            }
+        }
     }
-    write
+    Ok(listing)
+}
+
+/// Removes what activation added under `versions` since `listing` was taken.
+fn remove_unlisted_version_directories(versions: &Path, listing: &str) -> std::io::Result<()> {
+    let listed = listing.lines().collect::<BTreeSet<_>>();
+    let packages = match fs::read_dir(versions) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    for package in packages {
+        let package = package?;
+        // Activation only creates names it can list, so anything else predates it.
+        let Some(package_name) = listed_name(&package.file_name()) else {
+            continue;
+        };
+        if !listed.contains(package_name.as_str()) {
+            remove_path_if_present(&package.path())?;
+            continue;
+        }
+        if !package.file_type()?.is_dir() {
+            continue;
+        }
+        for version in fs::read_dir(package.path())? {
+            let version = version?;
+            let Some(version_name) = listed_name(&version.file_name()) else {
+                continue;
+            };
+            if !listed.contains(format!("{package_name}/{version_name}").as_str()) {
+                remove_path_if_present(&version.path())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn listed_name(name: &std::ffi::OsStr) -> Option<String> {
+    name.to_str()
+        .filter(|name| !name.contains(['\n', '\r', '/']))
+        .map(str::to_owned)
 }
 
 fn restore_repository_sequence(

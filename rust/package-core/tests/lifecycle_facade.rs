@@ -659,3 +659,181 @@ fn archive_digest_mismatch_never_reaches_activation_and_activation_fault_rolls_b
     assert_eq!(activation.code(), "activation_failed");
     assert!(executor.rollback_called);
 }
+
+/// Publishes a version directory and then stops the way a killed process would.
+struct InterruptedExecutor;
+
+impl PackageTransactionExecutor for InterruptedExecutor {
+    fn stage(
+        &mut self,
+        _archive_path: &Path,
+        package_root: &Path,
+        transaction_id: &str,
+        _trusted_keys: &[TrustedKey],
+    ) -> Result<PathBuf, PackageFacadeError> {
+        let staged = package_root.join("staging").join(transaction_id);
+        std::fs::create_dir_all(&staged).expect("fixture staged directory should create");
+        Ok(staged)
+    }
+
+    fn activate(
+        &mut self,
+        _staged_root: &Path,
+        package_root: &Path,
+        _trusted_keys: &[TrustedKey],
+    ) -> Result<(), PackageFacadeError> {
+        std::fs::create_dir_all(package_root.join("versions/fcitx5-rime/2.0.0"))
+            .expect("fixture version directory should create");
+        std::fs::create_dir_all(package_root.join("versions/old-addon/2.0.0"))
+            .expect("fixture version directory should create");
+        std::fs::write(package_root.join("packages.lock"), b"interrupted-lock")
+            .expect("fixture lock should write");
+        panic!("process stopped during activation")
+    }
+
+    fn rollback(
+        &mut self,
+        _package_root: &Path,
+        _transaction_id: &str,
+    ) -> Result<(), PackageFacadeError> {
+        unreachable!("a stopped process never rolls back")
+    }
+}
+
+#[test]
+fn an_install_killed_before_activation_does_not_block_the_next_one() {
+    let fixture = FixtureRoot::new();
+    let facade = fixture.facade();
+    let transactions = fixture.data_root().join("packages/transactions");
+    std::fs::create_dir_all(transactions.join("install-rime.backup/manifests"))
+        .expect("abandoned snapshot should create");
+    std::fs::write(
+        transactions.join("install-rime.state"),
+        "format_version=1\ntransaction=install-rime\nstate=prepared\n",
+    )
+    .expect("abandoned journal should write");
+    std::fs::write(transactions.join("install-rime.state.tmp-1-0"), b"partial")
+        .expect("abandoned temporary state should write");
+    std::fs::create_dir_all(transactions.join("orphan.backup"))
+        .expect("orphan snapshot should create");
+
+    let request = PackageInstallRequest {
+        requested_ids: &["fcitx5-rime"],
+        transaction_id: "install-rime",
+    };
+    let mut transport = FixtureTransport::with([vec![0_u8; 12], vec![0_u8; 12]]);
+    let mut executor = RecordingExecutor::default();
+    facade
+        .install_or_update_from_repository(
+            &repository_index(),
+            request,
+            &mut transport,
+            &mut executor,
+        )
+        .expect("an abandoned journal must not block a new install");
+    assert_eq!(executor.activations, 2);
+    assert!(!transactions.join("install-rime.state.tmp-1-0").exists());
+    assert!(!transactions.join("orphan.backup").exists());
+}
+
+#[test]
+fn an_activation_killed_midway_is_rolled_back_by_repair() {
+    let fixture = FixtureRoot::new();
+    let facade = fixture.facade();
+    let package_root = fixture.data_root().join("packages");
+    let old_payload = package_root.join("versions/old-addon/1.0.0/payload.txt");
+    std::fs::create_dir_all(old_payload.parent().expect("old payload parent"))
+        .expect("old payload parent should create");
+    std::fs::write(&old_payload, b"known-good").expect("old payload should write");
+
+    let request = PackageInstallRequest {
+        requested_ids: &["fcitx5-rime"],
+        transaction_id: "install-rime",
+    };
+    let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut transport = FixtureTransport::with([vec![0_u8; 12], vec![0_u8; 12]]);
+        let _ = facade.install_or_update_from_repository(
+            &repository_index(),
+            request,
+            &mut transport,
+            &mut InterruptedExecutor,
+        );
+    }));
+    assert!(stopped.is_err());
+    assert!(package_root
+        .join("transactions/install-rime.state")
+        .exists());
+
+    let report = facade
+        .repair()
+        .expect("repair should settle the activation");
+    assert!(report
+        .actions()
+        .contains(&PackageRepairAction::RolledBackInterruptedActivation {
+            transaction_id: "install-rime".to_owned(),
+        }));
+    assert_eq!(
+        std::fs::read(&old_payload).expect("old payload must survive"),
+        b"known-good"
+    );
+    assert!(
+        !package_root.join("packages.lock").exists(),
+        "the lock written during activation must be rolled back"
+    );
+    assert!(!package_root.join("versions/fcitx5-rime").exists());
+    assert!(!package_root.join("versions/old-addon/2.0.0").exists());
+    assert!(!package_root
+        .join("transactions/install-rime.state")
+        .exists());
+    assert!(!package_root
+        .join("transactions/install-rime.backup")
+        .exists());
+}
+
+#[test]
+fn a_running_package_operation_keeps_others_out() {
+    let fixture = FixtureRoot::new();
+    let facade = fixture.facade();
+    let package_root = fixture.data_root().join("packages");
+    std::fs::create_dir_all(&package_root).expect("package root should create");
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(package_root.join("transactions.lock"))
+        .expect("lock file should open");
+    held.try_lock().expect("fixture should take the lock");
+
+    let request = PackageInstallRequest {
+        requested_ids: &["fcitx5-rime"],
+        transaction_id: "install-rime",
+    };
+    let mut transport = FixtureTransport::with([vec![0_u8; 12], vec![0_u8; 12]]);
+    let mut executor = RecordingExecutor::default();
+    let error = facade
+        .install_or_update_from_repository(
+            &repository_index(),
+            request,
+            &mut transport,
+            &mut executor,
+        )
+        .expect_err("a second operation must not run concurrently");
+    assert_eq!(error.code(), "transaction_busy");
+    assert_eq!(executor.stages, 0);
+    assert_eq!(
+        facade.repair().expect_err("repair waits too").code(),
+        "transaction_busy"
+    );
+
+    drop(held);
+    let mut transport = FixtureTransport::with([vec![0_u8; 12], vec![0_u8; 12]]);
+    facade
+        .install_or_update_from_repository(
+            &repository_index(),
+            request,
+            &mut transport,
+            &mut executor,
+        )
+        .expect("the lock is free once its owner is gone");
+}
