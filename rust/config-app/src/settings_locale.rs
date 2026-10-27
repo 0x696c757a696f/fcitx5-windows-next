@@ -21,17 +21,9 @@ const CATALOGS: &[(&str, &str)] = &[
     ("th-TH", TH_TH),
     ("si-LK", SI_LK),
 ];
-const NAVIGATION_KEYS: [&str; 6] = [
-    "nav.general",
-    "nav.appearance",
-    "nav.theme",
-    "nav.packages",
-    "updates.title",
-    "nav.repair",
-];
+const NAVIGATION_KEYS: [&str; 3] = ["nav.general", "nav.appearance", "nav.packages"];
 #[cfg(test)]
 const WINDUI_SETTINGS_KEYS: &[&str] = &[
-    "settings.search",
     "settings.input.subtitle",
     "settings.input.section",
     "settings.input.list_hint",
@@ -64,7 +56,6 @@ const WINDUI_SETTINGS_KEYS: &[&str] = &[
     "settings.save",
     "settings.saved",
     "settings.theme.toggle",
-    "settings.placeholder.description",
     "settings.candidate.section",
     "settings.candidate.layout_hint",
     "settings.candidate.mode.vertical_text",
@@ -167,7 +158,7 @@ impl LocaleCatalog {
         self.tag
     }
 
-    pub(crate) fn navigation_labels(&self) -> [String; 6] {
+    pub(crate) fn navigation_labels(&self) -> [String; 3] {
         NAVIGATION_KEYS.map(|key| self.text(key))
     }
 
