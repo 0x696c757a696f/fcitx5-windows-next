@@ -11,12 +11,13 @@ use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::windows::ffi::OsStringExt;
+use std::os::windows::io::AsHandle;
 use std::panic::{catch_unwind, AssertUnwindSafe, UnwindSafe};
 use std::path::PathBuf;
 use std::process::Command;
 use std::ptr::null_mut;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::thread::{sleep, JoinHandle};
@@ -1002,6 +1003,9 @@ pub fn tsf_behavior_differential_report() -> String {
 const TF_CLIENTID_NULL: u32 = 0;
 const TF_INVALID_UIELEMENTID: u32 = u32::MAX;
 const COLD_LAUNCH_DEADLINE_MILLISECONDS: u32 = 20000;
+// The engine gives the first key of a new context 7.5 s
+// (`key_request_timeout_ms`); wait a little longer than that, not the launch budget.
+const FIRST_CONTEXT_DEADLINE_MILLISECONDS: u32 = 8000;
 const INPUT_DEADLINE_MILLISECONDS: u32 = 250;
 const ENGINE_RETRY_BASE_MILLISECONDS: u64 = 1000;
 const ENGINE_RETRY_MAX_MILLISECONDS: u64 = 30000;
@@ -1269,12 +1273,12 @@ fn destroy_candidate_dispatch_window(window: *mut c_void) {
 fn start_candidate_notification_watch(
     event_name: Option<OsString>,
     window: *mut c_void,
-) -> Option<(Arc<AtomicBool>, JoinHandle<()>)> {
+) -> Option<(Arc<common::LocalEvent>, JoinHandle<()>)> {
     let event_name = event_name?;
     if window.is_null() {
         return None;
     }
-    let stop = Arc::new(AtomicBool::new(false));
+    let stop = Arc::new(common::LocalEvent::new().ok()?);
     let thread_stop = Arc::clone(&stop);
     let window_address = window as usize;
     let thread = std::thread::Builder::new()
@@ -1293,23 +1297,24 @@ fn start_candidate_notification_watch(
                 return;
             };
             trace_event("candidate_notification_watch_started");
-            while !thread_stop.load(Ordering::Acquire) {
-                if event.is_signaled() {
-                    let _ = event.reset();
-                    // SAFETY: the TSF thread owns the message-only window. The
-                    // stop path destroys it before joining this worker; a late
-                    // post therefore fails harmlessly instead of dereferencing
-                    // the stale handle here.
-                    unsafe {
-                        let _ = PostMessageW(
-                            window_address as *mut c_void,
-                            CANDIDATE_NOTIFICATION_MESSAGE,
-                            0,
-                            0,
-                        );
-                    }
+            // Sleep in the kernel until the candidate UI signals or the service stops,
+            // instead of waking every host process on a timer.
+            while common::wait_for_any(&[thread_stop.as_handle(), event.as_handle()], None)
+                == Some(1)
+            {
+                let _ = event.reset();
+                // SAFETY: the TSF thread owns the message-only window. The
+                // stop path destroys it before joining this worker; a late
+                // post therefore fails harmlessly instead of dereferencing
+                // the stale handle here.
+                unsafe {
+                    let _ = PostMessageW(
+                        window_address as *mut c_void,
+                        CANDIDATE_NOTIFICATION_MESSAGE,
+                        0,
+                        0,
+                    );
                 }
-                sleep(Duration::from_millis(10));
             }
             trace_event("candidate_notification_watch_stopped");
         })
@@ -1500,15 +1505,25 @@ impl EngineClient {
         if self.pipe.is_none() {
             self.follow_current_generation();
         }
-        let budget = if cold_start && self.failure_streak == 0 {
+        // Only starting the engine needs the cold-launch budget. Once connected, the request
+        // gets what the engine itself allows, so a stuck engine cannot hold the host's UI
+        // thread for the whole launch budget on every new context.
+        let connect_budget = if cold_start && self.failure_streak == 0 {
             COLD_LAUNCH_DEADLINE_MILLISECONDS
         } else {
             INPUT_DEADLINE_MILLISECONDS
         };
-        let deadline = common::fcitx5_windows_common_deadline_after_milliseconds(budget);
+        let deadline = common::fcitx5_windows_common_deadline_after_milliseconds(connect_budget);
         if self.ensure_engine_available(deadline) && self.handshake(deadline) {
             self.failure_streak = 0;
-            return Some(deadline);
+            let request_budget = if cold_start {
+                FIRST_CONTEXT_DEADLINE_MILLISECONDS
+            } else {
+                INPUT_DEADLINE_MILLISECONDS
+            };
+            return Some(common::fcitx5_windows_common_deadline_after_milliseconds(
+                request_budget,
+            ));
         }
         self.disconnect();
         self.record_failure();
@@ -1782,6 +1797,15 @@ impl EngineClient {
             "engine_client_launcher_start_rejected"
         });
         ok
+    }
+
+    /// Whether a launcher is already serving this generation's pipe.
+    fn launcher_running(&self) -> bool {
+        !self.launcher_pipe_name.is_empty()
+            && common::named_pipe_is_available(
+                &OsString::from_wide(&self.launcher_pipe_name),
+                Duration::from_millis(1),
+            )
     }
 
     fn start_launcher_process(&self) -> bool {
@@ -2364,7 +2388,7 @@ struct TsfRuntimeState {
     candidate_context_id: Option<u64>,
     candidate_context: Option<ITfContext>,
     candidate_dispatch_window: *mut c_void,
-    candidate_notification_stop: Option<Arc<AtomicBool>>,
+    candidate_notification_stop: Option<Arc<common::LocalEvent>>,
     candidate_notification_thread: Option<JoinHandle<()>>,
     popup_allowed: bool,
 }
@@ -3001,7 +3025,12 @@ impl Fcitx5TsfService {
         let engine_client = current_module_path()
             .ok()
             .and_then(|module_path| EngineClient::new_for_current_module(&module_path));
-        if let Some(client) = &engine_client {
+        // Activation runs for every thread that gets focus; only spawn a launcher when none
+        // is serving yet instead of starting a process each time.
+        if let Some(client) = engine_client
+            .as_ref()
+            .filter(|client| !client.launcher_running())
+        {
             let _ = client.start_launcher_process();
         }
 
@@ -3089,7 +3118,7 @@ impl Fcitx5TsfService {
             )
         };
         if let Some(stop) = stop {
-            stop.store(true, Ordering::Release);
+            let _ = stop.signal();
         }
         destroy_candidate_dispatch_window(window);
         if let Some(thread) = thread {
@@ -3487,7 +3516,7 @@ impl Drop for Fcitx5TsfService {
         // the freed service or a thread running in this DLL.
         let runtime = self.runtime.get_mut();
         if let Some(stop) = runtime.candidate_notification_stop.take() {
-            stop.store(true, Ordering::Release);
+            let _ = stop.signal();
         }
         destroy_candidate_dispatch_window(std::mem::replace(
             &mut runtime.candidate_dispatch_window,
