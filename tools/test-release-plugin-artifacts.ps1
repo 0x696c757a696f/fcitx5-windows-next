@@ -28,8 +28,9 @@ $lua = $inventory.packages | Where-Object id -eq 'fcitx5-lua'
 $unikey = $inventory.packages | Where-Object id -eq 'fcitx5-unikey'
 if (@($lua.payload) -notcontains 'lib/fcitx5/libluaaddonloader.dll' -or
     @($lua.payload) -notcontains 'share/fcitx5/addon/luaaddonloader.conf' -or
-    @($unikey.payload) -notcontains 'lib/fcitx5/unikey.dll' -or
-    @($unikey.payload) -notcontains 'share/fcitx5/addon/unikey.conf') {
+    @($unikey.payload) -notcontains 'lib/fcitx5/libunikey.dll' -or
+    @($unikey.payload) -notcontains 'share/fcitx5/addon/unikey.conf' -or
+    @($unikey.payload) -notcontains 'share/fcitx5/inputmethod/unikey.conf') {
   throw 'Lua or Unikey inventory payload does not match upstream install outputs.'
 }
 $bootstrap = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'bootstrap-fcitx.ps1') -Raw
