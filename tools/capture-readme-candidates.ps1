@@ -42,6 +42,10 @@ public static class ReadmeCaptureNative {
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out RECT rectangle);
     [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr context);
+    [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr window);
+    [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr window, IntPtr deviceContext);
+    [DllImport("gdi32.dll")] public static extern bool BitBlt(IntPtr destination, int x, int y, int width,
+        int height, IntPtr source, int sourceX, int sourceY, uint rasterOperation);
 
     public static IntPtr FindVisibleWindow(uint expectedProcessId) {
         IntPtr result = IntPtr.Zero;
@@ -117,8 +121,17 @@ function Get-Capture([string] $mode, [hashtable] $layout, [Drawing.Color] $backd
     $bitmap = [Drawing.Bitmap]::new($width, $height, [Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $graphics = [Drawing.Graphics]::FromImage($bitmap)
     try {
-      $graphics.CopyFromScreen($left, $top, 0, 0, [Drawing.Size]::new($width, $height),
-        [Drawing.CopyPixelOperation]::SourceCopy -bor [Drawing.CopyPixelOperation]::CaptureBlt)
+      # SRCCOPY | CAPTUREBLT, so the layered candidate window is included.
+      $target = $graphics.GetHdc()
+      $source = [ReadmeCaptureNative]::GetDC([IntPtr]::Zero)
+      try {
+        if (-not [ReadmeCaptureNative]::BitBlt($target, 0, 0, $width, $height, $source, $left, $top, 0x40CC0020)) {
+          throw 'BitBlt could not capture the candidate window.'
+        }
+      } finally {
+        [void][ReadmeCaptureNative]::ReleaseDC([IntPtr]::Zero, $source)
+        $graphics.ReleaseHdc($target)
+      }
     } finally {
       $graphics.Dispose()
     }
