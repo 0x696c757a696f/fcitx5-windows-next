@@ -111,6 +111,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           UPDATE_KEYRING_BASE64: ${{ secrets.UPDATE_KEYRING_BASE64 }}
           PQC_SIGNING_SECRET_KEY_BASE64: ${{ secrets.PQC_SIGNING_SECRET_KEY_BASE64 }}
+          ED25519_SIGNING_SEED_BASE64: ${{ secrets.ED25519_SIGNING_SEED_BASE64 }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:PQC_SIGNING_SECRET_KEY_BASE64) -or
               [string]::IsNullOrWhiteSpace($env:UPDATE_KEYRING_BASE64)) {
@@ -120,6 +121,13 @@ jobs:
           $key = Join-Path $env:RUNNER_TEMP 'fcitx5-release-mldsa65.key'
           [IO.File]::WriteAllBytes($keyring, [Convert]::FromBase64String($env:UPDATE_KEYRING_BASE64))
           [IO.File]::WriteAllBytes($key, [Convert]::FromBase64String($env:PQC_SIGNING_SECRET_KEY_BASE64))
+          # Indexes first published before dual signing are re-signed with
+          # ML-DSA-65 alone, so the Ed25519 seed is optional here.
+          $ed25519Key = ''
+          if (-not [string]::IsNullOrWhiteSpace($env:ED25519_SIGNING_SEED_BASE64)) {
+            $ed25519Key = Join-Path $env:RUNNER_TEMP 'fcitx5-release-ed25519.seed'
+            [IO.File]::WriteAllBytes($ed25519Key, [Convert]::FromBase64String($env:ED25519_SIGNING_SEED_BASE64))
+          }
           try {
             $bin = 'target/x86_64-pc-windows-msvc/release'
             $targets = Get-Content -LiteralPath "$env:RUNNER_TEMP/plugin-indexes/targets.json" -Raw |
@@ -128,7 +136,7 @@ jobs:
               $index = Join-Path $target.directory 'index.json'
               $signature = Join-Path $target.directory 'index.sig.json'
               ./tools/refresh-plugin-index.ps1 -IndexPath $index -SignaturePath $signature `
-                -TrustedKeyring $keyring -SigningKey $key `
+                -TrustedKeyring $keyring -SigningKey $key -Ed25519SigningKey $ed25519Key `
                 -Signer "$bin/fcitx5-release-pqc-signer.exe" -PackageCli "$bin/fcitx5-package-core.exe"
               # Upload the signature last: until it lands, clients see the old
               # pair or reject a mismatch and retry later.
@@ -139,4 +147,5 @@ jobs:
             }
           } finally {
             Remove-Item -LiteralPath $key, $keyring -Force -ErrorAction SilentlyContinue
+            if ($ed25519Key) { Remove-Item -LiteralPath $ed25519Key -Force -ErrorAction SilentlyContinue }
           }

@@ -567,6 +567,9 @@ pub struct RenderWindowInput<'a> {
     /// Highlighted candidate index into `candidates`/`axis_result.items`.
     /// `None` or out of range paints no selection.
     pub selected: Option<usize>,
+    /// Candidate under the mouse pointer, painted as a faint selection.
+    /// Ignored in high contrast and when it is the selected candidate.
+    pub hovered: Option<usize>,
 }
 
 /// Total scrollable extent of the whole content along the viewport axis
@@ -745,9 +748,36 @@ pub fn render_candidate_window(input: &RenderWindowInput<'_>) -> RenderWindowOut
         input.geometry.comment_font_size,
         |value, size| measurement_cache.measure(&mut canvas, input.font_family, value, size),
     );
+    if let Some(hovered) = input
+        .hovered
+        .filter(|hovered| !input.high_contrast && input.selected != Some(*hovered))
+    {
+        if let Some(item) = axis.items.get(hovered).filter(|item| item.visible) {
+            let mut color = input.theme.selected_background;
+            color.alpha = HOVER_ALPHA;
+            draw_selection(
+                &mut canvas,
+                input,
+                window_w,
+                window_h,
+                item,
+                y_offset,
+                color,
+            );
+        }
+    }
     if let Some(selected) = input.selected {
         if let Some(item) = axis.items.get(selected).filter(|item| item.visible) {
-            draw_selection(&mut canvas, input, window_w, window_h, item, y_offset);
+            let color = input.theme.selected_background;
+            draw_selection(
+                &mut canvas,
+                input,
+                window_w,
+                window_h,
+                item,
+                y_offset,
+                color,
+            );
         }
     }
 
@@ -899,6 +929,7 @@ fn draw_selection(
     window_h: f32,
     item: &AxisLayoutItem,
     y_offset: f32,
+    color: RenderColor,
 ) {
     let origin = &input.axis_result.window;
     let inflate_x = input.theme.selection_inflate_x.max(0.0);
@@ -916,10 +947,14 @@ fn draw_selection(
             w,
             h,
             selection_corner_radius(input.theme.corner_radius, w, h),
-            &WindPaint::fill(input.theme.selected_background.wind()),
+            &WindPaint::fill(color.wind()),
         );
     }
 }
+
+/// Hover fill: the selection color at about 14% so it reads as a hint, not
+/// as a second selection.
+const HOVER_ALPHA: u8 = 36;
 
 fn selection_corner_radius(window_radius: f32, width: f32, height: f32) -> f32 {
     WECHAT_SELECTION_RADIUS_DIP
@@ -1394,10 +1429,33 @@ fn text_style<'a>(family: &'a str, size: f32) -> WindTextStyle<'a> {
     }
 }
 
+/// Font family used when the configured candidate families name nothing
+/// installed on this machine.
+pub const DEFAULT_CANDIDATE_FAMILY: &str = "Microsoft YaHei UI";
+
+/// Picks the candidate font from a configured family list: the first entry
+/// installed here, skipping the `system` / `inherit` keywords, else the
+/// default family. Measurement and paint must both use the result.
+#[must_use]
+pub fn resolve_candidate_family(families: &[String]) -> String {
+    families
+        .iter()
+        .map(|family| family.trim())
+        .filter(|family| {
+            !family.is_empty()
+                && !family.eq_ignore_ascii_case("system")
+                && !family.eq_ignore_ascii_case("inherit")
+        })
+        .find(|family| windui::text::family_available(family))
+        .unwrap_or(DEFAULT_CANDIDATE_FAMILY)
+        .to_owned()
+}
+
 /// Owns the windui DirectWrite engine for host-side text measurement.
 pub struct MeasureEngine {
     // DWriteEngine keeps its own bounded measurement cache.
     engine: DWriteEngine,
+    family: String,
 }
 
 impl MeasureEngine {
@@ -1405,26 +1463,27 @@ impl MeasureEngine {
     pub fn new() -> Self {
         Self {
             engine: DWriteEngine::new(),
+            family: DEFAULT_CANDIDATE_FAMILY.to_owned(),
         }
+    }
+
+    /// Sets the family `measure` uses; paint must draw with the same one.
+    pub fn set_family(&mut self, family: &str) {
+        if self.family != family {
+            family.clone_into(&mut self.family);
+        }
+    }
+
+    #[must_use]
+    pub fn family(&self) -> &str {
+        &self.family
     }
 
     /// Logical-DIP width/height of a single-line UTF-8 run.
     #[must_use]
     pub fn measure(&mut self, text: &str, font_size: f32, dpi_scale: f32) -> (f32, f32) {
-        self.measure_with_family(text, "Microsoft YaHei UI", font_size, dpi_scale)
-    }
-
-    /// Logical-DIP width/height with the resolved candidate font family.
-    #[must_use]
-    pub fn measure_with_family(
-        &mut self,
-        text: &str,
-        family: &str,
-        font_size: f32,
-        dpi_scale: f32,
-    ) -> (f32, f32) {
         self.engine.set_scale(dpi_scale);
-        let style = text_style(family, font_size.max(1.0));
+        let style = text_style(&self.family, font_size.max(1.0));
         let size = TextEngine::measure(&mut self.engine, text, &style, None);
         (size.w as f32, size.h as f32)
     }
@@ -1905,6 +1964,7 @@ mod tests {
             dpi_scale: 1.0,
             high_contrast: false,
             selected: None,
+            hovered: None,
         });
         let item = axis.items.first().expect("one vertical candidate");
         let left = (item.rect.left - axis.window.left) as u32 + geometry.item_padding_x as u32;
@@ -1968,6 +2028,7 @@ mod tests {
             dpi_scale: 1.0,
             high_contrast: false,
             selected: None,
+            hovered: None,
         });
         let mut measure_pixmap = Pixmap::new(1, 1).expect("measurement pixmap");
         let mut measure_engine = DWriteEngine::new();
@@ -2069,6 +2130,7 @@ mod tests {
             dpi_scale: 1.0,
             high_contrast: false,
             selected: None,
+            hovered: None,
         });
         let mut measure_pixmap = Pixmap::new(1, 1).expect("measurement pixmap");
         let mut measure_engine = DWriteEngine::new();
@@ -2230,6 +2292,7 @@ mod tests {
             dpi_scale: 1.0,
             high_contrast: false,
             selected: None,
+            hovered: None,
         });
         assert!(!output.pixels.is_empty());
         assert_eq!(
@@ -2254,6 +2317,7 @@ mod tests {
             dpi_scale: 1.0,
             high_contrast: false,
             selected: Some(1),
+            hovered: None,
         });
         assert!(!output.pixels.is_empty());
         assert_eq!(
@@ -2310,6 +2374,40 @@ mod tests {
     }
 
     #[test]
+    fn hovered_candidate_gets_a_faint_tint_not_a_selection() {
+        let axis = axis_layout(&vertical_input(&[(80.0, 24.0); 3]));
+        let render = |high_contrast: bool| {
+            render_candidate_window(&RenderWindowInput {
+                axis_result: &axis,
+                candidates: &candidates(),
+                theme: &theme(),
+                geometry: &geometry(),
+                font_family: "Microsoft YaHei UI",
+                preedit: None,
+                dpi_scale: 1.0,
+                high_contrast,
+                selected: Some(1),
+                hovered: Some(0),
+            })
+        };
+        let rect = &axis.items[0].rect;
+        let x = ((rect.left - axis.window.left) + 2.0) as u32;
+        let y = ((rect.top - axis.window.top + rect.bottom - axis.window.top) / 2.0) as u32;
+        let output = render(false);
+        let hover = output.pixel(x, y).unwrap();
+        assert!(
+            hover[1] < 250 && hover[1] > 200 && hover[1] > hover[2] && hover[1] > hover[0],
+            "hovered row is a light green tint (got BGRA {hover:?})"
+        );
+        let contrast = render(true);
+        let plain = contrast.pixel(x, y).unwrap();
+        assert!(
+            plain[0] >= 250 && plain[1] >= 250 && plain[2] >= 250,
+            "high contrast paints no hover tint (got BGRA {plain:?})"
+        );
+    }
+
+    #[test]
     fn out_of_range_selection_renders_no_selection() {
         let axis = axis_layout(&vertical_input(&[(80.0, 24.0); 2]));
         let output = render_candidate_window(&RenderWindowInput {
@@ -2322,6 +2420,7 @@ mod tests {
             dpi_scale: 1.0,
             high_contrast: false,
             selected: Some(99),
+            hovered: None,
         });
         assert!(!output.pixels.is_empty());
         let rect = &axis.items[0].rect;
@@ -2349,6 +2448,7 @@ mod tests {
             dpi_scale: 1.0,
             high_contrast: false,
             selected: None,
+            hovered: None,
         });
         assert!(output.pixels.is_empty());
         assert_eq!(output.width, 0);

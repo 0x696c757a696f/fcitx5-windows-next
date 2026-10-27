@@ -25,7 +25,8 @@ use windui::prelude::{
     signal as windui_signal, Align as WindUiAlign, App as WindUiApp, Color as WindUiColor,
     Element as WindUiElement, Fit as WindUiFit, Intent as WindUiIntent, Role as WindUiRole,
     Sender as WindUiSender, Signal as WindUiSignal, Theme as WindUiTheme,
-    Truncate as WindUiTruncate, WindowButtonKind as WindUiWindowButtonKind,
+    ThemeHandle as WindUiThemeHandle, Truncate as WindUiTruncate,
+    WindowButtonKind as WindUiWindowButtonKind,
 };
 
 const PRODUCT_NAME: &str = "Fcitx5 for Windows Next";
@@ -45,6 +46,35 @@ fn windui_settings_shell_theme(dark: bool) -> WindUiTheme {
     theme.form.row_height = Some(44);
     theme.form.row_pad_y = Some(0);
     theme
+}
+
+thread_local! {
+    /// The running Settings window's theme, so every place that changes the
+    /// appearance-mode draft can repaint the shell without threading a handle.
+    static SHELL_THEME: std::cell::RefCell<Option<WindUiThemeHandle>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Whether the Settings shell should be dark for an `appearance.mode` value.
+fn shell_uses_dark(mode: &str, system_dark: bool) -> bool {
+    match mode {
+        "dark" => true,
+        "light" => false,
+        _ => system_dark,
+    }
+}
+
+/// Repaints the Settings shell for the draft's appearance mode.
+fn sync_settings_shell_theme(adapter: WindUiSignal<WindUiConfigAdapter>) {
+    let mode = adapter.with(|adapter| adapter.preview().appearance().mode().to_owned());
+    let dark = shell_uses_dark(&mode, windui::event::system_prefers_dark());
+    SHELL_THEME.with(|slot| {
+        if let Some(handle) = slot.borrow().as_ref() {
+            if handle.current().palette.bg != windui_settings_shell_theme(dark).palette.bg {
+                handle.set(windui_settings_shell_theme(dark));
+            }
+        }
+    });
 }
 
 fn apply_wechat_green_palette(theme: &mut WindUiTheme, dark: bool) {
@@ -1595,27 +1625,6 @@ fn windui_input_method_settings(
         ))
 }
 
-fn windui_nav_placeholder(title: &str, locale: &LocaleCatalog) -> WindUiElement {
-    WindUiElement::scroll().fill().child(
-        WindUiElement::col()
-            .width_match()
-            .padding(24)
-            .spacing(16)
-            .child(
-                WindUiElement::label(title)
-                    .font_size(24.0)
-                    .font_weight(700)
-                    .fg_role(WindUiRole::Text),
-            )
-            .child(windui_settings_card(
-                WindUiElement::label(locale.text("settings.placeholder.description"))
-                    .font_size(14.0)
-                    .fg_role(WindUiRole::TextMuted)
-                    .width_match(),
-            )),
-    )
-}
-
 fn windui_settings_root(
     plugin_snapshot: WindUiSignal<PluginManagerSnapshot>,
     plugin_busy: WindUiSignal<bool>,
@@ -1629,7 +1638,6 @@ fn windui_settings_root(
 ) -> WindUiElement {
     candidate_status.set(locale.text("settings.candidate.draft_loaded"));
     let nav = windui_signal(0usize);
-    let search = windui_signal(String::new());
     let input_method_settings = windui_input_method_settings(
         candidate_adapter,
         input_method_choices,
@@ -1653,9 +1661,7 @@ fn windui_settings_root(
         windui_settings_language_controls(candidate_adapter, candidate_status, &locale);
     let plugin_locale = locale.clone();
 
-    const NAV_GLYPHS: [&str; 6] = [
-        "\u{270E}", "\u{25D0}", "\u{2328}", "\u{25A4}", "\u{21BB}", "\u{24D8}",
-    ];
+    const NAV_GLYPHS: [&str; 3] = ["\u{270E}", "\u{25D0}", "\u{25A4}"];
     let mut nav_col = WindUiElement::col().width_match().spacing(3);
     for (i, (name, glyph)) in locale
         .navigation_labels()
@@ -1672,11 +1678,6 @@ fn windui_settings_root(
         .bg_role(WindUiRole::Bg)
         .padding_xy(10, 12)
         .spacing(12)
-        .child(
-            WindUiElement::text_input(search, locale.text("settings.search"))
-                .leading_icon('\u{1F50D}')
-                .width_match(),
-        )
         .child(WindUiElement::scroll().weight(1.0).child(nav_col));
 
     let input_page = WindUiElement::scroll().fill().child(
@@ -1755,7 +1756,7 @@ fn windui_settings_root(
             )),
     );
 
-    let mut content = WindUiElement::stack()
+    let content = WindUiElement::stack()
         .height_match()
         .weight(1.0)
         .child(input_page.visible_when(move || nav.get() == 0))
@@ -1768,18 +1769,8 @@ fn windui_settings_root(
                 plugin_sender,
                 plugin_locale,
             )
-            .visible_when(move || nav.get() == 3),
+            .visible_when(move || nav.get() == 2),
         );
-    for (i, title) in [
-        (2usize, "nav.theme"),
-        (4usize, "updates.title"),
-        (5usize, "nav.repair"),
-    ] {
-        content = content.child(
-            windui_nav_placeholder(&locale.text(title), &locale)
-                .visible_when(move || nav.get() == i),
-        );
-    }
 
     let footer = WindUiElement::row()
         .width_match()
@@ -1821,6 +1812,7 @@ fn windui_settings_root(
                         match result {
                             Ok(()) => {
                                 appearance.sync(candidate_adapter, &themes);
+                                sync_settings_shell_theme(candidate_adapter);
                                 candidate_status.set(locale.text("settings.reloaded"));
                             }
                             Err(error) => ctx.toast_err(error),
@@ -2028,6 +2020,7 @@ fn update_candidate_draft(
     let mut result = Ok(());
     adapter.update(|adapter| result = adapter.set(edit));
     result?;
+    sync_settings_shell_theme(adapter);
     status.set(locale.format("settings.candidate.draft_updated", &[("control", label)]));
     Ok(())
 }
@@ -2050,6 +2043,7 @@ fn cancel_candidate_draft(
     locale: &LocaleCatalog,
 ) {
     adapter.update(WindUiConfigAdapter::cancel);
+    sync_settings_shell_theme(adapter);
     status.set(locale.text("settings.candidate.draft_discarded"));
 }
 
@@ -3234,16 +3228,23 @@ fn run_windui_settings_window(
     screenshot_from_args: bool,
     locale_preview: Option<&str>,
 ) -> Result<String, String> {
+    let (candidate_adapter, candidate_status) =
+        windui_candidate_config_manager(windui_config_path()?)?;
+    let mode = candidate_adapter.with(|adapter| adapter.preview().appearance().mode().to_owned());
+    let dark = shell_uses_dark(&mode, windui::event::system_prefers_dark());
     let mut app = WindUiApp::new(PRODUCT_NAME, 1040, 700)
         .icon(windui_brand_icon())
         .frameless()
         .min_size(900, 620)
-        .theme(windui_settings_shell_theme(false));
+        .theme(windui_settings_shell_theme(dark));
     if screenshot_from_args {
         app = app.screenshot_from_args();
     }
-    let (candidate_adapter, candidate_status) =
-        windui_candidate_config_manager(windui_config_path()?)?;
+    let shell_theme = app.theme_handle();
+    SHELL_THEME.with(|slot| *slot.borrow_mut() = Some(shell_theme));
+    app = app.on_system_theme_changed(move |_ctx, _dark| {
+        sync_settings_shell_theme(candidate_adapter);
+    });
     let configured_locale =
         candidate_adapter.with(|adapter| adapter.preview().ui().language().to_owned());
     let locale = LocaleCatalog::new(
@@ -3948,6 +3949,14 @@ mod tests {
             plugin_operation_for(&offline, "community-addon", PluginAction::Remove),
             Some(PluginOperation::Remove("community-addon".to_owned()))
         );
+    }
+
+    #[test]
+    fn settings_shell_follows_the_appearance_mode() {
+        assert!(shell_uses_dark("dark", false));
+        assert!(!shell_uses_dark("light", true));
+        assert!(shell_uses_dark("system", true));
+        assert!(!shell_uses_dark("system", false));
     }
 
     #[test]

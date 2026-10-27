@@ -6,6 +6,7 @@ param(
   [Parameter(Mandatory)] [string] $StageRoot,
   [Parameter(Mandatory)] [string] $TrustedKeyring,
   [Parameter(Mandatory)] [string] $SigningKey,
+  [Parameter(Mandatory)] [string] $Ed25519SigningKey,
   [string] $Signer = '',
   [string] $ForkPayloadRoot = ''
 )
@@ -24,7 +25,7 @@ if (-not $stage.StartsWith($stagePrefix, [StringComparison]::OrdinalIgnoreCase) 
 if ([string]::IsNullOrWhiteSpace($Signer)) {
   $Signer = Join-Path $packageRoot 'release-tools/fcitx5-release-pqc-signer.exe'
 }
-foreach ($path in @($Signer, $TrustedKeyring, $SigningKey)) {
+foreach ($path in @($Signer, $TrustedKeyring, $SigningKey, $Ed25519SigningKey)) {
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required release input is missing: $path" }
 }
 if ((Get-Item -LiteralPath $SigningKey).Length -ne 4032) {
@@ -45,6 +46,12 @@ function Get-OfficialKey($Keyring, [string] $Description) {
     throw "$Description must contain exactly one trusted official-2026-mldsa65 key."
   }
   return $matching[0]
+}
+
+function Invoke-MetadataSigning([string] $Path, [string] $SignedObject, [string] $SignaturePath) {
+  & (Join-Path $PSScriptRoot 'sign-release-metadata.ps1') -Path $Path -SignedObject $SignedObject `
+    -SignaturePath $SignaturePath -TrustedKeyring $TrustedKeyring -SigningKey $SigningKey `
+    -Ed25519SigningKey $Ed25519SigningKey -Signer $Signer -PackageCli $packageCli
 }
 
 function Get-Blake3([string] $Path) {
@@ -131,7 +138,6 @@ $artifactRoot = Join-Path $packageRoot 'release-artifacts'
 $payloadRoot = Join-Path $packageRoot ('plugin-staging-' + [guid]::NewGuid().ToString('N'))
 $indexPath = Join-Path $artifactRoot 'index.json'
 $indexSignaturePath = Join-Path $artifactRoot 'index.sig.json'
-$indexRawSignaturePath = Join-Path $payloadRoot 'index.sig.raw'
 $verificationRoot = Join-Path $packageRoot ('plugin-verify-' + [guid]::NewGuid().ToString('N'))
 $packageCli = Join-Path $stage 'bin/fcitx5-package.exe'
 if (-not (Test-Path -LiteralPath $packageCli -PathType Leaf)) {
@@ -197,14 +203,9 @@ try {
     }
     $pluginManifestPath = Join-Path $pluginPayloadRoot 'manifest.json'
     $pluginSignaturePath = Join-Path $pluginPayloadRoot 'manifest.sig.json'
-    $pluginRawSignaturePath = Join-Path $pluginPayloadRoot 'manifest.sig.raw'
     [IO.File]::WriteAllText($pluginManifestPath, (($manifest | ConvertTo-Json -Depth 8) + "`n"),
       [Text.UTF8Encoding]::new($false))
-    Invoke-Checked $Signer @('--sign', $pluginManifestPath, $pluginRawSignaturePath,
-      $SigningKey, $templateKey.public_key_base64)
-    Invoke-Checked $packageCli @('--write-signature-envelope-v2', 'package-manifest',
-      'official-2026-mldsa65', 'mldsa65', $pluginRawSignaturePath, $pluginSignaturePath)
-    Remove-Item -LiteralPath $pluginRawSignaturePath -Force
+    Invoke-MetadataSigning $pluginManifestPath 'package-manifest' $pluginSignaturePath
     $archiveName = "$($plugin.id)-$Version-$($plugin.architecture).fcpkg"
     $archive = Join-Path $artifactRoot $archiveName
     Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
@@ -254,10 +255,7 @@ try {
   }
   [IO.File]::WriteAllText($indexPath, (($index | ConvertTo-Json -Depth 8 -Compress) + "`n"),
     [Text.UTF8Encoding]::new($false))
-  Invoke-Checked $Signer @('--sign', $indexPath, $indexRawSignaturePath,
-    $SigningKey, $templateKey.public_key_base64)
-  Invoke-Checked $packageCli @('--write-signature-envelope-v2', 'repository-index',
-    'official-2026-mldsa65', 'mldsa65', $indexRawSignaturePath, $indexSignaturePath)
+  Invoke-MetadataSigning $indexPath 'repository-index' $indexSignaturePath
   Invoke-Checked $packageCli @('--verify-repository-v2', $indexPath, $indexSignaturePath,
     $TrustedKeyring, $Channel)
   foreach ($archiveInfo in $archives) {

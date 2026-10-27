@@ -1056,6 +1056,17 @@ impl NamedPipeServer {
         identity.verifies_pipe_client(self.handle.as_handle())
     }
 
+    /// Waits for one client until `deadline`, or until `stop` is signaled
+    /// when one is supplied.
+    #[must_use]
+    pub fn connect_waiting(&self, deadline: u64, stop: Option<BorrowedHandle<'_>>) -> bool {
+        pipe_connect_client(
+            self.handle.as_raw_handle(),
+            deadline,
+            stop.map_or(std::ptr::null_mut(), |stop| stop.as_raw_handle()),
+        )
+    }
+
     /// Attempts one immediate connect: accepts an already-connected client or
     /// fails fast when none is waiting (polling servers).
     pub fn connect_poll(&self) -> bool {
@@ -1994,6 +2005,27 @@ fn close_pipe_client(pipe: *mut c_void) {
     unsafe {
         CancelIoEx(pipe, std::ptr::null_mut());
         CloseHandle(pipe);
+    }
+}
+
+/// Reports whether the server end of a client pipe is still connected. A
+/// server that closed the pipe is only noticed by the next write otherwise,
+/// after the request is already lost.
+fn pipe_client_is_connected(pipe: *mut c_void) -> bool {
+    if pipe.is_null() || pipe == invalid_handle_value() {
+        return false;
+    }
+    // SAFETY: `pipe` is a caller-owned pipe handle that Windows validates; all
+    // optional output buffers are null because this only probes the connection.
+    unsafe {
+        PeekNamedPipe(
+            pipe,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ) != 0
     }
 }
 
@@ -4489,6 +4521,11 @@ pub unsafe extern "C" fn fcitx5_windows_common_open_pipe_client_utf16(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_pipe_client_connected(pipe: *mut c_void) -> u8 {
+    u8::from(pipe_client_is_connected(pipe))
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn fcitx5_windows_common_close_pipe_client(pipe: *mut c_void) {
     close_pipe_client(pipe);
 }
@@ -6144,6 +6181,26 @@ mod tests {
             ),
             invalid_handle_value()
         );
+    }
+
+    #[test]
+    fn pipe_client_reports_a_closed_server_end() {
+        assert!(!pipe_client_is_connected(std::ptr::null_mut()));
+        assert!(!pipe_client_is_connected(invalid_handle_value()));
+        let identity = CurrentUserRuntimeIdentity::current().expect("identity");
+        let security = identity.security_attributes().expect("security");
+        let name = format!(
+            r"\\.\pipe\Fcitx5WindowsNext.ClientConnected.{}",
+            std::process::id()
+        );
+        let server = NamedPipeServer::create(OsStr::new(&name), &security, 4096).expect("server");
+        let wide = name.encode_utf16().collect::<Vec<_>>();
+        let client = open_pipe_client(&wide, deadline_after(1000), true);
+        assert_ne!(client, invalid_handle_value());
+        assert!(pipe_client_is_connected(client));
+        drop(server);
+        assert!(!pipe_client_is_connected(client));
+        close_pipe_client(client);
     }
 
     #[test]
