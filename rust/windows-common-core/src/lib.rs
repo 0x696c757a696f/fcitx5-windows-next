@@ -1056,6 +1056,17 @@ impl NamedPipeServer {
         identity.verifies_pipe_client(self.handle.as_handle())
     }
 
+    /// Waits for one client until `deadline`, or until `stop` is signaled
+    /// when one is supplied.
+    #[must_use]
+    pub fn connect_waiting(&self, deadline: u64, stop: Option<BorrowedHandle<'_>>) -> bool {
+        pipe_connect_client(
+            self.handle.as_raw_handle(),
+            deadline,
+            stop.map_or(std::ptr::null_mut(), |stop| stop.as_raw_handle()),
+        )
+    }
+
     /// Attempts one immediate connect: accepts an already-connected client or
     /// fails fast when none is waiting (polling servers).
     pub fn connect_poll(&self) -> bool {

@@ -12,6 +12,9 @@ use crate::{protocol, PresentationPublicationAction, PresentationPublicationQueu
 
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(25);
 const WRITE_TIMEOUT: Duration = Duration::from_millis(25);
+/// Longest pause between delivery attempts while the candidate window is
+/// unreachable, so a missing UI process does not keep this thread busy.
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 struct Shared {
     queue: Mutex<PresentationPublicationQueue>,
@@ -66,6 +69,7 @@ impl Drop for PresentationPublisher {
 
 fn run(shared: Arc<Shared>, pipe_name: OsString, ui_executable: PathBuf) {
     let mut client = None;
+    let mut retry_delay = PresentationPublicationQueue::delivery_failed_delay();
     loop {
         let response = {
             let mut queue = shared.queue.lock().unwrap_or_else(|e| e.into_inner());
@@ -96,6 +100,7 @@ fn run(shared: Arc<Shared>, pipe_name: OsString, ui_executable: PathBuf) {
         if delivered {
             let mut queue = shared.queue.lock().unwrap_or_else(|e| e.into_inner());
             queue.acknowledge_delivery(&response);
+            retry_delay = PresentationPublicationQueue::delivery_failed_delay();
         } else {
             client = None;
             let queue = shared.queue.lock().unwrap_or_else(|e| e.into_inner());
@@ -104,8 +109,9 @@ fn run(shared: Arc<Shared>, pipe_name: OsString, ui_executable: PathBuf) {
             }
             let (_queue, result) = shared
                 .wake
-                .wait_timeout(queue, PresentationPublicationQueue::delivery_failed_delay())
+                .wait_timeout(queue, retry_delay)
                 .unwrap_or_else(|e| e.into_inner());
+            retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
             if result.timed_out() {
                 continue;
             }

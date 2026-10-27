@@ -11,11 +11,13 @@
 
 use std::ffi::{c_void, OsStr};
 use std::os::windows::ffi::OsStrExt;
-use std::time::Duration;
+use std::os::windows::io::BorrowedHandle;
+use std::time::{Duration, Instant};
 
 use fcitx5_protocol_core::{FrameView, KeyResponse, MessageType};
 use fcitx5_windows_common_core::{
-    paths_refer_to_same_file, wait_for_handle, CurrentUserRuntimeIdentity, NamedPipeServer,
+    deadline_after, paths_refer_to_same_file, wait_for_handle, CurrentUserRuntimeIdentity,
+    NamedPipeServer,
 };
 
 use crate::frame_ffi::{Fcitx5CandidateFrameRecord, Fcitx5CandidateFrameResponse};
@@ -27,6 +29,10 @@ const PRESENTATION_PIPE_CHANNEL: &str = "presentation";
 /// Blocking read horizon. A frame can only arrive from a live composition;
 /// a long-idle connection is recycled like a C++ `ReadFile` disconnect.
 const READ_DEADLINE_TICKS: u64 = u64::MAX;
+/// How long one listener waits for the engine before it is recreated.
+const CONNECT_WAIT_MILLISECONDS: u32 = 60_000;
+const RETRY_INITIAL: Duration = Duration::from_millis(50);
+const RETRY_MAX: Duration = Duration::from_secs(5);
 
 /// Decodes one complete presentation frame into a [`KeyResponse`].
 ///
@@ -234,21 +240,11 @@ pub unsafe extern "C" fn fcitx5_candidate_presentation_serve(
     let Some(security) = identity.security_attributes() else {
         return 0;
     };
-    let stop_handle = core::ptr::NonNull::new(stop);
-    let stop_signaled = || {
-        stop_handle.is_some_and(|handle| {
-            // SAFETY: borrowed for a zero-time probe of a live event handle.
-            unsafe {
-                wait_for_handle(
-                    core::mem::transmute::<
-                        core::ptr::NonNull<c_void>,
-                        std::os::windows::io::BorrowedHandle<'_>,
-                    >(handle),
-                    Duration::ZERO,
-                )
-            }
-        })
-    };
+    // SAFETY: the caller keeps a non-null `stop` event alive for this call.
+    let stop_handle = (!stop.is_null()).then(|| unsafe { BorrowedHandle::borrow_raw(stop) });
+    let stop_signaled =
+        || stop_handle.is_some_and(|handle| wait_for_handle(handle, Duration::ZERO));
+    let mut retry = RETRY_INITIAL;
     let _peer_units: Vec<u16> = engine_path
         .as_os_str()
         .to_string_lossy()
@@ -258,19 +254,25 @@ pub unsafe extern "C" fn fcitx5_candidate_presentation_serve(
         if stop_signaled() {
             return 1;
         }
-        let Ok(listener) = NamedPipeServer::create(&name, &security, PRESENTATION_MAX_FRAME_SIZE)
-        else {
-            return 0;
+        // A failed create or an instant connect error is retried with a
+        // growing pause: returning would leave the candidate window without
+        // frames for the rest of the session, and spinning would burn CPU.
+        let attempt = Instant::now();
+        let connected = NamedPipeServer::create(&name, &security, PRESENTATION_MAX_FRAME_SIZE)
+            .ok()
+            .and_then(|listener| {
+                listener
+                    .connect_waiting(deadline_after(CONNECT_WAIT_MILLISECONDS), stop_handle)
+                    .then_some(listener)
+            });
+        let Some(listener) = connected else {
+            if attempt.elapsed() < RETRY_INITIAL {
+                std::thread::sleep(retry);
+                retry = (retry * 2).min(RETRY_MAX);
+            }
+            continue;
         };
-        loop {
-            if stop_signaled() {
-                return 1;
-            }
-            if listener.connect_poll() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        retry = RETRY_INITIAL;
         let Some(peer) = listener.verified_client(&identity) else {
             continue;
         };
