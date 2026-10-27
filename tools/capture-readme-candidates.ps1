@@ -9,8 +9,9 @@ param(
 # README shows, in light and dark mode, and composes one image per mode:
 # candidate-layouts-light.png and candidate-layouts-dark.png. The scroll demo
 # (--scroll-demo, a long bulk list) is saved per direction as
-# candidate-scroll-<direction>-expanded-<mode>.png. Each window is shown over a solid backdrop so its rounded corners and shadow come out
-# against the README card color instead of whatever the desktop shows.
+# candidate-scroll-<direction>-expanded-<mode>.png. Each window is shown over
+# a solid backdrop so its rounded corners and shadow come out against the
+# README card color instead of whatever the desktop shows.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
