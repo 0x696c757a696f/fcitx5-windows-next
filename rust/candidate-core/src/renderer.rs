@@ -32,7 +32,7 @@ use crate::Rect;
 
 /// ARGB color resolved by the theme/config boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RenderColor {
+pub(crate) struct RenderColor {
     pub red: u8,
     pub green: u8,
     pub blue: u8,
@@ -40,7 +40,7 @@ pub struct RenderColor {
 }
 
 impl RenderColor {
-    pub const fn rgba(red: u8, green: u8, blue: u8, alpha: u8) -> Self {
+    pub(crate) const fn rgba(red: u8, green: u8, blue: u8, alpha: u8) -> Self {
         Self {
             red,
             green,
@@ -56,7 +56,7 @@ impl RenderColor {
 
 /// Fully resolved colors + selection inset + outer-surface corner radius.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RenderTheme {
+pub(crate) struct RenderTheme {
     pub background: RenderColor,
     pub text: RenderColor,
     pub selected_background: RenderColor,
@@ -546,7 +546,7 @@ where
 
 /// Everything the renderer needs for one complete window bitmap.
 #[derive(Clone, Debug)]
-pub struct RenderWindowInput<'a> {
+pub(crate) struct RenderWindowInput<'a> {
     /// Frozen three-axis geometry (window + per-item rects + scroll offset).
     pub axis_result: &'a AxisLayoutResult,
     /// Candidate strings in the same order as `axis_result.items`.
@@ -587,7 +587,7 @@ fn total_scrollable(axis: &AxisLayoutResult) -> f32 {
 
 /// A complete candidate-window bitmap in BGRA row-major order, window-local.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RenderWindowOutput {
+pub(crate) struct RenderWindowOutput {
     pub pixels: Vec<u8>,
     pub width: u32,
     pub height: u32,
@@ -631,9 +631,10 @@ impl TextMeasurementCache {
     }
 }
 
+#[cfg(test)]
 impl RenderWindowOutput {
     /// BGRA pixel at `(x, y)` or `None` when out of bounds.
-    pub fn pixel(&self, x: u32, y: u32) -> Option<[u8; 4]> {
+    pub(crate) fn pixel(&self, x: u32, y: u32) -> Option<[u8; 4]> {
         if x >= self.width || y >= self.height {
             return None;
         }
@@ -651,7 +652,7 @@ impl RenderWindowOutput {
 /// not intersect the window are skipped. Degenerate (zero-area) windows yield
 /// an empty output so callers treat "nothing to paint" uniformly.
 #[must_use]
-pub fn render_candidate_window(input: &RenderWindowInput<'_>) -> RenderWindowOutput {
+pub(crate) fn render_candidate_window(input: &RenderWindowInput<'_>) -> RenderWindowOutput {
     let axis = input.axis_result;
     let (window_w, window_h, width, height) = render_pixel_extent(
         axis,
@@ -1431,7 +1432,7 @@ fn text_style<'a>(family: &'a str, size: f32) -> WindTextStyle<'a> {
 
 /// Font family used when the configured candidate families name nothing
 /// installed on this machine.
-pub const DEFAULT_CANDIDATE_FAMILY: &str = "Microsoft YaHei UI";
+pub(crate) const DEFAULT_CANDIDATE_FAMILY: &str = "Microsoft YaHei UI";
 
 /// Picks the candidate font from a configured family list: the first entry
 /// installed here, skipping the `system` / `inherit` keywords, else the
@@ -1481,7 +1482,7 @@ impl MeasureEngine {
 
     /// Logical-DIP width/height of a single-line UTF-8 run.
     #[must_use]
-    pub fn measure(&mut self, text: &str, font_size: f32, dpi_scale: f32) -> (f32, f32) {
+    pub(crate) fn measure(&mut self, text: &str, font_size: f32, dpi_scale: f32) -> (f32, f32) {
         self.engine.set_scale(dpi_scale);
         let style = text_style(&self.family, font_size.max(1.0));
         let size = TextEngine::measure(&mut self.engine, text, &style, None);
@@ -1493,14 +1494,6 @@ impl Default for MeasureEngine {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Measured logical-DIP size of one text run.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Fcitx5CandidateMeasureSize {
-    pub width: f32,
-    pub height: f32,
 }
 
 /// Logical float rect → windui i32 rect (floor/ceil so the clip fully covers).

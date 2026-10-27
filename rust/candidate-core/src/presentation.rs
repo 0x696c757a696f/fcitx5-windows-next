@@ -1,24 +1,24 @@
 //! Candidate presentation state: orientation decisions, placement and composition stability.
 
-#![deny(unsafe_op_in_unsafe_fn)]
+#![forbid(unsafe_code)]
 
 use super::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CandidateText {
+pub(crate) struct CandidateText {
     pub text: String,
     pub comment: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct CompositionIdentity {
+pub(crate) struct CompositionIdentity {
     pub engine_epoch: u64,
     pub context_id: u64,
     pub composition_id: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct AutomaticOrientationInput<'a> {
+pub(crate) struct AutomaticOrientationInput<'a> {
     pub candidates: &'a [CandidateText],
     pub locale: &'a str,
     pub work_area: Rect,
@@ -27,20 +27,11 @@ pub struct AutomaticOrientationInput<'a> {
     pub page_size: u32,
 }
 
-/// Decides what the C++ host should do after an applied presentation update.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct CandidatePresentationDecision {
-    /// 0 continue painting, 1 dismiss (reset + hide), 2 hide popup only.
-    pub action: u8,
-    pub focus_pid: u32,
-}
-
 impl CandidatePresentationState {
     /// Applies the frozen update-dismiss decision chain from the shipping C++
     /// `update()`: stale/invalid never re-decide, hidden/empty/invalid-caret
     /// dismiss, and a popup-blocked composition only hides.
-    pub fn decide(
+    pub(crate) fn decide(
         &self,
         visibility: u8,
         candidate_count: usize,
@@ -57,41 +48,9 @@ impl CandidatePresentationState {
     }
 }
 
-#[no_mangle]
-/// # Safety
-///
-/// `state` must be null or a valid presentation pointer; `output` must point to
-/// writable storage.
-pub unsafe extern "C" fn fcitx5_candidate_presentation_decide(
-    state: *const c_void,
-    visibility: u8,
-    candidate_count: usize,
-    caret_valid: u8,
-    popup_allowed: u8,
-    focus_pid: u32,
-    output: *mut CandidatePresentationDecision,
-) -> u8 {
-    if state.is_null() || output.is_null() {
-        return 0;
-    }
-    // SAFETY: the non-null state pointer is valid and shared for this read-only decision.
-    let state = unsafe { &*state.cast::<CandidatePresentationState>() };
-    let action = state.decide(
-        visibility,
-        candidate_count,
-        caret_valid != 0,
-        popup_allowed != 0,
-    );
-    // SAFETY: non-null checked above; caller provides writable output storage.
-    unsafe {
-        *output = CandidatePresentationDecision { action, focus_pid };
-    }
-    1
-}
-
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-pub struct CandidatePresentationUpdate {
+pub(crate) struct CandidatePresentationUpdate {
     pub engine_epoch: u64,
     pub context_id: u64,
     pub composition_id: u64,
@@ -118,14 +77,6 @@ pub struct CandidatePresentationOutput {
     pub candidate_bulk: u8,
     pub page_size: u32,
     pub placement: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Fcitx5CandidatePresentationRenderPlan {
-    pub selected: usize,
-    pub has_selected: u8,
-    pub render_count: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -168,7 +119,7 @@ impl Default for CandidatePresentationState {
 impl CandidatePresentationState {
     /// Applies the presentation metadata for one accepted semantic snapshot.
     /// Returns 0 for applied, 1 for duplicate, 2 for stale, and 3 for invalid.
-    pub fn apply(&mut self, input: CandidatePresentationUpdate) -> u32 {
+    pub(crate) fn apply(&mut self, input: CandidatePresentationUpdate) -> u32 {
         if input.engine_epoch == 0
             || input.context_id == 0
             || input.revision == 0
@@ -267,7 +218,7 @@ impl CandidatePresentationState {
         *self = Self::default();
     }
 
-    pub fn set_placement(&mut self, placement: Placement) {
+    pub(crate) fn set_placement(&mut self, placement: Placement) {
         self.placement = placement;
     }
 
@@ -291,17 +242,12 @@ impl CandidatePresentationState {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct CompositionLayoutState {
+pub(crate) struct CompositionLayoutState {
     pub(crate) identity: Option<CompositionIdentity>,
     pub(crate) auto_orientation: Option<Orientation>,
 }
 
 impl CompositionLayoutState {
-    pub fn reset(&mut self) {
-        self.identity = None;
-        self.auto_orientation = None;
-    }
-
     pub fn begin(&mut self, identity: CompositionIdentity) {
         if self.identity != Some(identity) {
             self.identity = Some(identity);
@@ -309,7 +255,7 @@ impl CompositionLayoutState {
         }
     }
 
-    pub fn resolve_orientation(
+    pub(crate) fn resolve_orientation(
         &mut self,
         configured: PresentationOrientation,
         input: AutomaticOrientationInput<'_>,
@@ -367,4 +313,35 @@ pub(crate) fn resolve_automatic_orientation(
 pub(crate) fn locale_prefers_compact_horizontal(locale: &str) -> bool {
     let lower = locale.to_ascii_lowercase();
     lower.starts_with("zh") || lower.starts_with("ja") || lower.starts_with("ko")
+}
+
+#[cfg(test)]
+mod candidate_presentation_decision_tests {
+    use super::CandidatePresentationState;
+
+    #[test]
+    fn decide_follows_the_frozen_update_dismiss_chain() {
+        let state = CandidatePresentationState::default();
+        assert_eq!(
+            state.decide(0, 5, true, true),
+            1,
+            "hidden visibility dismisses"
+        );
+        assert_eq!(
+            state.decide(1, 0, true, true),
+            1,
+            "empty candidates dismiss"
+        );
+        assert_eq!(
+            state.decide(1, 5, false, true),
+            1,
+            "invalid caret dismisses"
+        );
+        assert_eq!(
+            state.decide(1, 5, true, false),
+            2,
+            "popup-blocked composition only hides"
+        );
+        assert_eq!(state.decide(2, 5, true, true), 0, "normal update paints");
+    }
 }

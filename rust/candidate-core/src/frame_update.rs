@@ -5,7 +5,7 @@
 //! reports the host action. All underlying semantics already live in this
 //! crate; this module only sequences them.
 
-#![deny(unsafe_op_in_unsafe_fn)]
+#![forbid(unsafe_code)]
 
 use fcitx5_protocol_core::KeyResponse;
 
@@ -13,11 +13,11 @@ use crate::axis_layout::{AxisLayoutInput, CandidateLayoutOptions, OverflowBehavi
 use crate::measure_ffi::{measure_visual_items, MeasureLoopParams};
 use crate::renderer::MeasureEngine;
 use crate::{
-    fcitx5_candidate_horizontal_natural_downgrade, CandidateClickGuardState,
-    CandidateFocusWatchState, CandidateModel, CandidatePresentationState, CandidateScrollState,
-    CandidateSemanticItem, CandidateSemanticSnapshot, CandidateSnapshotIdentity, CandidateText,
-    CandidateVisualArena, Fcitx5CandidateLayoutRect, Fcitx5CandidateVisualBuildConfig,
-    Fcitx5CandidateVisualBuildInput, Orientation, Placement, Rect, Size,
+    horizontal_natural_downgrade, CandidateClickGuardState, CandidateFocusWatchState,
+    CandidateModel, CandidatePresentationState, CandidateScrollState, CandidateSemanticItem,
+    CandidateSemanticSnapshot, CandidateSnapshotIdentity, CandidateText, CandidateVisualArena,
+    Fcitx5CandidateLayoutRect, Fcitx5CandidateVisualBuildConfig, Fcitx5CandidateVisualBuildInput,
+    Orientation, Placement, Rect, Size,
 };
 
 /// Frozen `NativeOrientation` vocabulary from the C++ config boundary.
@@ -295,35 +295,16 @@ pub fn frame_update(
             current.candidates.len(),
         );
         build_inputs.push(Fcitx5CandidateVisualBuildInput {
-            label: crate::Fcitx5CandidateUtf8 {
-                ptr: candidate.label.as_ptr(),
-                len: candidate.label.len(),
-            },
-            text: crate::Fcitx5CandidateUtf8 {
-                ptr: candidate.text.as_ptr(),
-                len: candidate.text.len(),
-            },
-            comment: crate::Fcitx5CandidateUtf8 {
-                ptr: candidate.comment.as_ptr(),
-                len: candidate.comment.len(),
-            },
+            label: candidate.label.as_bytes(),
+            text: candidate.text.as_bytes(),
+            comment: candidate.comment.as_bytes(),
             label_style: config.label_style,
             labels_visible: u8::from(config.label_visible),
             reservation_action: reservation.action,
             reservation_slot: reservation.slot,
         });
     }
-    let configured_refs: Vec<crate::Fcitx5CandidateUtf8> = configured_labels
-        .iter()
-        .map(|label| crate::Fcitx5CandidateUtf8 {
-            ptr: label.as_ptr(),
-            len: label.len(),
-        })
-        .collect();
-    let build_config = Fcitx5CandidateVisualBuildConfig {
-        configured_labels: configured_refs.as_ptr(),
-        configured_label_count: configured_refs.len(),
-    };
+    let build_config = Fcitx5CandidateVisualBuildConfig { configured_labels };
     let built = state.arena.build(&build_inputs, &build_config);
     if built != current.candidates.len() {
         return FrameUpdateOutcome::Dismiss;
@@ -465,21 +446,13 @@ pub fn frame_update(
         let item_widths: Vec<f32> = items.iter().map(|item| item.width).collect();
         let work_width = (work_area.right - work_area.left).max(0.0);
         let hard_limit = layout_max_width.min(work_width);
-        // SAFETY: `fcitx5_candidate_horizontal_natural_downgrade` reads only
-        // `item_widths.as_ptr()` for `item_widths.len()` elements (both valid
-        // above) and the scalar arguments; it writes nothing and cannot retain
-        // the pointer beyond the call.
-        if unsafe {
-            fcitx5_candidate_horizontal_natural_downgrade(
-                item_widths.as_ptr(),
-                item_widths.len(),
-                config.padding_x_dip * scale,
-                config.column_gap_dip * scale,
-                preedit_panel_width,
-                hard_limit,
-            )
-        } != 0
-        {
+        if horizontal_natural_downgrade(
+            &item_widths,
+            config.padding_x_dip * scale,
+            config.column_gap_dip * scale,
+            preedit_panel_width,
+            hard_limit,
+        ) {
             horizontal = false;
             // A vertical list aligns every candidate's columns, while the
             // horizontal row just measured kept each one natural.
@@ -549,8 +522,6 @@ pub fn frame_update(
         })
         .collect();
     let assembly_input = crate::Fcitx5CandidateWindowAssemblyInput {
-        presentation: state.presentation as *const CandidatePresentationState
-            as *const core::ffi::c_void,
         window_x: axis_result.window.left,
         window_y: axis_result.window.top,
         window_w: axis_result.window.right - axis_result.window.left,
@@ -568,8 +539,7 @@ pub fn frame_update(
         item_padding_y: measure_params.item_padding_y,
         viewport_dx,
         viewport_dy,
-        items: assembly_items.as_ptr(),
-        item_count: assembly_items.len(),
+        items: &assembly_items,
     };
     let mut assembly = crate::Fcitx5CandidateWindowAssemblyOutput::default();
     let mut assembly_rects = vec![Fcitx5CandidateLayoutRect::default(); assembly_items.len()];

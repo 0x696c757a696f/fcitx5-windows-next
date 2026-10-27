@@ -1,13 +1,6 @@
 //! Parses the candidate host command line from its raw UTF-16 form.
 
-#![deny(unsafe_op_in_unsafe_fn)]
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct Fcitx5CandidateUtf16 {
-    pub ptr: *const u16,
-    pub len: usize,
-}
+#![forbid(unsafe_code)]
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -146,19 +139,6 @@ pub(crate) fn parse_parent_id(arguments: &[u16]) -> Option<u32> {
     (saw_digit && parsed != 0).then_some(parsed.min(u64::from(u32::MAX)) as u32)
 }
 
-pub(crate) fn write_wide_units(value: &[u16], out: *mut u16, capacity: usize) -> usize {
-    if !out.is_null() && capacity != 0 {
-        let count = value.len().min(capacity);
-        if count != 0 {
-            // SAFETY: `out` is non-null and the caller provides `capacity` writable u16 units.
-            unsafe {
-                std::ptr::copy_nonoverlapping(value.as_ptr(), out, count);
-            }
-        }
-    }
-    value.len()
-}
-
 pub fn parse_candidate_command_line(
     arguments: &[u16],
 ) -> (Fcitx5CandidateCommandLine, Vec<u16>, Vec<u16>) {
@@ -248,35 +228,4 @@ pub fn parse_candidate_command_line(
     }
 
     (parsed, generation, candidate_peer)
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `arguments` must be null only when `arguments_len` is zero, or point to a
-/// readable UTF-16 buffer with exactly the provided length. Output buffers may
-/// be null for size queries or point to writable UTF-16 storage for their
-/// capacities. No pointer is retained.
-pub unsafe extern "C" fn fcitx5_candidate_parse_command_line_utf16(
-    arguments: *const u16,
-    arguments_len: usize,
-    generation_out: *mut u16,
-    generation_capacity: usize,
-    candidate_peer_out: *mut u16,
-    candidate_peer_capacity: usize,
-) -> Fcitx5CandidateCommandLine {
-    if arguments.is_null() && arguments_len != 0 {
-        return Fcitx5CandidateCommandLine::default();
-    }
-    let arguments = if arguments.is_null() {
-        &[]
-    } else {
-        // SAFETY: the ABI contract keeps `arguments_len` UTF-16 units readable for this call.
-        unsafe { std::slice::from_raw_parts(arguments, arguments_len) }
-    };
-    let (mut parsed, generation, candidate_peer) = parse_candidate_command_line(arguments);
-    parsed.generation_len = write_wide_units(&generation, generation_out, generation_capacity);
-    parsed.candidate_peer_len =
-        write_wide_units(&candidate_peer, candidate_peer_out, candidate_peer_capacity);
-    parsed
 }

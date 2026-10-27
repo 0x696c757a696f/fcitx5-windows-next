@@ -303,38 +303,6 @@ add_dependencies(fcitx5_config_core_rust fcitx5_config_core_rustlib)
 target_link_libraries(fcitx5_config_core_rust
                       INTERFACE advapi32 bcrypt ntdll userenv ws2_32)
 
-set(FCITX_RUST_CANDIDATE_CORE_STATICLIB
-    "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_candidate_core.lib")
-add_custom_command(
-  OUTPUT "${FCITX_RUST_CANDIDATE_CORE_STATICLIB}"
-  COMMAND
-    "${CMAKE_COMMAND}" -E env ${FCITX_RUST_BUILD_ENV}
-    "${FCITX_CARGO_EXECUTABLE}" build --locked --manifest-path
-    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml" -p fcitx5-candidate-core --lib --target
-    "${FCITX_RUST_TARGET}"
-  DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
-    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/Cargo.toml"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/lib.rs"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/axis_layout.rs"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/candidate_abi.rs"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/frame_ffi.rs"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/frame_update.rs"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/measure_ffi.rs"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/presentation_server.rs"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/renderer.rs"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/ui_plan.rs"
-    "${CMAKE_CURRENT_SOURCE_DIR}/rust/candidate-core/src/window_host.rs"
-  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-  COMMENT "Building Rust fcitx5-candidate-core staticlib")
-add_custom_target(fcitx5_candidate_core_rustlib
-                  DEPENDS "${FCITX_RUST_CANDIDATE_CORE_STATICLIB}")
-add_library(fcitx5_candidate_core_rust STATIC IMPORTED GLOBAL)
-set_target_properties(fcitx5_candidate_core_rust
-                      PROPERTIES IMPORTED_LOCATION "${FCITX_RUST_CANDIDATE_CORE_STATICLIB}")
-add_dependencies(fcitx5_candidate_core_rust fcitx5_candidate_core_rustlib)
-
 set(FCITX_RUST_PROTOCOL_CORE_STATICLIB
     "${FCITX_CARGO_TARGET_DIR}/${FCITX_RUST_TARGET}/debug/fcitx5_protocol_core.lib")
 add_custom_command(
@@ -570,13 +538,6 @@ add_custom_target(
 # shipping-lineage byte-identical check.
 add_dependencies(fcitx5_config_shipping fcitx5_ui_rustbin)
 add_custom_target(fcitx5_config_app ALL DEPENDS fcitx5_config_shipping)
-
-add_library(fcitx5_candidate_layout INTERFACE)
-add_library(fcitx5::candidate_layout ALIAS fcitx5_candidate_layout)
-target_compile_features(fcitx5_candidate_layout INTERFACE cxx_std_20)
-target_link_libraries(fcitx5_candidate_layout INTERFACE fcitx5_candidate_core_rust ws2_32 userenv
-                                                     ntdll)
-add_dependencies(fcitx5_candidate_layout fcitx5_candidate_core_rustlib)
 
 # 082: fcitx5-ui.exe is the Rust candidate-UI host binary. The C++ shell
 # (src/ui/ui_host.cpp) was deleted; the exe is built by cargo from
