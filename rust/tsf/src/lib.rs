@@ -207,25 +207,27 @@ fn wide_from_str(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+fn current_module_handle() -> Option<HMODULE> {
+    let mut module: HMODULE = HMODULE(null_mut());
+    // SAFETY: this function's own address identifies this DLL module; the
+    // unchanged-refcount flag avoids leaking the extra module reference.
+    let resolved = unsafe {
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            PCWSTR(current_module_handle as *const () as *const u16),
+            &mut module,
+        )
+    };
+    (resolved.is_ok() && !module.0.is_null()).then_some(module)
+}
+
 fn current_module_path() -> Result<Vec<u16>> {
     // The TSF DLL can be loaded into another host (the elevated register
     // helper loads it and calls DllRegisterServer), so
     // `GetModuleFileNameW(None)` would name the host executable instead of
     // this DLL. Resolve this module's own handle from this function's address
     // so InprocServer32/RegisterProfile record the real fcitx5-tsf.dll path.
-    let mut module: HMODULE = HMODULE(null_mut());
-    // SAFETY: `current_module_path`'s own address identifies this DLL module;
-    // the unchanged-refcount flag avoids leaking the extra module reference.
-    let resolved = unsafe {
-        GetModuleHandleExW(
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            PCWSTR(current_module_path as *const () as *const u16),
-            &mut module,
-        )
-    };
-    if resolved.is_err() || module.0.is_null() {
-        return Err(E_FAIL.into());
-    }
+    let module = current_module_handle().ok_or_else(|| windows_core::Error::from(E_FAIL))?;
     let mut buffer = vec![0u16; 32768];
     // SAFETY: The buffer is valid writable memory and the module handle names
     // this TSF DLL in the current process.
@@ -1085,6 +1087,7 @@ unsafe extern "system" {
     fn GetWindowLongPtrW(window: *mut c_void, index: i32) -> isize;
     fn PostMessageW(window: *mut c_void, message: u32, wparam: usize, lparam: isize) -> i32;
     fn RegisterClassW(class: *const CandidateDispatchWndClass) -> u16;
+    fn UnregisterClassW(class_name: *const u16, instance: *mut c_void) -> i32;
     #[cfg(target_pointer_width = "64")]
     fn SetWindowLongPtrW(window: *mut c_void, index: i32, value: isize) -> isize;
 }
@@ -1168,9 +1171,17 @@ unsafe extern "system" fn candidate_dispatch_window_procedure(
         let service =
             unsafe { candidate_dispatch_user_data(window) } as *const Fcitx5TsfService_Impl;
         if !service.is_null() {
-            // SAFETY: the window is destroyed before the service is released,
-            // and this callback runs on the TSF thread that owns its RefCells.
-            unsafe { (&*service).handle_candidate_notification() };
+            // A panic must not unwind out of a window procedure inside the
+            // host process; that aborts the application the user is typing in.
+            let handled = catch_unwind(AssertUnwindSafe(|| {
+                // SAFETY: the window is destroyed before the service is
+                // released, and this callback runs on the TSF thread that owns
+                // its RefCells.
+                unsafe { (&*service).handle_candidate_notification() };
+            }));
+            if handled.is_err() {
+                trace_event("candidate_notification_panicked");
+            }
         }
         return 0;
     }
@@ -1183,13 +1194,24 @@ unsafe extern "system" fn candidate_dispatch_window_procedure(
     unsafe { DefWindowProcW(window, message, wparam, lparam) }
 }
 
+/// The class is registered under this DLL's instance, not the host executable's:
+/// a class owned by the host would outlive an unloaded DLL and keep pointing at
+/// its old window procedure after the DLL is loaded again.
+fn candidate_dispatch_instance() -> *mut c_void {
+    current_module_handle().map_or(null_mut(), |module| module.0)
+}
+
 fn create_candidate_dispatch_window(service: *const Fcitx5TsfService_Impl) -> *mut c_void {
+    let instance = candidate_dispatch_instance();
+    if instance.is_null() {
+        return null_mut();
+    }
     let class = CandidateDispatchWndClass {
         style: 0,
         window_proc: Some(candidate_dispatch_window_procedure),
         class_extra: 0,
         window_extra: 0,
-        instance: null_mut(),
+        instance,
         icon: null_mut(),
         cursor: null_mut(),
         background: null_mut(),
@@ -1212,9 +1234,33 @@ fn create_candidate_dispatch_window(service: *const Fcitx5TsfService_Impl) -> *m
             0,
             HWND_MESSAGE,
             null_mut(),
-            null_mut(),
+            instance,
             service.cast_mut().cast(),
         )
+    }
+}
+
+/// Destroys the message-only window and unregisters its class once no other
+/// thread of this process still uses it, so nothing in the host keeps a
+/// pointer into this DLL after it unloads.
+fn destroy_candidate_dispatch_window(window: *mut c_void) {
+    if window.is_null() {
+        return;
+    }
+    // SAFETY: `window` is the message-only HWND created by this module. The
+    // user-data slot is cleared first so a message that is still queued can no
+    // longer reach the service, even if DestroyWindow fails on another thread.
+    unsafe {
+        set_candidate_dispatch_user_data(window, 0);
+        let _ = DestroyWindow(window);
+    }
+    // SAFETY: the class name is a static NUL-terminated string; this fails
+    // harmlessly while another thread's window still uses the class.
+    unsafe {
+        let _ = UnregisterClassW(
+            CANDIDATE_NOTIFICATION_CLASS.as_ptr(),
+            candidate_dispatch_instance(),
+        );
     }
 }
 
@@ -2325,8 +2371,24 @@ impl TsfRuntimeState {
     }
 }
 
+// TSF keeps the composition sink and the candidate UI element after the
+// service is gone, so each holds a module reference: the DLL must not unload
+// while TSF can still call into them.
 #[implement(ITfCompositionSink)]
 struct Fcitx5CompositionSink;
+
+impl Fcitx5CompositionSink {
+    fn new() -> Self {
+        module_add_ref();
+        Self
+    }
+}
+
+impl Drop for Fcitx5CompositionSink {
+    fn drop(&mut self) {
+        module_release();
+    }
+}
 
 impl ITfCompositionSink_Impl for Fcitx5CompositionSink_Impl {
     fn OnCompositionTerminated(
@@ -2348,12 +2410,19 @@ struct Fcitx5CandidateListUiElement {
 
 impl Fcitx5CandidateListUiElement {
     fn new(candidates: Vec<CandidateUiRecord>, selection: u32, page_start: u32) -> Self {
+        module_add_ref();
         Self {
             shown: RefCell::new(BOOL(0)),
             candidates,
             selection,
             page_start,
         }
+    }
+}
+
+impl Drop for Fcitx5CandidateListUiElement {
+    fn drop(&mut self) {
+        module_release();
     }
 }
 
@@ -2838,7 +2907,7 @@ struct Fcitx5TsfService {
 impl Fcitx5TsfService {
     fn new() -> Self {
         module_add_ref();
-        let sink = ComObject::new(Fcitx5CompositionSink);
+        let sink = ComObject::new(Fcitx5CompositionSink::new());
         Self {
             state: RefCell::default(),
             runtime: RefCell::new(TsfRuntimeState {
@@ -2921,34 +2990,46 @@ impl Fcitx5TsfService {
         let thread_focus_unknown: IUnknown = thread_focus_sink.cast()?;
         let active_profile_unknown: IUnknown = active_profile_sink.cast()?;
 
-        // SAFETY: The sinks are COM interfaces implemented by this live service;
-        // TSF stores AddRef'ed references until Deactivate unadvises them.
-        unsafe { keystroke_manager.AdviseKeyEventSink(client_id, &key_sink, true)? };
-        // SAFETY: ITfSource belongs to the same live thread manager. Cookies are
-        // stored and released on Deactivate.
-        let thread_event_cookie =
-            unsafe { source.AdviseSink(&ITfThreadMgrEventSink::IID, &thread_event_unknown)? };
-        // SAFETY: ITfSource belongs to the same live thread manager. TSF retains
-        // this AddRef'ed sink until the returned cookie is unadvised on Deactivate.
-        let thread_focus_cookie =
-            unsafe { source.AdviseSink(&ITfThreadFocusSink::IID, &thread_focus_unknown)? };
-        // SAFETY: ITfSource belongs to the same live thread manager. TSF retains
-        // this AddRef'ed sink until the returned cookie is unadvised on Deactivate.
-        let active_profile_cookie = unsafe {
-            source.AdviseSink(
-                &ITfActiveLanguageProfileNotifySink::IID,
-                &active_profile_unknown,
-            )?
-        };
-
+        // Record each registration as it succeeds so a failure part-way
+        // through can be undone: otherwise TSF keeps calling sinks of a
+        // service that believes it is inactive and never unadvises them.
         runtime.client_id = client_id;
+        runtime.keystroke_manager = Some(keystroke_manager.clone());
+        runtime.source = Some(source.clone());
+        let advised = (|| -> Result<()> {
+            // SAFETY: The sinks are COM interfaces implemented by this live
+            // service; TSF stores AddRef'ed references until Deactivate
+            // unadvises them.
+            unsafe { keystroke_manager.AdviseKeyEventSink(client_id, &key_sink, true)? };
+            // SAFETY: ITfSource belongs to the same live thread manager.
+            // Cookies are stored and released on Deactivate.
+            runtime.thread_event_cookie = Some(unsafe {
+                source.AdviseSink(&ITfThreadMgrEventSink::IID, &thread_event_unknown)?
+            });
+            // SAFETY: ITfSource belongs to the same live thread manager. TSF
+            // retains this AddRef'ed sink until the cookie is unadvised.
+            runtime.thread_focus_cookie = Some(unsafe {
+                source.AdviseSink(&ITfThreadFocusSink::IID, &thread_focus_unknown)?
+            });
+            // SAFETY: ITfSource belongs to the same live thread manager. TSF
+            // retains this AddRef'ed sink until the cookie is unadvised.
+            runtime.active_profile_cookie = Some(unsafe {
+                source.AdviseSink(
+                    &ITfActiveLanguageProfileNotifySink::IID,
+                    &active_profile_unknown,
+                )?
+            });
+            Ok(())
+        })();
+        if let Err(error) = advised {
+            drop(runtime);
+            let _ = self.deactivate_runtime();
+            trace_event("activate_runtime_advise_failed");
+            return Err(error);
+        }
+
         runtime.guard_fail_open = false;
         runtime.active = true;
-        runtime.thread_event_cookie = Some(thread_event_cookie);
-        runtime.thread_focus_cookie = Some(thread_focus_cookie);
-        runtime.active_profile_cookie = Some(active_profile_cookie);
-        runtime.keystroke_manager = Some(keystroke_manager);
-        runtime.source = Some(source);
         runtime.ui_element_manager = ui_element_manager;
         runtime.engine_client = engine_client;
         runtime.popup_allowed = true;
@@ -2987,13 +3068,7 @@ impl Fcitx5TsfService {
         if let Some(stop) = stop {
             stop.store(true, Ordering::Release);
         }
-        if !window.is_null() {
-            // SAFETY: this is the message-only HWND created by Activate and
-            // destruction happens on the owning TSF thread.
-            unsafe {
-                let _ = DestroyWindow(window);
-            }
-        }
+        destroy_candidate_dispatch_window(window);
         if let Some(thread) = thread {
             let _ = thread.join();
         }
@@ -3384,6 +3459,20 @@ impl Fcitx5TsfService {
 
 impl Drop for Fcitx5TsfService {
     fn drop(&mut self) {
+        // Deactivate normally does this. A host that releases the service
+        // without deactivating it must not leave a window holding a pointer to
+        // the freed service or a thread running in this DLL.
+        let runtime = self.runtime.get_mut();
+        if let Some(stop) = runtime.candidate_notification_stop.take() {
+            stop.store(true, Ordering::Release);
+        }
+        destroy_candidate_dispatch_window(std::mem::replace(
+            &mut runtime.candidate_dispatch_window,
+            null_mut(),
+        ));
+        if let Some(thread) = runtime.candidate_notification_thread.take() {
+            let _ = thread.join();
+        }
         module_release();
     }
 }
@@ -4594,6 +4683,18 @@ mod tests {
         let started = common::fcitx5_windows_common_tick_milliseconds();
         assert!(client.begin_request(true).is_none());
         assert!(common::fcitx5_windows_common_tick_milliseconds() - started < 100);
+    }
+
+    #[test]
+    fn objects_tsf_keeps_after_the_service_hold_the_module() {
+        let _module_state = lock_module_state();
+        let before = module_reference_count();
+        let sink = ComObject::new(Fcitx5CompositionSink::new());
+        let element = ComObject::new(Fcitx5CandidateListUiElement::new(Vec::new(), 0, 0));
+        assert_eq!(module_reference_count(), before + 2);
+        drop(sink);
+        drop(element);
+        assert_eq!(module_reference_count(), before);
     }
 
     #[test]
