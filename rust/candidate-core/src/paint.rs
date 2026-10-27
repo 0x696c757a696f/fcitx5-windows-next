@@ -101,6 +101,8 @@ pub struct FramePaint<'a> {
     pub theme: Fcitx5CandidateRenderThemeInput,
     pub geometry: RenderGeometry,
     pub preedit: Option<&'a str>,
+    /// Must be the family the frame was measured with.
+    pub font_family: &'a str,
     pub high_contrast: bool,
     pub selected: Option<usize>,
 }
@@ -190,7 +192,7 @@ pub fn render_frame(frame: &FramePaint<'_>) -> RenderWindowOutput {
         candidates: frame.candidates,
         theme: &render_theme(&frame.theme),
         geometry: &geometry,
-        font_family: "Microsoft YaHei UI",
+        font_family: frame.font_family,
         preedit,
         dpi_scale: 1.0,
         high_contrast: frame.high_contrast,

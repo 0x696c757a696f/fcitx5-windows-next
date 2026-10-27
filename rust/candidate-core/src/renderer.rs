@@ -1394,10 +1394,33 @@ fn text_style<'a>(family: &'a str, size: f32) -> WindTextStyle<'a> {
     }
 }
 
+/// Font family used when the configured candidate families name nothing
+/// installed on this machine.
+pub const DEFAULT_CANDIDATE_FAMILY: &str = "Microsoft YaHei UI";
+
+/// Picks the candidate font from a configured family list: the first entry
+/// installed here, skipping the `system` / `inherit` keywords, else the
+/// default family. Measurement and paint must both use the result.
+#[must_use]
+pub fn resolve_candidate_family(families: &[String]) -> String {
+    families
+        .iter()
+        .map(|family| family.trim())
+        .filter(|family| {
+            !family.is_empty()
+                && !family.eq_ignore_ascii_case("system")
+                && !family.eq_ignore_ascii_case("inherit")
+        })
+        .find(|family| windui::text::family_available(family))
+        .unwrap_or(DEFAULT_CANDIDATE_FAMILY)
+        .to_owned()
+}
+
 /// Owns the windui DirectWrite engine for host-side text measurement.
 pub struct MeasureEngine {
     // DWriteEngine keeps its own bounded measurement cache.
     engine: DWriteEngine,
+    family: String,
 }
 
 impl MeasureEngine {
@@ -1405,26 +1428,27 @@ impl MeasureEngine {
     pub fn new() -> Self {
         Self {
             engine: DWriteEngine::new(),
+            family: DEFAULT_CANDIDATE_FAMILY.to_owned(),
         }
+    }
+
+    /// Sets the family `measure` uses; paint must draw with the same one.
+    pub fn set_family(&mut self, family: &str) {
+        if self.family != family {
+            family.clone_into(&mut self.family);
+        }
+    }
+
+    #[must_use]
+    pub fn family(&self) -> &str {
+        &self.family
     }
 
     /// Logical-DIP width/height of a single-line UTF-8 run.
     #[must_use]
     pub fn measure(&mut self, text: &str, font_size: f32, dpi_scale: f32) -> (f32, f32) {
-        self.measure_with_family(text, "Microsoft YaHei UI", font_size, dpi_scale)
-    }
-
-    /// Logical-DIP width/height with the resolved candidate font family.
-    #[must_use]
-    pub fn measure_with_family(
-        &mut self,
-        text: &str,
-        family: &str,
-        font_size: f32,
-        dpi_scale: f32,
-    ) -> (f32, f32) {
         self.engine.set_scale(dpi_scale);
-        let style = text_style(family, font_size.max(1.0));
+        let style = text_style(&self.family, font_size.max(1.0));
         let size = TextEngine::measure(&mut self.engine, text, &style, None);
         (size.w as f32, size.h as f32)
     }
