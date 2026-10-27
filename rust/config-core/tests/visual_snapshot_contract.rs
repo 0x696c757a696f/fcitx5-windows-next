@@ -31,11 +31,7 @@ impl TestDirectory {
     }
 
     fn write_builtin_theme(&self) {
-        let directory = self
-            .install_root()
-            .join("resources")
-            .join("themes")
-            .join("default");
+        let directory = self.install_root().join("themes").join("default");
         fs::create_dir_all(&directory).expect("builtin theme directory should be created");
         fs::write(
             directory.join("theme.toml"),

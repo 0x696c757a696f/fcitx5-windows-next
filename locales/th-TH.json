@@ -270,4 +270,9 @@
   ,"settings.shortcuts.toggle_input_method": "สลับระหว่างแป้นพิมพ์กับวิธีป้อนข้อมูลเริ่มต้น"
   ,"settings.shortcuts.next_input_method": "วิธีป้อนข้อมูลถัดไป"
   ,"settings.shortcuts.same": "ปุ่มลัดทั้งสองต้องไม่ซ้ำกัน"
+  ,"theme.builtin.ink": "หมึก"
+  ,"theme.builtin.azure": "ฟ้าคราม"
+  ,"theme.builtin.sakura": "ซากุระ"
+  ,"theme.builtin.nord": "นอร์ด"
+  ,"theme.builtin.amber": "อำพัน"
 }

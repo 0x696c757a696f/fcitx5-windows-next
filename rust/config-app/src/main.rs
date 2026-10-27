@@ -297,6 +297,9 @@ struct PluginCatalogEntry {
 
 const FCITX5_PLUGINS_REFERENCE_COMMIT: &str = "26a94720f0a01e106046f6a7607215ff96bf2f6f";
 const CONTROL_TIMEOUT_MS: u32 = 120_000;
+/// Install and update download the package first, which can take far longer than a local
+/// operation on a slow connection; stopping them early only leaves work to roll back.
+const CONTROL_TRANSFER_TIMEOUT_MS: u32 = 30 * 60 * 1000;
 const CONTROL_MAX_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const FCITX5_PLUGIN_CATALOG: &[PluginCatalogEntry] = &[
     PluginCatalogEntry {
@@ -714,14 +717,13 @@ fn control_executable() -> Result<PathBuf, String> {
 }
 
 fn run_control(arguments: &[OsString]) -> Result<String, String> {
+    run_control_within(arguments, CONTROL_TIMEOUT_MS)
+}
+
+fn run_control_within(arguments: &[OsString], timeout_ms: u32) -> Result<String, String> {
     let executable = control_executable()?;
-    let result = run_process_bounded(
-        &executable,
-        arguments,
-        CONTROL_TIMEOUT_MS,
-        CONTROL_MAX_OUTPUT_BYTES,
-    )
-    .map_err(|error| format!("运行 fcitx5-control.exe 失败：{error}"))?;
+    let result = run_process_bounded(&executable, arguments, timeout_ms, CONTROL_MAX_OUTPUT_BYTES)
+        .map_err(|error| format!("运行 fcitx5-control.exe 失败：{error}"))?;
     if result.success {
         Ok(result.output)
     } else {
@@ -939,7 +941,13 @@ impl CandidateLayoutUiOptions {
 
 fn execute_plugin_operation(operation: &PluginOperation) -> Result<PluginManagerSnapshot, String> {
     let arguments = plugin_control_arguments(operation)?;
-    let output = run_control(&arguments)?;
+    let timeout_ms = match operation {
+        PluginOperation::Refresh | PluginOperation::Install(_) | PluginOperation::Update(_) => {
+            CONTROL_TRANSFER_TIMEOUT_MS
+        }
+        _ => CONTROL_TIMEOUT_MS,
+    };
+    let output = run_control_within(&arguments, timeout_ms)?;
     if matches!(operation, PluginOperation::List) {
         return parse_control_package_list(&output);
     }
@@ -949,7 +957,9 @@ fn execute_plugin_operation(operation: &PluginOperation) -> Result<PluginManager
 
 fn spawn_plugin_operation(sender: WindUiSender<PluginResponse>, operation: PluginOperation) {
     thread::spawn(move || {
-        let result = execute_plugin_operation(&operation);
+        // The page waits for this response; a panic must still end the operation.
+        let result = std::panic::catch_unwind(|| execute_plugin_operation(&operation))
+            .unwrap_or_else(|_| Err("fcitx5-control.exe 返回失败".to_owned()));
         let _ = sender.send(PluginResponse { operation, result });
     });
 }
@@ -1651,9 +1661,16 @@ fn windui_settings_root(
         .iter()
         .map(|theme| {
             if theme.id == DEFAULT_THEME_ID {
-                locale.text("theme.default")
-            } else {
-                theme.name.clone()
+                return locale.text("theme.default");
+            }
+            let builtin = theme
+                .id
+                .strip_prefix("builtin:")
+                .map(|name| format!("theme.builtin.{name}"))
+                .map(|key| (locale.text(&key), key));
+            match builtin {
+                Some((text, key)) if text != key => text,
+                _ => theme.name.clone(),
             }
         })
         .collect();

@@ -416,7 +416,8 @@ struct VisualConfig {
 fn load_visual_config(safe_mode: bool) -> Option<VisualConfig> {
     let data_root = local_data_directory()?;
     let identity = CurrentUserRuntimeIdentity::current()?;
-    let installation = identity.executable_path().parent()?.to_path_buf();
+    // Shipped themes live beside bin/, at <install>/themes/<name>.
+    let installation = identity.executable_path().parent()?.parent()?.to_path_buf();
     let current_path = data_root.join("config.toml");
     let store = FileStore::new();
     let request = VisualSnapshotRequest::new(

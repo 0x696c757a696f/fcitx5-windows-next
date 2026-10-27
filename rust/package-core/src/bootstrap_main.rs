@@ -276,9 +276,12 @@ fn quote(path: &Path) -> String {
 mod win32 {
     #![deny(unsafe_op_in_unsafe_fn)]
 
-    use std::ffi::{c_void, OsString};
-    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::process::CommandExt;
     use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
 
     type Handle = *mut c_void;
 
@@ -293,36 +296,6 @@ mod win32 {
     const SEE_MASK_NOCLOSEPROCESS: u32 = 0x0000_0040;
     const SEE_MASK_NOASYNC: u32 = 0x0000_0100;
     const SW_HIDE: i32 = 0;
-
-    #[repr(C)]
-    struct StartupInfoW {
-        cb: u32,
-        reserved: *mut u16,
-        desktop: *mut u16,
-        title: *mut u16,
-        x: u32,
-        y: u32,
-        x_size: u32,
-        y_size: u32,
-        x_count_chars: u32,
-        y_count_chars: u32,
-        fill_attribute: u32,
-        flags: u32,
-        show_window: u16,
-        reserved2: u16,
-        reserved2_ptr: *mut u8,
-        std_input: Handle,
-        std_output: Handle,
-        std_error: Handle,
-    }
-
-    #[repr(C)]
-    struct ProcessInformation {
-        process: Handle,
-        thread: Handle,
-        process_id: u32,
-        thread_id: u32,
-    }
 
     #[repr(C)]
     struct ShellExecuteInfoW {
@@ -346,19 +319,6 @@ mod win32 {
     #[link(name = "user32")]
     // SAFETY: declarations use the Windows system ABI and exact Win32 layouts; every call below supplies documented valid buffers or handles.
     unsafe extern "system" {
-        fn GetModuleFileNameW(module: Handle, filename: *mut u16, size: u32) -> u32;
-        fn CreateProcessW(
-            application_name: *const u16,
-            command_line: *mut u16,
-            process_attributes: Handle,
-            thread_attributes: Handle,
-            inherit_handles: i32,
-            creation_flags: u32,
-            environment: Handle,
-            current_directory: *const u16,
-            startup_info: *mut StartupInfoW,
-            process_information: *mut ProcessInformation,
-        ) -> i32;
         fn CloseHandle(object: Handle) -> i32;
         fn WaitForSingleObject(handle: Handle, milliseconds: u32) -> u32;
         fn GetExitCodeProcess(process: Handle, exit_code: *mut u32) -> i32;
@@ -374,144 +334,46 @@ mod win32 {
     }
 
     pub fn module_path() -> Option<PathBuf> {
-        let mut buffer = vec![0u16; 32768];
-        // SAFETY: buffer is writable for its stated u16 length and remains live for the call; null module selects this executable.
-        let length = unsafe {
-            GetModuleFileNameW(
-                std::ptr::null_mut(),
-                buffer.as_mut_ptr(),
-                buffer.len() as u32,
-            )
-        };
-        if length == 0 || length as usize >= buffer.len() {
-            return None;
-        }
-        buffer.truncate(length as usize);
-        Some(PathBuf::from(OsString::from_wide(&buffer)))
+        std::env::current_exe().ok()
     }
 
     pub fn launch_and_wait(executable: &Path, arguments: &str, timeout_ms: u32) -> Option<u32> {
-        let mut command = wide_nul(&format!("{} {arguments}", quote(executable)));
-        let mut startup = StartupInfoW {
-            cb: std::mem::size_of::<StartupInfoW>() as u32,
-            reserved: std::ptr::null_mut(),
-            desktop: std::ptr::null_mut(),
-            title: std::ptr::null_mut(),
-            x: 0,
-            y: 0,
-            x_size: 0,
-            y_size: 0,
-            x_count_chars: 0,
-            y_count_chars: 0,
-            fill_attribute: 0,
-            flags: 0,
-            show_window: 0,
-            reserved2: 0,
-            reserved2_ptr: std::ptr::null_mut(),
-            std_input: std::ptr::null_mut(),
-            std_output: std::ptr::null_mut(),
-            std_error: std::ptr::null_mut(),
-        };
-        let mut process = ProcessInformation {
-            process: std::ptr::null_mut(),
-            thread: std::ptr::null_mut(),
-            process_id: 0,
-            thread_id: 0,
-        };
-        // SAFETY: application and mutable command strings are NUL-terminated and live through the call; startup/process records have exact Win32 layout.
-        let created = unsafe {
-            CreateProcessW(
-                wide_path(executable).as_ptr(),
-                command.as_mut_ptr(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                0,
-                CREATE_NO_WINDOW,
-                std::ptr::null_mut(),
-                std::ptr::null(),
-                &mut startup,
-                &mut process,
-            )
-        };
-        if created == 0 {
-            return None;
-        }
-        // SAFETY: CreateProcessW returned a nonzero result, so process.thread is an owned valid handle closed exactly once here.
-        unsafe {
-            let _ = CloseHandle(process.thread);
-        }
-        // SAFETY: process.process is the owned valid process handle returned by successful CreateProcessW and remains open through the wait.
-        let wait = unsafe { WaitForSingleObject(process.process, timeout_ms) };
-        let mut exit_code = 0;
-        let success = wait == WAIT_OBJECT_0
-            // SAFETY: process.process remains an owned valid handle; exit_code is aligned writable storage for the duration of the call.
-            && unsafe { GetExitCodeProcess(process.process, &mut exit_code) } != 0;
-        if wait == WAIT_TIMEOUT {
-            // SAFETY: process.process remains the owned valid handle; terminating and waiting do not transfer or alias its ownership.
-            unsafe {
-                let _ = TerminateProcess(process.process, ERROR_TIMEOUT);
-                let _ = WaitForSingleObject(process.process, 5000);
+        let mut child = command(executable, arguments, CREATE_NO_WINDOW)
+            .spawn()
+            .ok()?;
+        let deadline = Instant::now() + Duration::from_millis(u64::from(timeout_ms));
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => return status.code().map(|code| code as u32),
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Ok(None) | Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
             }
         }
-        // SAFETY: process.process is still the one owned handle returned by CreateProcessW and is closed exactly once after all use.
-        unsafe {
-            let _ = CloseHandle(process.process);
-        }
-        success.then_some(exit_code)
     }
 
     pub fn launch_detached(executable: &Path, arguments: &str) -> bool {
-        let mut command = wide_nul(&format!("{} {arguments}", quote(executable)));
-        let mut startup = StartupInfoW {
-            cb: std::mem::size_of::<StartupInfoW>() as u32,
-            reserved: std::ptr::null_mut(),
-            desktop: std::ptr::null_mut(),
-            title: std::ptr::null_mut(),
-            x: 0,
-            y: 0,
-            x_size: 0,
-            y_size: 0,
-            x_count_chars: 0,
-            y_count_chars: 0,
-            fill_attribute: 0,
-            flags: 0,
-            show_window: 0,
-            reserved2: 0,
-            reserved2_ptr: std::ptr::null_mut(),
-            std_input: std::ptr::null_mut(),
-            std_output: std::ptr::null_mut(),
-            std_error: std::ptr::null_mut(),
-        };
-        let mut process = ProcessInformation {
-            process: std::ptr::null_mut(),
-            thread: std::ptr::null_mut(),
-            process_id: 0,
-            thread_id: 0,
-        };
-        // SAFETY: application and mutable command strings are NUL-terminated and live through the call; startup/process records have exact Win32 layout.
-        let created = unsafe {
-            CreateProcessW(
-                wide_path(executable).as_ptr(),
-                command.as_mut_ptr(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                0,
-                CREATE_NEW_PROCESS_GROUP,
-                std::ptr::null_mut(),
-                std::ptr::null(),
-                &mut startup,
-                &mut process,
-            )
-        };
-        if created == 0 {
-            return false;
+        command(executable, arguments, CREATE_NEW_PROCESS_GROUP)
+            .spawn()
+            .is_ok()
+    }
+
+    fn command(executable: &Path, arguments: &str, creation_flags: u32) -> Command {
+        let mut command = Command::new(executable);
+        if !arguments.is_empty() {
+            command.raw_arg(arguments);
         }
-        // SAFETY: successful CreateProcessW returned distinct owned process and thread handles, each closed exactly once here.
-        unsafe {
-            let _ = CloseHandle(process.thread);
-            let _ = CloseHandle(process.process);
-        }
-        true
+        command
+            .creation_flags(creation_flags)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command
     }
 
     pub fn shell_execute_runas_wait(
@@ -590,10 +452,6 @@ mod win32 {
                 MB_OK | icon,
             );
         }
-    }
-
-    fn quote(path: &Path) -> String {
-        format!("\"{}\"", path.display())
     }
 
     fn wide_path(path: &Path) -> Vec<u16> {
