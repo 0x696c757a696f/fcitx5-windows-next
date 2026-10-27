@@ -311,7 +311,10 @@ fn repository_now_seconds() -> Result<u64, Failure> {
         .map_err(|_| Failure::package("repository clock is unavailable"))
 }
 
-fn launcher_path() -> Result<PathBuf, Failure> {
+/// The launcher executables this Control accepts as the pipe server, most likely first. The
+/// runtime generation copy runs for installed builds, while the portable "Start Fcitx5" entry
+/// starts the top-level `bin` copy even after the generation has been materialized.
+fn launcher_paths() -> Result<Vec<PathBuf>, Failure> {
     let executable =
         std::env::current_exe().map_err(|_| Failure::launcher("launcher unavailable"))?;
     let directory = executable
@@ -324,11 +327,20 @@ fn launcher_path() -> Result<PathBuf, Failure> {
         .join(generation)
         .join("bin")
         .join("fcitx5-launcher.exe");
-    Ok(if generation_launcher.is_file() {
-        generation_launcher
-    } else {
-        directory.join("fcitx5-launcher.exe")
-    })
+    let mut paths = Vec::with_capacity(3);
+    for path in [
+        generation_launcher,
+        directory.join("fcitx5-launcher.exe"),
+        install_root.join("bin").join("fcitx5-launcher.exe"),
+    ] {
+        if path.is_file() && !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    if paths.is_empty() {
+        paths.push(directory.join("fcitx5-launcher.exe"));
+    }
+    Ok(paths)
 }
 
 fn launcher_command(command: LauncherCommand) -> Result<(), Failure> {
@@ -353,13 +365,16 @@ fn launcher_transact(command: LauncherCommand) -> Result<LauncherResponse, Failu
     let endpoint = identity
         .local_endpoint_name(&generation, "launcher")
         .ok_or_else(|| Failure::launcher("launcher unavailable"))?;
-    let expected_server = launcher_path()?;
-    let mut client = VerifiedPipeClient::connect_exact(
-        endpoint.as_os_str(),
-        &expected_server,
-        Duration::from_secs(1),
-    )
-    .ok_or_else(|| Failure::launcher("launcher unavailable"))?;
+    let mut client = launcher_paths()?
+        .iter()
+        .find_map(|expected_server| {
+            VerifiedPipeClient::connect_exact(
+                endpoint.as_os_str(),
+                expected_server,
+                Duration::from_secs(1),
+            )
+        })
+        .ok_or_else(|| Failure::launcher("launcher unavailable"))?;
     let request_id = next_launcher_request_id();
     let request = LauncherRequest {
         metadata: Metadata {

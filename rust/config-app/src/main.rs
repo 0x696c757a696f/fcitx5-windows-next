@@ -22,8 +22,8 @@ use fcitx5_control_core::{
 use fcitx5_package_core::PackageId;
 use fcitx5_process_execution_core::run_process_bounded;
 use serde::Deserialize;
+use windui::icon::WindowIcon as WindUiWindowIcon;
 use windui::prelude::{
-    brand_icon as windui_brand_icon, brand_icon_at as windui_brand_icon_at,
     signal as windui_signal, Align as WindUiAlign, App as WindUiApp, Color as WindUiColor,
     Element as WindUiElement, Fit as WindUiFit, Intent as WindUiIntent, Role as WindUiRole,
     Sender as WindUiSender, Signal as WindUiSignal, Theme as WindUiTheme,
@@ -95,9 +95,18 @@ fn apply_wechat_green_palette(theme: &mut WindUiTheme, dark: bool) {
 
 const WINDUI_SETTINGS_TITLEBAR_HEIGHT: i32 = 44;
 
+const FCITX5_LOGO_PNG: &[u8] = include_bytes!("../../../resources/icons/fcitx5-256.png");
+
+/// The Fcitx5 logo for the window and title bar, decoded from the embedded PNG.
+fn fcitx5_logo() -> Option<WindUiWindowIcon> {
+    let image = windui::render::Image::from_png_bytes(FCITX5_LOGO_PNG).ok()?;
+    WindUiWindowIcon::from_image(&image)
+}
+
 fn windui_brand_logo(size: i32) -> WindUiElement {
-    let px = (size.max(1) as u32) * 2;
-    let icon = windui_brand_icon_at(px);
+    let Some(icon) = fcitx5_logo() else {
+        return WindUiElement::col().size(size, size);
+    };
     WindUiElement::image_rgba(icon.width(), icon.height(), icon.rgba())
         .fit(WindUiFit::Contain)
         .size(size, size)
@@ -524,10 +533,16 @@ fn plugin_row_category(locale: &LocaleCatalog, package: &ControlPackage) -> Stri
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum PluginOperation {
     List,
+    /// The first list on page open, followed by an online refresh when no
+    /// verified catalog has been downloaded yet.
+    InitialLoad,
     Refresh,
     Install(String),
     Update(String),
-    SetState { id: String, enabled: bool },
+    SetState {
+        id: String,
+        enabled: bool,
+    },
     Remove(String),
     Repair,
 }
@@ -543,7 +558,7 @@ enum PluginAction {
 impl PluginOperation {
     fn label(&self, locale: &LocaleCatalog) -> String {
         match self {
-            Self::List => locale.text("settings.plugins.operation.list"),
+            Self::List | Self::InitialLoad => locale.text("settings.plugins.operation.list"),
             Self::Refresh => locale.text("settings.plugins.operation.refresh"),
             Self::Install(_) => locale.text("settings.plugins.operation.install"),
             Self::Update(_) => locale.text("settings.plugins.operation.update"),
@@ -576,7 +591,9 @@ fn plugin_control_arguments(operation: &PluginOperation) -> Result<Vec<OsString>
             .ok_or_else(|| format!("插件包 ID 无效：{id}"))
     };
     Ok(match operation {
-        PluginOperation::List => vec![OsString::from("--packages-list")],
+        PluginOperation::List | PluginOperation::InitialLoad => {
+            vec![OsString::from("--packages-list")]
+        }
         PluginOperation::Refresh => vec![OsString::from("--packages-refresh")],
         PluginOperation::Install(id) => {
             vec![OsString::from("--packages-install"), package_id(id)?]
@@ -941,7 +958,20 @@ impl CandidateLayoutUiOptions {
     }
 }
 
+/// Control's error code when no verified repository cache exists yet.
+const REPOSITORY_NOT_DOWNLOADED: &str = "repository_unavailable";
+
 fn execute_plugin_operation(operation: &PluginOperation) -> Result<PluginManagerSnapshot, String> {
+    if matches!(operation, PluginOperation::InitialLoad) {
+        let list = execute_plugin_operation(&PluginOperation::List)?;
+        if !needs_initial_refresh(&list) {
+            return Ok(list);
+        }
+        // A fresh install has no verified catalog yet; download it once so
+        // the page does not open with every plugin unavailable. If that
+        // fails the local list is still shown and Refresh stays available.
+        return Ok(execute_plugin_operation(&PluginOperation::Refresh).unwrap_or(list));
+    }
     let arguments = plugin_control_arguments(operation)?;
     let timeout_ms = match operation {
         PluginOperation::Refresh | PluginOperation::Install(_) | PluginOperation::Update(_) => {
@@ -955,6 +985,11 @@ fn execute_plugin_operation(operation: &PluginOperation) -> Result<PluginManager
     }
     let list = run_control(&plugin_control_arguments(&PluginOperation::List)?)?;
     parse_control_package_list(&list)
+}
+
+fn needs_initial_refresh(snapshot: &PluginManagerSnapshot) -> bool {
+    !snapshot.repository_available
+        && snapshot.repository_error.as_deref() == Some(REPOSITORY_NOT_DOWNLOADED)
 }
 
 fn spawn_plugin_operation(sender: WindUiSender<PluginResponse>, operation: PluginOperation) {
@@ -1099,6 +1134,8 @@ fn windui_plugins_page(
             repository_locale.text("settings.plugins.repository.loading")
         } else if state.repository_available {
             repository_locale.text("settings.plugins.repository.ready")
+        } else if state.repository_error.as_deref() == Some(REPOSITORY_NOT_DOWNLOADED) {
+            repository_locale.text("settings.plugins.repository.not_downloaded")
         } else {
             let detail = state
                 .repository_error
@@ -2051,7 +2088,7 @@ fn windui_plugin_manager(
         }
     });
     if initial_load {
-        spawn_plugin_operation(sender.clone(), PluginOperation::List);
+        spawn_plugin_operation(sender.clone(), PluginOperation::InitialLoad);
     }
     (snapshot, busy, status, sender)
 }
@@ -3363,8 +3400,11 @@ fn run_windui_settings_window(
         windui_candidate_config_manager(windui_config_path()?)?;
     let mode = candidate_adapter.with(|adapter| adapter.preview().appearance().mode().to_owned());
     let dark = shell_uses_dark(&mode, windui::event::system_prefers_dark());
-    let mut app = WindUiApp::new(PRODUCT_NAME, 1040, 700)
-        .icon(windui_brand_icon())
+    let mut app = WindUiApp::new(PRODUCT_NAME, 1040, 700);
+    if let Some(icon) = fcitx5_logo() {
+        app = app.icon(icon);
+    }
+    let mut app = app
         .frameless()
         .min_size(900, 620)
         .theme(windui_settings_shell_theme(dark));

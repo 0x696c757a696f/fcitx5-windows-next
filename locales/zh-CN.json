@@ -234,6 +234,7 @@
   ,"settings.plugins.repository.loading": "官方仓库 · 正在读取"
   ,"settings.plugins.repository.ready": "官方仓库 · 签名目录可用"
   ,"settings.plugins.repository.unavailable": "官方仓库 · 不可用{detail}"
+  ,"settings.plugins.repository.not_downloaded": "官方仓库 · 尚未下载插件目录，请点击“在线刷新”"
   ,"settings.plugins.fallback_category": "扩展"
   ,"settings.plugins.fallback_metadata": "元数据由官方 Control 目录提供"
   ,"settings.plugins.operation.list": "读取"

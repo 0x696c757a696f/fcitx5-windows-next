@@ -234,6 +234,7 @@
   "settings.plugins.repository.loading": "官方倉庫 · 正在讀取",
   "settings.plugins.repository.ready": "官方倉庫 · 簽章目錄可用",
   "settings.plugins.repository.unavailable": "官方倉庫 · 無法使用{detail}",
+  "settings.plugins.repository.not_downloaded": "官方倉庫 · 尚未下載外掛目錄，請點選「線上重新整理」",
   "settings.plugins.fallback_category": "擴充功能",
   "settings.plugins.fallback_metadata": "中繼資料由官方 Control 目錄提供",
   "settings.plugins.operation.list": "讀取",

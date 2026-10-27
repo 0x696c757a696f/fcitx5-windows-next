@@ -174,6 +174,7 @@ unsafe extern "system" {
         height: i32,
         flags: u32,
     ) -> i32;
+    fn SetWindowRgn(window: Hwnd, region: *mut c_void, redraw: i32) -> i32;
     fn ShowWindow(window: Hwnd, command: i32) -> i32;
     fn PostQuitMessage(exit_code: i32);
     fn TranslateMessage(message: *const Msg) -> i32;
@@ -190,6 +191,14 @@ unsafe extern "system" {
         offset: u32,
     ) -> *mut c_void;
     fn CreateCompatibleDC(dc: Hdc) -> Hdc;
+    fn CreateRoundRectRgn(
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+        ellipse_width: i32,
+        ellipse_height: i32,
+    ) -> *mut c_void;
     #[allow(dead_code)]
     fn DeleteDC(dc: Hdc) -> i32;
     fn DeleteObject(object: *mut c_void) -> i32;
@@ -430,6 +439,46 @@ pub unsafe extern "C" fn fcitx5_candidate_window_destroy(window: Hwnd) {
         // SAFETY: the caller supplies a live HWND created by this host; Windows
         // runs WM_NCDESTROY, which releases the associated WindowHost.
         unsafe { DestroyWindow(window) };
+    }
+}
+
+/// Clips `window` to a rounded rectangle of `width` x `height` physical pixels.
+///
+/// The candidate window is layered with a uniform alpha, so the transparent
+/// corners of the painted bitmap would otherwise show as solid pixels, and
+/// DWM's own corner rounding is not applied to layered windows (nor on
+/// Windows 10). A `radius` of 0 removes the region.
+///
+/// # Safety
+///
+/// `window` must be null or a live HWND created by
+/// [`fcitx5_candidate_window_create`].
+pub unsafe fn fcitx5_candidate_window_set_corner_region(
+    window: Hwnd,
+    width: i32,
+    height: i32,
+    radius: i32,
+) {
+    if window.is_null() || width <= 0 || height <= 0 {
+        return;
+    }
+    if radius <= 0 {
+        // SAFETY: the caller supplies a live HWND; a null region removes clipping.
+        unsafe { SetWindowRgn(window, core::ptr::null_mut(), 1) };
+        return;
+    }
+    let diameter = radius.saturating_mul(2).min(width).min(height);
+    // SAFETY: plain GDI region creation with in-range coordinates; the
+    // region end points are exclusive, hence the +1.
+    let region = unsafe { CreateRoundRectRgn(0, 0, width + 1, height + 1, diameter, diameter) };
+    if region.is_null() {
+        return;
+    }
+    // SAFETY: the caller supplies a live HWND. On success the system owns the
+    // region; on failure it stays ours and is deleted here.
+    if unsafe { SetWindowRgn(window, region, 1) } == 0 {
+        // SAFETY: the region was created above and not handed to the system.
+        unsafe { DeleteObject(region) };
     }
 }
 

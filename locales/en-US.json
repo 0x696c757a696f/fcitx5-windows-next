@@ -234,6 +234,7 @@
   ,"settings.plugins.repository.loading": "Official repository · Loading"
   ,"settings.plugins.repository.ready": "Official repository · Signed catalog available"
   ,"settings.plugins.repository.unavailable": "Official repository · Unavailable{detail}"
+  ,"settings.plugins.repository.not_downloaded": "Official repository · Catalog not downloaded yet; click Refresh online"
   ,"settings.plugins.fallback_category": "Add-on"
   ,"settings.plugins.fallback_metadata": "Metadata supplied by the official Control catalog"
   ,"settings.plugins.operation.list": "List"

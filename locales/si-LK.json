@@ -229,6 +229,7 @@
   "settings.plugins.repository.loading": "නිල ගබඩාව · පූරණය වෙමින්",
   "settings.plugins.repository.ready": "නිල ගබඩාව · අත්සන් කළ නාමාවලිය ලබා ගත හැක",
   "settings.plugins.repository.unavailable": "නිල ගබඩාව · ලබා ගත නොහැක{detail}",
+  "settings.plugins.repository.not_downloaded": "නිල ගබඩාව · නාමාවලිය තවම බාගත කර නැත; සබැඳි නැවුම් කිරීම ඔබන්න",
   "settings.plugins.fallback_category": "ඇඩෝනය",
   "settings.plugins.fallback_metadata": "පාරදත්ත නිල Control නාමාවලියෙන් සපයයි",
   "settings.plugins.operation.list": "ලැයිස්තුගත කරන්න",
