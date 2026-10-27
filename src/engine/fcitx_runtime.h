@@ -90,6 +90,10 @@ class FcitxRuntime final {
                                                  const FcitxStateRequestC& request);
     [[nodiscard]] std::vector<InputMethodInfo> inputMethods() const;
     [[nodiscard]] InputMethodStatus currentInputMethod() const;
+    // Returns the input method of `key`'s context; with `toggle` it first
+    // switches between the keyboard and the default input method, as the
+    // toggle hotkey does.
+    [[nodiscard]] InputMethodStatus inputMethodAction(const ClientContextKey& key, bool toggle);
     [[nodiscard]] bool setDefaultInputMethod(std::string_view id);
     void forgetConnection(std::uint64_t connectionId);
 

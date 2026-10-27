@@ -41,6 +41,10 @@ class FcitxDispatcher final {
                                         std::chrono::milliseconds timeout);
     [[nodiscard]] bool queryInputMethodStatus(InputMethodStatus& result,
                                               std::chrono::milliseconds timeout);
+    // Reports, and with `toggle` first switches, the input method of `key`.
+    [[nodiscard]] bool inputMethodAction(const ClientContextKey& key, bool toggle,
+                                         InputMethodStatus& result,
+                                         std::chrono::milliseconds timeout);
     void forgetConnection(std::uint64_t connectionId);
     void stop();
 
