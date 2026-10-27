@@ -2722,7 +2722,8 @@ fn windui_config_core_candidate_layout_controls(
         ));
 
     let mut page_sizes = WindUiElement::row().spacing(4);
-    for value in 1..=9 {
+    // Pinyin, shuangpin and the tables page 3 to 10 candidates.
+    for value in 3..=9 {
         page_sizes = page_sizes.child(config_core_candidate_page_size_button(
             value, page_size, adapter, status, &locale,
         ));

@@ -751,16 +751,8 @@ impl Host {
         let window = self.window;
         // SAFETY: window is a valid HWND created by the Rust window host.
         unsafe {
-            SetWindowPos(
-                window,
-                HWND_TOPMOST,
-                outputs.window_left as i32,
-                outputs.window_top as i32,
-                outputs.window_width as i32,
-                outputs.window_height as i32,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            );
-            // Same radius the renderer paints the background and border with.
+            // Same radius the renderer paints the background and border with,
+            // set before the window shows at its new size.
             let region = (
                 outputs.window_width as i32,
                 outputs.window_height as i32,
@@ -770,6 +762,15 @@ impl Host {
                 fcitx5_candidate_window_set_corner_region(window, region.0, region.1, region.2);
                 self.corner_region = Some(region);
             }
+            SetWindowPos(
+                window,
+                HWND_TOPMOST,
+                outputs.window_left as i32,
+                outputs.window_top as i32,
+                outputs.window_width as i32,
+                outputs.window_height as i32,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            );
             InvalidateRect(window, ptr::null(), 0);
             // Paint now instead of waiting for the low-priority WM_PAINT, so
             // a moved or grown window never shows stale pixels for a frame.

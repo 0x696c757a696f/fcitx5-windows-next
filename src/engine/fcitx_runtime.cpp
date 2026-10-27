@@ -717,10 +717,12 @@ class FcitxRuntime::Impl final {
     void applyFcitxPageSize() {
         if (!config.candidatePageSize)
             return;
-        const std::string pageSize = std::to_string(*config.candidatePageSize);
         RawConfig raw;
         instance->globalConfig().save(raw);
-        raw.setValueByPath("Behavior/DefaultPageSize", pageSize);
+        raw.setValueByPath("Behavior/DefaultPageSize", std::to_string(*config.candidatePageSize));
+        // The input methods accept 3 to 10 candidates per page and fall back
+        // to their default outside that range.
+        const std::string pageSize = std::to_string(std::clamp(*config.candidatePageSize, 3, 10));
         instance->globalConfig().load(raw, true);
         // Pinyin, shuangpin and the tables page with their own PageSize option
         // and ignore DefaultPageSize, so the Settings value goes to each
@@ -1400,17 +1402,23 @@ void FcitxRuntime::reloadConfigIfChanged() {
     const auto stamp = configStamp();
     if (!stamp || stamp == impl_->configReadStamp)
         return;
-    impl_->configReadStamp = stamp;
     EngineConfig next = readEngineConfig();
     impl_->dropUnavailableInputMethods(next);
     const bool groupChanged = next.enabled != impl_->config.enabled ||
                               next.defaultInputMethod != impl_->config.defaultInputMethod;
     const bool pageSizeChanged = next.candidatePageSize != impl_->config.candidatePageSize;
-    impl_->config = std::move(next);
-    if (groupChanged)
-        impl_->applyInputMethodGroup();
-    if (pageSizeChanged)
-        impl_->applyFcitxPageSize();
+    EngineConfig previous = std::exchange(impl_->config, std::move(next));
+    try {
+        if (groupChanged)
+            impl_->applyInputMethodGroup();
+        if (pageSizeChanged)
+            impl_->applyFcitxPageSize();
+    } catch (...) {
+        // Retry on the next poll instead of keeping a half-applied file.
+        impl_->config = std::move(previous);
+        throw;
+    }
+    impl_->configReadStamp = stamp;
 }
 
 bool FcitxRuntime::setDefaultInputMethod(std::string_view id) {
