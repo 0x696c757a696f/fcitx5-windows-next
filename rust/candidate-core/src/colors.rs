@@ -138,6 +138,38 @@ pub fn resolve_paint_colors(
     }
 }
 
+/// Resolved label and selected-item secondary colors for one paint.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Fcitx5CandidateSecondaryColors {
+    pub label: [u8; 3],
+    pub selected_label: [u8; 3],
+    pub selected_comment: [u8; 3],
+}
+
+/// Resolves the label color and the label/comment colors of the selected
+/// item. Selected colors are kept readable on `selected_background`, which
+/// must already be resolved by [`resolve_paint_colors`].
+#[must_use]
+pub fn resolve_secondary_colors(
+    label_text: Fcitx5CandidateConfigColor,
+    selected_label_text: Fcitx5CandidateConfigColor,
+    selected_comment_text: Fcitx5CandidateConfigColor,
+    selected_background: [u8; 3],
+    high_contrast: bool,
+) -> Fcitx5CandidateSecondaryColors {
+    let selected = |color| {
+        readable_selected_text(
+            resolve_rgb(color, high_contrast, COLOR_HIGHLIGHTTEXT_COLORREF_BGR),
+            selected_background,
+        )
+    };
+    Fcitx5CandidateSecondaryColors {
+        label: resolve_rgb(label_text, high_contrast, COLOR_WINDOWTEXT_COLORREF_BGR),
+        selected_label: selected(selected_label_text),
+        selected_comment: selected(selected_comment_text),
+    }
+}
+
 #[cfg(test)]
 mod candidate_paint_color_tests {
     use super::*;
@@ -200,5 +232,33 @@ mod candidate_paint_color_tests {
             "COLORREF [B,G,R] extracts to RGB"
         );
         assert_eq!(resolved.selected_text, COLOR_HIGHLIGHTTEXT_COLORREF_BGR);
+    }
+
+    #[test]
+    fn selected_secondary_colors_stay_readable_on_the_selection() {
+        let resolved = resolve_secondary_colors(
+            color(0.5, 0.5, 0.5),
+            color(1.0, 1.0, 1.0),
+            color(0.027, 0.757, 0.376),
+            [7, 193, 96],
+            false,
+        );
+        assert_eq!(resolved.label, [128, 128, 128]);
+        assert_eq!(resolved.selected_label, [255, 255, 255]);
+        assert_eq!(resolved.selected_comment, [255, 255, 255]);
+    }
+
+    #[test]
+    fn high_contrast_maps_secondary_colors_to_system_palette() {
+        let resolved = resolve_secondary_colors(
+            color(0.5, 0.5, 0.5),
+            color(0.0, 0.0, 0.0),
+            color(0.0, 0.0, 0.0),
+            [0, 120, 215],
+            true,
+        );
+        assert_eq!(resolved.label, COLOR_WINDOWTEXT_COLORREF_BGR);
+        assert_eq!(resolved.selected_label, COLOR_HIGHLIGHTTEXT_COLORREF_BGR);
+        assert_eq!(resolved.selected_comment, COLOR_HIGHLIGHTTEXT_COLORREF_BGR);
     }
 }

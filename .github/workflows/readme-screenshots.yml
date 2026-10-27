@@ -1,7 +1,10 @@
 name: README Screenshots
 
-# Captures the real candidate window from a published portable package for
-# the README (tools/capture-readme-candidates.ps1). The images are uploaded
+# Captures the real candidate window for the README
+# (tools/capture-readme-candidates.ps1): a published portable package with
+# fcitx5-ui.exe and the built-in themes replaced by this commit's, so the
+# images show the code being merged. Windows Server 2025 gives the Windows 11
+# rounded corners and shadow. The images are uploaded
 # as an artifact and pushed to the screenshots/readme branch, one commit on
 # its own, so they can be fetched with git; copy them to docs/assets/.
 on:
@@ -25,8 +28,8 @@ defaults:
 
 jobs:
   capture:
-    runs-on: windows-2022
-    timeout-minutes: 20
+    runs-on: windows-2025
+    timeout-minutes: 40
     permissions:
       contents: write
     steps:
@@ -51,6 +54,19 @@ jobs:
           $zip = Get-ChildItem -LiteralPath $download -Filter '*-portable.zip' | Select-Object -First 1
           Expand-Archive -LiteralPath $zip.FullName -DestinationPath $download
           Write-Host "Capturing $($zip.Name)"
+
+      - name: Build the candidate window from this commit
+        env:
+          RUSTC_WRAPPER: ''
+          CARGO_BUILD_RUSTC_WRAPPER: ''
+        run: |
+          & cargo build --release --locked -p fcitx5-candidate-core --bin fcitx5-ui `
+            --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'fcitx5-ui build failed.' }
+          $portable = "$env:RUNNER_TEMP/portable/Fcitx5"
+          Copy-Item -LiteralPath target/x86_64-pc-windows-msvc/release/fcitx5-ui.exe `
+            -Destination "$portable/bin/fcitx5-ui.exe" -Force
+          Copy-Item -Path resources/themes/* -Destination "$portable/themes" -Recurse -Force
 
       - name: Capture the candidate window
         run: |

@@ -62,6 +62,9 @@ pub(crate) struct RenderTheme {
     pub selected_background: RenderColor,
     pub selected_text: RenderColor,
     pub comment_color: RenderColor,
+    pub label: RenderColor,
+    pub selected_label: RenderColor,
+    pub selected_comment: RenderColor,
     pub border: RenderColor,
     pub scrollbar: RenderColor,
     pub preedit_background: RenderColor,
@@ -87,6 +90,9 @@ impl Default for RenderTheme {
             ),
             selected_text: RenderColor::rgba(WHITE_RGB[0], WHITE_RGB[1], WHITE_RGB[2], 255),
             comment_color: RenderColor::rgba(120, 120, 120, 255),
+            label: RenderColor::rgba(120, 120, 120, 255),
+            selected_label: RenderColor::rgba(WHITE_RGB[0], WHITE_RGB[1], WHITE_RGB[2], 255),
+            selected_comment: RenderColor::rgba(WHITE_RGB[0], WHITE_RGB[1], WHITE_RGB[2], 255),
             border: RenderColor::rgba(215, 215, 215, 255),
             scrollbar: RenderColor::rgba(128, 128, 128, 180),
             preedit_background: RenderColor::rgba(255, 255, 255, 255),
@@ -1024,10 +1030,18 @@ fn draw_candidate_horizontal(
         horizontal_anchors,
         |value, size| measurement_cache.measure(canvas, input.font_family, value, size),
     );
-    let text_color = if selected {
-        input.theme.selected_text.wind()
+    let (text_color, label_color, comment_color) = if selected {
+        (
+            input.theme.selected_text.wind(),
+            input.theme.selected_label.wind(),
+            input.theme.selected_comment.wind(),
+        )
     } else {
-        input.theme.text.wind()
+        (
+            input.theme.text.wind(),
+            input.theme.label.wind(),
+            input.theme.comment_color.wind(),
+        )
     };
     let mut line_top = row_top;
     for line in &plan.lines {
@@ -1071,7 +1085,7 @@ fn draw_candidate_horizontal(
                     canvas,
                     &line.label,
                     rect,
-                    text_color,
+                    label_color,
                     WindAlign::Start,
                     &style_label,
                 );
@@ -1124,7 +1138,7 @@ fn draw_candidate_horizontal(
                     canvas,
                     &line.comment,
                     rect,
-                    input.theme.comment_color.wind(),
+                    comment_color,
                     WindAlign::Start,
                     &style_comment,
                 );
@@ -1246,10 +1260,13 @@ fn draw_candidate_vertical(
     let bottom = (item.rect.bottom - origin.top + y_offset).clamp(top, window_h);
     let geometry = input.geometry;
     let pad_x = geometry.item_padding_x.max(0.0);
-    let color = if selected {
-        input.theme.selected_text.wind()
+    let (color, label_color) = if selected {
+        (
+            input.theme.selected_text.wind(),
+            input.theme.selected_label.wind(),
+        )
     } else {
-        input.theme.text.wind()
+        (input.theme.text.wind(), input.theme.label.wind())
     };
     let glyph_step = (geometry.font_size * VERTICAL_GLYPH_STEP_RATIO)
         .ceil()
@@ -1290,7 +1307,7 @@ fn draw_candidate_vertical(
                 },
                 bottom: (top + label_height).min(bottom),
             },
-            color,
+            label_color,
             WindAlign::Center,
             &text_style(input.font_family, geometry.label_font_size),
         );
@@ -1597,6 +1614,9 @@ mod tests {
             selected_background: GREEN_BG,
             selected_text: GREEN,
             comment_color: RenderColor::rgba(120, 120, 120, 255),
+            label: RenderColor::rgba(120, 120, 120, 255),
+            selected_label: GREEN,
+            selected_comment: GREEN,
             border: RenderColor::rgba(215, 215, 215, 255),
             scrollbar: RenderColor::rgba(128, 128, 128, 180),
             preedit_background: WHITE,

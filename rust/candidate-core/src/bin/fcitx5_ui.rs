@@ -30,10 +30,11 @@ use fcitx5_candidate_core::window_host::{
 use fcitx5_candidate_core::{
     content_locale_or_default, content_locale_valid, default_dwrite_locale,
     fcitx5_candidate_selection_intent, parse_candidate_command_line, resolve_paint_colors,
-    selection_intent_valid, CandidateClickGuardState, CandidateFocusWatchState, CandidateModel,
-    CandidatePointerState, CandidatePresentationState, CandidateScrollState, CandidateVisualArena,
-    Fcitx5CandidateConfigColor, Fcitx5CandidateRenderThemeInput, Fcitx5CandidateResolvedColors,
-    Fcitx5CandidateSelectionIntent, Fcitx5CandidateVisualBuildOutput, Rect as FRect, Size as FSize,
+    resolve_secondary_colors, selection_intent_valid, CandidateClickGuardState,
+    CandidateFocusWatchState, CandidateModel, CandidatePointerState, CandidatePresentationState,
+    CandidateScrollState, CandidateVisualArena, Fcitx5CandidateConfigColor,
+    Fcitx5CandidateRenderThemeInput, Fcitx5CandidateResolvedColors, Fcitx5CandidateSelectionIntent,
+    Fcitx5CandidateVisualBuildOutput, Rect as FRect, Size as FSize,
 };
 use fcitx5_candidate_core::{render_frame_to_dc, CandidateRenderData, FramePaint, RenderGeometry};
 use fcitx5_config_core::{
@@ -330,6 +331,9 @@ struct PaintColors {
     selected_background: Rgba,
     selected_candidate_text: Rgba,
     comment_text: Rgba,
+    label_text: Rgba,
+    selected_label_text: Rgba,
+    selected_comment_text: Rgba,
     border: Rgba,
     preedit_text: Rgba,
 }
@@ -352,6 +356,13 @@ impl PaintColors {
         });
         // These fallbacks must mirror resources/themes/default/theme.toml so a
         // missing key can never produce an invisible selection (green on green).
+        let selected_candidate_text = named("selected_candidate_text").unwrap_or(Rgba {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        });
+        let comment_text = named("comment_text").unwrap_or(candidate_text);
         PaintColors {
             background,
             candidate_text,
@@ -361,13 +372,12 @@ impl PaintColors {
                 b: 0.376,
                 a: 1.0,
             }),
-            selected_candidate_text: named("selected_candidate_text").unwrap_or(Rgba {
-                r: 1.0,
-                g: 1.0,
-                b: 1.0,
-                a: 1.0,
-            }),
-            comment_text: named("comment_text").unwrap_or(candidate_text),
+            selected_candidate_text,
+            comment_text,
+            label_text: named("label_text").unwrap_or(comment_text),
+            selected_label_text: named("selected_label_text").unwrap_or(selected_candidate_text),
+            selected_comment_text: named("selected_comment_text")
+                .unwrap_or(selected_candidate_text),
             // A custom theme can request an inner border. The stock popup is
             // already rounded by its native shell, so its fallback remains a
             // single surface rather than an accidental second outline.
@@ -975,6 +985,13 @@ impl Host {
             PaintColors::to_config_color(colors.preedit_text),
             high_contrast,
         );
+        let secondary = resolve_secondary_colors(
+            PaintColors::to_config_color(colors.label_text),
+            PaintColors::to_config_color(colors.selected_label_text),
+            PaintColors::to_config_color(colors.selected_comment_text),
+            resolved.selected_background,
+            high_contrast,
+        );
         let c = &resolved;
         let vc = &self.visual_config;
         let theme = Fcitx5CandidateRenderThemeInput {
@@ -993,6 +1010,15 @@ impl Host {
             comment_r: c.comment[0],
             comment_g: c.comment[1],
             comment_b: c.comment[2],
+            label_r: secondary.label[0],
+            label_g: secondary.label[1],
+            label_b: secondary.label[2],
+            selected_label_r: secondary.selected_label[0],
+            selected_label_g: secondary.selected_label[1],
+            selected_label_b: secondary.selected_label[2],
+            selected_comment_r: secondary.selected_comment[0],
+            selected_comment_g: secondary.selected_comment[1],
+            selected_comment_b: secondary.selected_comment[2],
             border_r: c.border[0],
             border_g: c.border[1],
             border_b: c.border[2],

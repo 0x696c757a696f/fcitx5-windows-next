@@ -3001,7 +3001,7 @@ mod visual_draft_tests {
         let snapshot = core.preview_visual_snapshot(&root, Path::new(""), false);
         assert_eq!(
             snapshot.candidate().colors().get("background"),
-            Some(&"#181818F7".to_owned())
+            Some(&"#1B2236F7".to_owned())
         );
         assert_eq!(snapshot.fonts().candidate().size_dip(), 22.0);
         let _ = fs::remove_dir_all(root);
