@@ -77,7 +77,6 @@ fn run(args: Vec<OsString>) -> i32 {
             error_box("Registration was repaired, but the input method service could not start.");
             return 5;
         }
-        set_sign_in_startup(&root, true);
         win32::message_box_w(
             "Fcitx5 registration and background service were repaired successfully.",
             "Fcitx5 for Windows Next",
@@ -131,7 +130,8 @@ fn run(args: Vec<OsString>) -> i32 {
                 error_box("The stale current-user TSF registration could not be removed.");
                 return 13;
             }
-            if !registration_healthy(&root) {
+            let first_registration = !registration_healthy(&root);
+            if first_registration {
                 let registration = elevate_registration(&executable, false);
                 if registration != 0 {
                     error_box(
@@ -148,7 +148,11 @@ fn run(args: Vec<OsString>) -> i32 {
                 error_box("The input method service could not be started.");
                 return 5;
             }
-            set_sign_in_startup(&root, true);
+            // Turn sign-in startup on when this copy is first registered; after
+            // that the Settings switch decides.
+            if first_registration {
+                set_sign_in_startup(&root, true);
+            }
             win32::message_box_w(
                 "Fcitx5 is running. Select it from the Windows input indicator (Win+Space).\n\nUse 'Fcitx5 Settings.exe' in this folder to configure it.",
                 "Fcitx5 for Windows Next",

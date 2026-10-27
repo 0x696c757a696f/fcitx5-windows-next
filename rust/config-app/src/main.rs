@@ -16,7 +16,9 @@ use fcitx5_config_core::{
     ConfigField, ConfigSnapshot, FileStore, OverflowBehavior as CoreOverflowBehavior,
     RecoverySource, ScrollDirection, VerticalTextColumnDirection, WritingMode as CoreWritingMode,
 };
-use fcitx5_control_core::control_themes_list_json_for_paths;
+use fcitx5_control_core::{
+    control_startup_query, control_startup_set, control_themes_list_json_for_paths,
+};
 use fcitx5_package_core::PackageId;
 use fcitx5_process_execution_core::run_process_bounded;
 use serde::Deserialize;
@@ -1635,6 +1637,29 @@ fn windui_input_method_settings(
         ))
 }
 
+/// Starting the launcher at sign-in lets packaged (UWP) apps, which cannot
+/// start it themselves, type from the first keystroke.
+fn windui_sign_in_startup_settings(locale: &LocaleCatalog) -> WindUiElement {
+    let enabled = windui_signal(control_startup_query().unwrap_or(false));
+    windui_settings_card(
+        WindUiElement::col()
+            .width_match()
+            .spacing(14)
+            .child(windui_settings_section_title(
+                &locale.text("settings.startup.section"),
+            ))
+            .child(WindUiElement::setting_row_desc(
+                locale.text("settings.startup.sign_in"),
+                locale.text("settings.startup.sign_in_hint"),
+                WindUiElement::switch(enabled).on_switch_change(move |_, value| {
+                    if control_startup_set(value).is_err() {
+                        enabled.set(!value);
+                    }
+                }),
+            )),
+    )
+}
+
 fn windui_settings_root(
     plugin_snapshot: WindUiSignal<PluginManagerSnapshot>,
     plugin_busy: WindUiSignal<bool>,
@@ -1707,7 +1732,8 @@ fn windui_settings_root(
                 &locale.text("nav.general"),
                 &locale.text("settings.input.subtitle"),
             ))
-            .child(input_method_settings),
+            .child(input_method_settings)
+            .child(windui_sign_in_startup_settings(&locale)),
     );
 
     let appearance_page = WindUiElement::scroll().fill().child(

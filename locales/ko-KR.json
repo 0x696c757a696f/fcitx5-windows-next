@@ -278,4 +278,7 @@
   ,"settings.shortcuts.toggle_input_method": "키보드와 기본 입력기 전환"
   ,"settings.shortcuts.next_input_method": "다음 입력기"
   ,"settings.shortcuts.same": "두 단축키는 서로 달라야 합니다."
+  ,"settings.startup.section": "시작"
+  ,"settings.startup.sign_in": "로그인 시 시작"
+  ,"settings.startup.sign_in_hint": "로그인 직후 Store(UWP) 앱에서 입력할 수 있게 합니다."
 }

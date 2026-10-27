@@ -278,4 +278,7 @@
   ,"settings.shortcuts.toggle_input_method": "切換鍵盤與預設輸入法"
   ,"settings.shortcuts.next_input_method": "切換到下一個輸入法"
   ,"settings.shortcuts.same": "兩個快速鍵不能相同。"
+  ,"settings.startup.section": "啟動"
+  ,"settings.startup.sign_in": "登入時自動啟動"
+  ,"settings.startup.sign_in_hint": "讓市集 (UWP) 應用程式在登入後立即可以輸入。"
 }
