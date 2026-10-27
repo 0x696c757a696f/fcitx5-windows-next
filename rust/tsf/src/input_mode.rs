@@ -2,6 +2,8 @@
 //! input method as one glyph, toggles it on a left click and offers Settings
 //! on a right click.
 
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::ptr::null_mut;

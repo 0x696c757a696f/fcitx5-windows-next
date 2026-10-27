@@ -46,6 +46,7 @@ const UNSAFE_EXCEPTIONS: &[&str] = &[
     "rust/protocol-core/src/tests.rs",
     "rust/register-core/src/lib.rs",
     "rust/release-pqc-signer/src/main.rs",
+    "rust/tsf/src/input_mode.rs",
     "rust/tsf/src/lib.rs",
     "rust/windows-common-core/src/candidate_select_client.rs",
     "rust/windows-common-core/src/lib.rs",
