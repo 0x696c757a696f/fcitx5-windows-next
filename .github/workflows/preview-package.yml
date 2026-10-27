@@ -2,10 +2,22 @@ name: Preview Package
 
 # Unsigned developer-preview builds of the installer and portable ZIP for
 # every change on main (or on demand). These are not release artifacts:
-# signing and publishing stay in release.yml.
+# signing and publishing stay in release.yml. Pull requests that change what
+# goes into the plugin packages build it too, so a stale inventory fails there
+# and not in a release.
 on:
   push:
     branches: [main]
+  pull_request:
+    paths:
+      - .github/workflows/preview-package.yml
+      - third_party/patches/**
+      - tools/bootstrap-fcitx.ps1
+      - tools/check-plugin-inventory.py
+      - tools/fork-plugin-inventory.json
+      - tools/prepare-fork-plugins.ps1
+      - tools/release-plugin-inventory.json
+      - tools/stage-package.ps1
   workflow_dispatch:
 
 permissions:
@@ -155,6 +167,12 @@ jobs:
         run: |
           $stage = (Get-Content -LiteralPath out/package/current-stage.txt -Raw).Trim()
           ./tools/prepare-fork-plugins.ps1 -StageRoot $stage
+
+      - name: Check the plugin inventories against the build output
+        run: |
+          $stage = (Get-Content -LiteralPath out/package/current-stage.txt -Raw).Trim()
+          python tools/check-plugin-inventory.py --stage $stage --fork-root out/package/fork-plugins
+          if ($LASTEXITCODE -ne 0) { throw 'Plugin inventory does not match the build output.' }
 
       - name: Show compiler cache stats
         if: always()

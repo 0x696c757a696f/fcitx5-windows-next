@@ -78,6 +78,8 @@ if ($authenticode -and $forkPluginPe.Count -gt 0) {
   & (Join-Path $PSScriptRoot 'sign-release.ps1') -Paths $forkPluginPe `
     -CertificateThumbprint $CertificateThumbprint -TimestampUrl $TimestampUrl
 }
+& python (Join-Path $PSScriptRoot 'check-plugin-inventory.py') --stage $stage --fork-root $forkPluginRoot
+if ($LASTEXITCODE -ne 0) { throw 'Plugin inventory does not match the build output.' }
 & (Join-Path $PSScriptRoot 'release-plugin-artifacts.ps1') `
   -Version $Version -Channel $Channel -ReleaseSequence $PluginReleaseSequence -StageRoot $stage `
   -TrustedKeyring $TrustedKeyring -SigningKey $PluginSigningKey -Ed25519SigningKey $Ed25519SigningKey `
