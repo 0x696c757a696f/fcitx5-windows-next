@@ -1,6 +1,6 @@
 # Stable release checklist
 
-- [ ] Release commit is clean, reviewed, tagged `v<version>`, and matches the requested version.
+- [ ] Release commit is clean, reviewed, on `main`; the Release workflow is dispatched from `main` with the requested version and creates the `v<version>` tag itself.
 - [ ] x64/x86 Release package gate, real Fcitx integration, static analysis, fuzz smoke, runtime import,
       secret, dependency, license, locale and UTF-8/LF policies pass.
 - [ ] Protected keyring includes current and revoked key records; no private update key is in CI.
