@@ -1329,13 +1329,7 @@ fn activation_guard_disabled() -> bool {
         .is_some_and(|marker| marker.exists())
 }
 
-#[derive(Clone, Debug, Default)]
-struct CurrentIdentity {
-    service_account: u8,
-    secure_desktop: u8,
-    session_id: u32,
-    user_sid: Vec<u16>,
-}
+use common::engine_client::{ClientIdentity as CurrentIdentity, PipeClient};
 
 #[derive(Clone, Debug, Default)]
 struct EngineContextState {
@@ -1378,26 +1372,6 @@ struct CachedKeyResult {
     result: EngineKeyResult,
 }
 
-struct PipeHandle(*mut c_void);
-
-impl PipeHandle {
-    fn invalid() -> *mut c_void {
-        -1_isize as *mut c_void
-    }
-
-    fn is_valid(handle: *mut c_void) -> bool {
-        !handle.is_null() && handle != Self::invalid()
-    }
-}
-
-impl Drop for PipeHandle {
-    fn drop(&mut self) {
-        if Self::is_valid(self.0) {
-            common::fcitx5_windows_common_close_pipe_client(self.0);
-        }
-    }
-}
-
 #[derive(Default)]
 struct EngineClient {
     pipe_name: Vec<u16>,
@@ -1407,7 +1381,7 @@ struct EngineClient {
     expected_engine_path: Vec<u16>,
     expected_launcher_path: Vec<u16>,
     identity: CurrentIdentity,
-    pipe: Option<PipeHandle>,
+    pipe: Option<PipeClient>,
     handshake_complete: bool,
     engine_epoch: u64,
     contexts: HashMap<u64, EngineContextState>,
@@ -1423,29 +1397,14 @@ impl EngineClient {
         if identity.session_id == 0 || identity.user_sid.is_empty() {
             return None;
         }
-        let generation = query_wide_string(|output, capacity| {
-            // SAFETY: `module_path` is a live UTF-16 slice for the duration of
-            // this call; output/capacity are supplied by `query_wide_string`.
-            unsafe {
-                common::fcitx5_windows_common_current_generation_for_module_utf16(
-                    module_path.as_ptr(),
-                    module_path.len(),
-                    output,
-                    capacity,
-                )
-            }
-        })
-        .or_else(|| {
-            query_wide_string(|output, capacity| {
-                // SAFETY: output/capacity are supplied by `query_wide_string`.
-                unsafe { common::fcitx5_windows_common_current_generation_utf16(output, capacity) }
-            })
-        })?;
-        let test_namespace = query_wide_string(|output, capacity| {
-            // SAFETY: output/capacity are supplied by `query_wide_string`.
-            unsafe { common::fcitx5_windows_common_local_test_namespace_utf16(output, capacity) }
-        })
-        .unwrap_or_default();
+        let generation: Vec<u16> = module_path_buf(module_path)
+            .and_then(|module| common::engine_client::module_runtime_generation(&module))
+            .or_else(common::engine_client::process_runtime_generation)?
+            .encode_utf16()
+            .collect();
+        let test_namespace: Vec<u16> = common::engine_client::test_namespace()
+            .encode_utf16()
+            .collect();
         let engine_channel: Vec<u16> = "engine".encode_utf16().collect();
         let pipe_name =
             Self::endpoint_name(&identity, &generation, &test_namespace, &engine_channel)?;
@@ -1496,12 +1455,10 @@ impl EngineClient {
     /// attempts only get the input budget, so a missing or stuck engine can
     /// never block the host's UI thread on every key.
     fn begin_request(&mut self, cold_start: bool) -> Option<u64> {
-        if self.failure_streak > 0
-            && common::fcitx5_windows_common_tick_milliseconds() < self.retry_at
-        {
+        if self.failure_streak > 0 && common::engine_client::tick_milliseconds() < self.retry_at {
             return None;
         }
-        self.drop_stale_connection(common::fcitx5_windows_common_tick_milliseconds());
+        self.drop_stale_connection(common::engine_client::tick_milliseconds());
         if self.pipe.is_none() {
             self.follow_current_generation();
         }
@@ -1513,7 +1470,7 @@ impl EngineClient {
         } else {
             INPUT_DEADLINE_MILLISECONDS
         };
-        let deadline = common::fcitx5_windows_common_deadline_after_milliseconds(connect_budget);
+        let deadline = common::engine_client::deadline_after_milliseconds(connect_budget);
         if self.ensure_engine_available(deadline) && self.handshake(deadline) {
             self.failure_streak = 0;
             let request_budget = if cold_start {
@@ -1521,7 +1478,7 @@ impl EngineClient {
             } else {
                 INPUT_DEADLINE_MILLISECONDS
             };
-            return Some(common::fcitx5_windows_common_deadline_after_milliseconds(
+            return Some(common::engine_client::deadline_after_milliseconds(
                 request_budget,
             ));
         }
@@ -1539,7 +1496,7 @@ impl EngineClient {
             return;
         };
         if now.saturating_sub(self.last_used) < ENGINE_IDLE_RECONNECT_MILLISECONDS
-            && common::fcitx5_windows_common_pipe_client_connected(pipe.0) != 0
+            && pipe.is_connected()
         {
             return;
         }
@@ -1551,7 +1508,7 @@ impl EngineClient {
         self.failure_streak = self.failure_streak.saturating_add(1);
         let backoff = (ENGINE_RETRY_BASE_MILLISECONDS << (self.failure_streak - 1).min(5))
             .min(ENGINE_RETRY_MAX_MILLISECONDS);
-        self.retry_at = common::fcitx5_windows_common_tick_milliseconds().saturating_add(backoff);
+        self.retry_at = common::engine_client::tick_milliseconds().saturating_add(backoff);
         trace_event(&format!(
             "engine_client_backoff streak={} milliseconds={backoff}",
             self.failure_streak
@@ -1574,26 +1531,17 @@ impl EngineClient {
         kind: u32,
         channel: &[u16],
     ) -> Option<Vec<u16>> {
-        query_wide_string(|output, capacity| {
-            // SAFETY: all UTF-16 slices live for this call and no pointer is
-            // retained by the common helper.
-            unsafe {
-                common::fcitx5_windows_common_local_name_utf16(
-                    kind,
-                    identity.user_sid.as_ptr(),
-                    identity.user_sid.len(),
-                    identity.session_id,
-                    generation.as_ptr(),
-                    generation.len(),
-                    channel.as_ptr(),
-                    channel.len(),
-                    test_namespace.as_ptr(),
-                    test_namespace.len(),
-                    output,
-                    capacity,
-                )
-            }
-        })
+        let generation = String::from_utf16(generation).ok()?;
+        let test_namespace = String::from_utf16(test_namespace).ok()?;
+        let channel = String::from_utf16(channel).ok()?;
+        common::engine_client::local_endpoint_name(
+            kind == 0,
+            identity,
+            &generation,
+            &channel,
+            &test_namespace,
+        )
+        .map(|name| name.encode_utf16().collect())
     }
 
     fn candidate_notification_name(&self) -> Option<OsString> {
@@ -1621,112 +1569,68 @@ impl EngineClient {
             return true;
         }
         if self.pipe_name.is_empty()
-            || self.identity.service_account != 0
-            || self.identity.secure_desktop != 0
+            || self.identity.service_account
+            || self.identity.secure_desktop
         {
             trace_event("engine_client_connect_rejected_identity_or_pipe");
             return false;
         }
-        // SAFETY: `pipe_name` is a live UTF-16 slice. The returned HANDLE-like
-        // pointer is closed by `PipeHandle`.
-        let pipe = unsafe {
-            common::fcitx5_windows_common_open_pipe_client_utf16(
-                self.pipe_name.as_ptr(),
-                self.pipe_name.len(),
-                deadline,
-                1,
-            )
-        };
-        if !PipeHandle::is_valid(pipe) {
+        let Some(pipe) = PipeClient::open(&self.pipe_name, deadline, true) else {
             trace_event("engine_client_open_pipe_failed");
             return false;
-        }
+        };
         let policy_mode = if self.expected_engine_path.is_empty() {
             PEER_POLICY_DEVELOPMENT_SAME_USER_SESSION
         } else {
             PEER_POLICY_EXACT_EXECUTABLE
         };
-        let development_exception_enabled = u8::from(self.expected_engine_path.is_empty());
-        // SAFETY: The pipe handle is live; identity and expected-path buffers
-        // are valid for this call and are not retained.
-        let verified = unsafe {
-            common::fcitx5_windows_common_verify_pipe_server_peer_utf16(
-                pipe,
-                self.identity.service_account,
-                self.identity.session_id,
-                self.identity.secure_desktop,
-                self.identity.user_sid.as_ptr(),
-                self.identity.user_sid.len(),
-                policy_mode,
-                self.expected_engine_path.as_ptr(),
-                self.expected_engine_path.len(),
-                development_exception_enabled,
-            )
-        };
-        if verified == 0 {
+        let development_exception_enabled = self.expected_engine_path.is_empty();
+        if !pipe.verify_server(
+            &self.identity,
+            policy_mode,
+            &self.expected_engine_path,
+            development_exception_enabled,
+        ) {
             trace_event("engine_client_verify_peer_failed");
-            common::fcitx5_windows_common_close_pipe_client(pipe);
             return false;
         }
-        self.pipe = Some(PipeHandle(pipe));
-        self.last_used = common::fcitx5_windows_common_tick_milliseconds();
+        self.pipe = Some(pipe);
+        self.last_used = common::engine_client::tick_milliseconds();
         trace_event("engine_client_connect_success");
         true
     }
 
-    fn launcher_policy(&self) -> (u32, u8) {
+    fn launcher_policy(&self) -> (u32, bool) {
         if self.expected_launcher_path.is_empty() {
-            (PEER_POLICY_DEVELOPMENT_SAME_USER_SESSION, 1)
+            (PEER_POLICY_DEVELOPMENT_SAME_USER_SESSION, true)
         } else {
-            (PEER_POLICY_EXACT_EXECUTABLE, 0)
+            (PEER_POLICY_EXACT_EXECUTABLE, false)
         }
     }
 
     fn request_launcher_start(&mut self, deadline: u64) -> bool {
         if self.launcher_pipe_name.is_empty()
-            || self.identity.service_account != 0
-            || self.identity.secure_desktop != 0
+            || self.identity.service_account
+            || self.identity.secure_desktop
         {
             trace_event("engine_client_launcher_rejected_identity_or_pipe");
             return false;
         }
-        // SAFETY: `launcher_pipe_name` is a live UTF-16 slice. The returned
-        // pipe handle is wrapped and closed by `PipeHandle`.
-        let pipe = unsafe {
-            common::fcitx5_windows_common_open_pipe_client_utf16(
-                self.launcher_pipe_name.as_ptr(),
-                self.launcher_pipe_name.len(),
-                deadline,
-                0,
-            )
-        };
-        if !PipeHandle::is_valid(pipe) {
+        let Some(pipe) = PipeClient::open(&self.launcher_pipe_name, deadline, false) else {
             trace_event("engine_client_open_launcher_pipe_failed");
             return false;
-        }
-        let pipe = PipeHandle(pipe);
-        let (policy_mode, development_exception_enabled) = self.launcher_policy();
-        // SAFETY: The pipe handle is live; identity and expected-path buffers
-        // are valid for this call and are not retained.
-        let verified = unsafe {
-            common::fcitx5_windows_common_verify_pipe_server_peer_utf16(
-                pipe.0,
-                self.identity.service_account,
-                self.identity.session_id,
-                self.identity.secure_desktop,
-                self.identity.user_sid.as_ptr(),
-                self.identity.user_sid.len(),
-                policy_mode,
-                self.expected_launcher_path.as_ptr(),
-                self.expected_launcher_path.len(),
-                development_exception_enabled,
-            )
         };
-        if verified == 0 {
+        let (policy_mode, development_exception_enabled) = self.launcher_policy();
+        if !pipe.verify_server(
+            &self.identity,
+            policy_mode,
+            &self.expected_launcher_path,
+            development_exception_enabled,
+        ) {
             trace_event("engine_client_verify_launcher_peer_failed");
             return false;
         }
-        let request_id = common::fcitx5_windows_common_next_launcher_request_id();
+        let request_id = common::next_launcher_request_id();
         let request = protocol::LauncherRequest {
             metadata: protocol::Metadata {
                 request_id,
@@ -1740,17 +1644,7 @@ impl EngineClient {
             return false;
         };
         let mut response = vec![0_u8; protocol::MAX_FRAME_SIZE];
-        // SAFETY: pipe is live, request is readable, response is writable.
-        let transferred = unsafe {
-            common::fcitx5_windows_common_pipe_transact_with_error(
-                pipe.0,
-                request.as_ptr(),
-                request.len(),
-                response.as_mut_ptr(),
-                response.len(),
-                deadline,
-            )
-        };
+        let transferred = pipe.transact_with_error(&request, &mut response, deadline);
         if transferred.status == 0
             || transferred.response_len < protocol::HEADER_SIZE
             || transferred.response_len > response.len()
@@ -1770,7 +1664,7 @@ impl EngineClient {
             trace_event("engine_client_launcher_decode_failed");
             return false;
         };
-        let scalars = common::fcitx5_windows_common_apply_launcher_response_scalars(
+        let scalars = common::engine_client::apply_launcher_response_scalars(
             common::Fcitx5WindowsCommonLauncherResponseScalarInput {
                 request_id: decoded.metadata.request_id,
                 response_to: decoded.metadata.response_to,
@@ -1789,8 +1683,8 @@ impl EngineClient {
                 expected_session_id: self.identity.session_id,
             },
         );
-        let ok = scalars.status != 0
-            && common::fcitx5_windows_common_ipc_status_ok(scalars.response_status) != 0;
+        let ok =
+            scalars.status != 0 && common::engine_client::ipc_status_ok(scalars.response_status);
         trace_event(if ok {
             "engine_client_launcher_start_success"
         } else {
@@ -1809,7 +1703,7 @@ impl EngineClient {
     }
 
     fn start_launcher_process(&self) -> bool {
-        if self.identity.service_account != 0 || self.identity.secure_desktop != 0 {
+        if self.identity.service_account || self.identity.secure_desktop {
             trace_event("engine_client_launcher_process_rejected_identity");
             return false;
         }
@@ -1851,7 +1745,7 @@ impl EngineClient {
         if !self.start_launcher_process() {
             return false;
         }
-        while common::fcitx5_windows_common_deadline_has_time(deadline) != 0 {
+        while common::engine_client::deadline_has_time(deadline) {
             if self.connect(deadline) {
                 return true;
             }
@@ -1869,32 +1763,18 @@ impl EngineClient {
             self.disconnect();
             return None;
         }
-        let pipe = self.pipe.as_ref()?.0;
+        let pipe = self.pipe.as_ref()?;
         let mut response = vec![0_u8; protocol::MAX_FRAME_SIZE];
-        // SAFETY: pipe is live, request is readable, response is writable.
-        let transferred = unsafe {
-            common::fcitx5_windows_common_pipe_transact(
-                pipe,
-                request.as_ptr(),
-                request.len(),
-                response.as_mut_ptr(),
-                response.len(),
-                deadline,
-            )
-        };
-        if transferred.status == 0
-            || transferred.response_len < protocol::HEADER_SIZE
-            || transferred.response_len > response.len()
-        {
-            trace_event(&format!(
-                "engine_client_transact_failed status={} response_len={}",
-                transferred.status, transferred.response_len
-            ));
+        let Some(response_len) = pipe
+            .transact(&request, &mut response, deadline)
+            .filter(|len| *len >= protocol::HEADER_SIZE)
+        else {
+            trace_event("engine_client_transact_failed");
             self.disconnect();
             return None;
-        }
-        response.truncate(transferred.response_len);
-        self.last_used = common::fcitx5_windows_common_tick_milliseconds();
+        };
+        response.truncate(response_len);
+        self.last_used = common::engine_client::tick_milliseconds();
         Some(response)
     }
 
@@ -1902,7 +1782,7 @@ impl EngineClient {
         if self.handshake_complete {
             return true;
         }
-        let request_id = common::fcitx5_windows_common_next_pipe_client_request_id();
+        let request_id = common::engine_client::next_pipe_client_request_id();
         let request = protocol::HelloRequest {
             metadata: protocol::Metadata {
                 request_id,
@@ -1910,7 +1790,7 @@ impl EngineClient {
                 ..protocol::Metadata::default()
             },
             client_architecture_bits: (std::mem::size_of::<usize>() * 8) as u32,
-            client_process_id: common::fcitx5_windows_common_current_process_id(),
+            client_process_id: std::process::id(),
         };
         let Some(request) = protocol::encode_hello_request(&request) else {
             trace_event("engine_client_hello_encode_failed");
@@ -1931,7 +1811,7 @@ impl EngineClient {
             self.disconnect();
             return false;
         };
-        let scalars = common::fcitx5_windows_common_apply_hello_response_scalars(
+        let scalars = common::engine_client::apply_hello_response_scalars(
             response.metadata.response_to,
             response.metadata.engine_epoch,
             response.metadata.session_id,
@@ -1974,7 +1854,7 @@ impl EngineClient {
                 .unwrap_or_default()
         ));
         let deadline = self.begin_request(new_context)?;
-        let request_id = common::fcitx5_windows_common_next_pipe_client_request_id();
+        let request_id = common::engine_client::next_pipe_client_request_id();
         let mut context_state = self.contexts.get(&context_id).cloned().unwrap_or_default();
         let request = protocol::KeyRequest {
             metadata: protocol::Metadata {
@@ -2023,7 +1903,7 @@ impl EngineClient {
             self.disconnect();
             return None;
         };
-        let scalars = common::fcitx5_windows_common_apply_key_response_scalars(
+        let scalars = common::engine_client::apply_key_response_scalars(
             common::Fcitx5WindowsCommonKeyResponseScalarInput {
                 response_to: response.metadata.response_to,
                 engine_epoch: response.metadata.engine_epoch,
@@ -2095,7 +1975,7 @@ impl EngineClient {
     fn poll_state(&mut self, context_id: u64) -> Option<EngineKeyResult> {
         let context_state = self.contexts.get(&context_id).cloned()?;
         let deadline = self.begin_request(false)?;
-        let request_id = common::fcitx5_windows_common_next_pipe_client_request_id();
+        let request_id = common::engine_client::next_pipe_client_request_id();
         let request = protocol::StateRequest {
             metadata: protocol::Metadata {
                 request_id,
@@ -2174,90 +2054,23 @@ impl TraceEngineKeyResult for EngineKeyResult {
     }
 }
 
-fn query_wide_string(mut fill: impl FnMut(*mut u16, usize) -> usize) -> Option<Vec<u16>> {
-    let len = fill(std::ptr::null_mut(), 0);
-    if len == 0 {
-        return None;
-    }
-    let mut buffer = vec![0_u16; len];
-    let filled = fill(buffer.as_mut_ptr(), buffer.len());
-    if filled != len {
-        return None;
-    }
-    Some(buffer)
+fn query_current_identity() -> Option<CurrentIdentity> {
+    common::engine_client::current_client_identity()
 }
 
-fn query_current_identity() -> Option<CurrentIdentity> {
-    // SAFETY: null output pointers with zero capacity perform a size query.
-    let query = unsafe {
-        common::fcitx5_windows_common_current_identity_with_executable_file_utf16(
-            std::ptr::null_mut(),
-            0,
-            std::ptr::null_mut(),
-            0,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    if query.status == 0 || query.user_sid_len == 0 {
-        return None;
-    }
-    let mut user_sid = vec![0_u16; query.user_sid_len];
-    let mut executable_path = vec![0_u16; query.executable_path_len];
-    let mut executable_final_path = vec![0_u16; query.executable_final_path_len];
-    // SAFETY: the buffers have exactly the queried capacities and are used only
-    // for this call.
-    let filled = unsafe {
-        common::fcitx5_windows_common_current_identity_with_executable_file_utf16(
-            user_sid.as_mut_ptr(),
-            user_sid.len(),
-            executable_path.as_mut_ptr(),
-            executable_path.len(),
-            executable_final_path.as_mut_ptr(),
-            executable_final_path.len(),
-        )
-    };
-    if filled.status == 0 || filled.user_sid_len != user_sid.len() {
-        return None;
-    }
-    Some(CurrentIdentity {
-        service_account: filled.service_account,
-        secure_desktop: filled.secure_desktop,
-        session_id: filled.session_id,
-        user_sid,
-    })
+fn module_path_buf(module_path: &[u16]) -> Option<PathBuf> {
+    let path = String::from_utf16(module_path).ok()?;
+    (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
 fn expected_engine_path_for_module(module_path: &[u16]) -> Option<Vec<u16>> {
     if let Some(path) = std::env::var_os("FCITX5_TEST_ENGINE_PATH") {
         return Some(path.to_string_lossy().encode_utf16().collect());
     }
-    let generation = query_wide_string(|output, capacity| {
-        // SAFETY: `module_path` is valid for this call and output/capacity are
-        // managed by `query_wide_string`.
-        unsafe {
-            common::fcitx5_windows_common_current_generation_for_module_utf16(
-                module_path.as_ptr(),
-                module_path.len(),
-                output,
-                capacity,
-            )
-        }
-    });
-    let root = query_wide_string(|output, capacity| {
-        // SAFETY: `module_path` is valid for this call and output/capacity are
-        // managed by `query_wide_string`.
-        unsafe {
-            common::fcitx5_windows_common_installation_root_for_module_utf16(
-                module_path.as_ptr(),
-                module_path.len(),
-                output,
-                capacity,
-            )
-        }
-    })?;
-    let root = PathBuf::from(String::from_utf16(&root).ok()?);
-    if let Some(generation) = generation.and_then(|value| String::from_utf16(&value).ok()) {
+    let module = module_path_buf(module_path)?;
+    let generation = common::engine_client::module_runtime_generation(&module);
+    let root = common::engine_client::installation_root_for_module(&module)?;
+    if let Some(generation) = generation {
         let runtime_engine = root
             .join("runtime")
             .join(generation)
@@ -2303,19 +2116,8 @@ fn expected_launcher_path_for_module(
             );
         }
     }
-    let root = query_wide_string(|output, capacity| {
-        // SAFETY: `module_path` is valid for this call and output/capacity are
-        // managed by `query_wide_string`.
-        unsafe {
-            common::fcitx5_windows_common_installation_root_for_module_utf16(
-                module_path.as_ptr(),
-                module_path.len(),
-                output,
-                capacity,
-            )
-        }
-    })?;
-    let root = PathBuf::from(String::from_utf16(&root).ok()?);
+    let module = module_path_buf(module_path)?;
+    let root = common::engine_client::installation_root_for_module(&module)?;
     let launcher = root.join("bin").join("fcitx5-launcher.exe");
     Some(
         launcher
@@ -4724,7 +4526,7 @@ mod tests {
         let mut client = EngineClient::default();
         let mut previous = 0;
         for _ in 0..8 {
-            let before = common::fcitx5_windows_common_tick_milliseconds();
+            let before = common::engine_client::tick_milliseconds();
             client.record_failure();
             let backoff = client.retry_at - before;
             assert!(backoff >= previous.min(ENGINE_RETRY_MAX_MILLISECONDS));
@@ -4732,9 +4534,9 @@ mod tests {
             previous = backoff;
         }
         assert!(previous >= ENGINE_RETRY_MAX_MILLISECONDS);
-        let started = common::fcitx5_windows_common_tick_milliseconds();
+        let started = common::engine_client::tick_milliseconds();
         assert!(client.begin_request(true).is_none());
-        assert!(common::fcitx5_windows_common_tick_milliseconds() - started < 100);
+        assert!(common::engine_client::tick_milliseconds() - started < 100);
     }
 
     #[test]
@@ -4760,21 +4562,16 @@ mod tests {
         let wide = name.encode_utf16().collect::<Vec<_>>();
         let connected_client = |server: &common::NamedPipeServer| {
             let _ = server;
-            // SAFETY: `wide` is a live UTF-16 pipe name; the handle is owned by
-            // the returned client.
-            let pipe = unsafe {
-                common::fcitx5_windows_common_open_pipe_client_utf16(
-                    wide.as_ptr(),
-                    wide.len(),
-                    common::fcitx5_windows_common_deadline_after_milliseconds(1000),
-                    1,
-                )
-            };
-            assert!(PipeHandle::is_valid(pipe));
+            let pipe = PipeClient::open(
+                &wide,
+                common::engine_client::deadline_after_milliseconds(1000),
+                true,
+            )
+            .expect("pipe client");
             let mut client = EngineClient {
-                pipe: Some(PipeHandle(pipe)),
+                pipe: Some(pipe),
                 handshake_complete: true,
-                last_used: common::fcitx5_windows_common_tick_milliseconds(),
+                last_used: common::engine_client::tick_milliseconds(),
                 ..EngineClient::default()
             };
             client.contexts.insert(1, EngineContextState::default());
