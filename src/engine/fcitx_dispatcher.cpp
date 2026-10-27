@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <future>
 #include <iostream>
+#include <optional>
 #include <utility>
 
 namespace fcitx::windows::engine {
@@ -270,6 +271,50 @@ bool FcitxDispatcher::queryInputMethodStatus(InputMethodStatus& result,
         return true;
     } catch (...) {
         result = {};
+        return false;
+    }
+}
+
+bool FcitxDispatcher::config(bool set, std::string uri, std::string value, std::string& payload,
+                             std::chrono::milliseconds timeout) {
+    payload.clear();
+    if (!accepting_.load(std::memory_order_acquire) || !dispatcher_)
+        return false;
+    auto completed = std::make_shared<std::promise<std::optional<std::string>>>();
+    auto future = completed->get_future();
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    dispatcher_->schedule(
+        [this, completed, deadline, set, uri = std::move(uri), value = std::move(value)] {
+            // A late write must not change a setting after Settings gave up.
+            if (std::chrono::steady_clock::now() >= deadline) {
+                droppedCount_.fetch_add(1, std::memory_order_acq_rel);
+                try {
+                    completed->set_value(std::nullopt);
+                } catch (...) {
+                }
+                return;
+            }
+            try {
+                if (set) {
+                    completed->set_value(runtime_->configSet(uri, value)
+                                             ? std::optional<std::string>(std::string{})
+                                             : std::nullopt);
+                } else {
+                    completed->set_value(runtime_->configGet(uri));
+                }
+            } catch (...) {
+                completed->set_exception(std::current_exception());
+            }
+        });
+    if (future.wait_for(timeout) != std::future_status::ready)
+        return false;
+    try {
+        auto result = future.get();
+        if (!result)
+            return false;
+        payload = std::move(*result);
+        return true;
+    } catch (...) {
         return false;
     }
 }

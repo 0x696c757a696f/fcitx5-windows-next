@@ -21,7 +21,7 @@ const CATALOGS: &[(&str, &str)] = &[
     ("th-TH", TH_TH),
     ("si-LK", SI_LK),
 ];
-const NAVIGATION_KEYS: [&str; 3] = ["nav.general", "nav.appearance", "nav.packages"];
+const NAVIGATION_KEYS: [&str; 4] = ["nav.general", "nav.appearance", "nav.packages", "nav.fcitx"];
 #[cfg(test)]
 const WINDUI_SETTINGS_KEYS: &[&str] = &[
     "settings.input.subtitle",
@@ -33,7 +33,6 @@ const WINDUI_SETTINGS_KEYS: &[&str] = &[
     "settings.input.remove",
     "settings.input.add",
     "settings.input.add_hint",
-    "settings.input.apply",
     "settings.input.applied",
     "settings.input.restart_failed",
     "settings.shortcuts.section",
@@ -57,9 +56,6 @@ const WINDUI_SETTINGS_KEYS: &[&str] = &[
     "settings.candidate.font_theme",
     "settings.candidate.opacity",
     "settings.candidate.opacity_hint",
-    "settings.reload",
-    "settings.reloaded",
-    "settings.save",
     "settings.saved",
     "settings.theme.toggle",
     "settings.candidate.section",
@@ -86,13 +82,9 @@ const WINDUI_SETTINGS_KEYS: &[&str] = &[
     "settings.candidate.writing.vertical_lr",
     "settings.candidate.writing_hint",
     "settings.candidate.page_size_hint",
-    "settings.candidate.apply",
-    "settings.candidate.cancel",
     "settings.candidate.reset",
-    "settings.candidate.applied",
     "settings.candidate.draft_updated",
     "settings.candidate.draft_loaded",
-    "settings.candidate.draft_discarded",
     "settings.candidate.draft_reset",
     "settings.plugins.subtitle",
     "settings.plugins.repository.loading",
@@ -123,6 +115,30 @@ const WINDUI_SETTINGS_KEYS: &[&str] = &[
     "settings.plugins.error.catalog_version_invalid",
     "settings.plugins.error.catalog_fields_invalid",
     "settings.plugins.error.control_unavailable",
+    "nav.fcitx",
+    "settings.fcitx.subtitle",
+    "settings.fcitx.global",
+    "settings.fcitx.global_hint",
+    "settings.fcitx.addons",
+    "settings.fcitx.addons_hint",
+    "settings.fcitx.open",
+    "settings.fcitx.back",
+    "settings.fcitx.undo",
+    "settings.fcitx.reset",
+    "settings.fcitx.reset_all",
+    "settings.fcitx.loading",
+    "settings.fcitx.saved",
+    "settings.fcitx.save_failed",
+    "settings.fcitx.load_failed",
+    "settings.fcitx.unsupported",
+    "settings.fcitx.keys_hint",
+    "settings.fcitx.lines_hint",
+    "settings.fcitx.empty",
+    "settings.fcitx.retry",
+    "settings.fcitx.error.engine_unavailable",
+    "settings.fcitx.error.no_response",
+    "settings.fcitx.error.invalid",
+    "settings.input.options",
 ];
 
 pub(crate) fn resolve_locale(configured: &str, system: &str) -> &'static str {
@@ -165,7 +181,7 @@ impl LocaleCatalog {
         self.tag
     }
 
-    pub(crate) fn navigation_labels(&self) -> [String; 3] {
+    pub(crate) fn navigation_labels(&self) -> [String; 4] {
         NAVIGATION_KEYS.map(|key| self.text(key))
     }
 

@@ -125,6 +125,7 @@ add_executable(
   "${REPOSITORY_ROOT}/src/ipc/peer_verification.cpp"
   "${REPOSITORY_ROOT}/src/engine/key_event.cpp"
   "${REPOSITORY_ROOT}/src/engine/fcitx_runtime.cpp"
+  "${REPOSITORY_ROOT}/src/engine/fcitx_config_bridge.cpp"
   "${REPOSITORY_ROOT}/src/engine/fcitx_dispatcher.cpp"
   "${REPOSITORY_ROOT}/src/engine/fcitx_engine_main.cpp")
 

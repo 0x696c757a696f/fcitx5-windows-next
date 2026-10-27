@@ -179,8 +179,6 @@
   "settings.shortcuts.toggle_punctuation": "විරාම ලකුණු මාරු කරන්න",
   "settings.appearance.subtitle": "තේමාව, අකුරු සැකසුම සහ අපේක්ෂක පෙරදසුන",
   "settings.theme.section": "තේමාව",
-  "settings.reload": "නැවත පූරණය කරන්න",
-  "settings.save": "සැකසුම් සුරකින්න",
   "settings.theme.choice": "අපේක්ෂක කවුළු තේමාව",
   "settings.theme.choice_hint": "අපේක්ෂක කවුළුව සඳහා ගොඩනඟන ලද, පරිශීලක සහ ප්ලගින තේමා",
   "settings.candidate.text_section": "අපේක්ෂක පෙළ",
@@ -191,7 +189,6 @@
   "settings.candidate.font_theme": "තේමාව අනුගමනය කරන්න",
   "settings.candidate.opacity": "පාරාන්ධතාව",
   "settings.candidate.opacity_hint": "අපේක්ෂක කවුළුවේ පාරාන්ධතා මට්ටම",
-  "settings.reloaded": "තැටියෙන් සැකසුම් නැවත පූරණය කළා",
   "settings.saved": "සැකසුම් සුරකින ලදී",
   "settings.theme.toggle": "ආලෝක සහ අඳුරු තේමා මාරු කරන්න",
   "settings.placeholder.description": "මෙම පිටුව තවම ලබා ගත නොහැක.",
@@ -218,13 +215,9 @@
   "settings.candidate.writing.vertical_lr": "සිරස් පෙළ, වමේ සිට දකුණට",
   "settings.candidate.writing_hint": "පිරිසැලසුම් දිශාවෙන් ස්වාධීන අපේක්ෂක පෙළ දිශාව",
   "settings.candidate.page_size_hint": "එක් පිටුවක උපරිම අපේක්ෂකයන් ගණන (1–9)",
-  "settings.candidate.apply": "යොදන්න",
-  "settings.candidate.cancel": "අවලංගු කරන්න",
   "settings.candidate.reset": "යළි සකසන්න",
-  "settings.candidate.applied": "අපේක්ෂක පිරිසැලසුම යොදා සුරකින ලදී",
-  "settings.candidate.draft_loaded": "Config Core වෙතින් අපේක්ෂක පිරිසැලසුම් කෙටුම්පත පූරණය කරන ලදී",
-  "settings.candidate.draft_discarded": "අපේක්ෂක පිරිසැලසුම් වෙනස්කම් ඉවත දමන ලදී",
-  "settings.candidate.draft_reset": "කෙටුම්පත උරුම වූ පෙරනිමි අගයන්ට යළි සකසන ලදී",
+  "settings.candidate.draft_loaded": "වෙනස්කම් වහාම සුරැකී යෙදේ",
+  "settings.candidate.draft_reset": "අපේක්ෂක පිරිසැලසුම පෙරනිමියට ප්‍රතිසාධනය විය",
   "settings.plugins.subtitle": "fcitx5-plugins නාමාවලිය සහ විශ්වාසදායක Windows පැකේජ",
   "settings.plugins.repository.loading": "නිල ගබඩාව · පූරණය වෙමින්",
   "settings.plugins.repository.ready": "නිල ගබඩාව · අත්සන් කළ නාමාවලිය ලබා ගත හැක",
@@ -249,7 +242,7 @@
   "settings.plugins.choose_operation": "විශ්වාසදායක පැකේජ මෙහෙයුමක් සඳහා ප්ලගිනයක් තෝරන්න",
   "settings.plugins.completed": "{operation} සම්පූර්ණයි; Control වෙතින් Windows පැකේජ තත්ත්ව {count}ක් කියවන ලදී",
   "settings.plugins.operation_failed": "ප්ලගින මෙහෙයුම {operation} අසාර්ථක විය",
-  "settings.candidate.draft_updated": "කෙටුම්පතේ {control} යාවත්කාලීන කරන ලදී; සුරැකීමට යොදන්න ක්ලික් කරන්න",
+  "settings.candidate.draft_updated": "{control} සුරැකී යෙදිණි",
   "settings.input.engine.wubi": "වුබි",
   "settings.input.engine.pinyin": "පින්යින්",
   "settings.input.engine.rime": "Rime",
@@ -268,7 +261,6 @@
   ,"settings.input.remove": "ඉවත් කරන්න"
   ,"settings.input.add": "එක් කරන්න"
   ,"settings.input.add_hint": "ස්ථාපිත ප්ලගින වල ආදාන ක්‍රමද මෙහි පෙන්වයි."
-  ,"settings.input.apply": "යොදන්න"
   ,"settings.input.applied": "සුරැකිණි. ආදාන ක්‍රම එන්ජිම යළි ආරම්භ වෙමින් පවතී."
   ,"settings.input.restart_failed": "සුරැකිණි, නමුත් ආදාන ක්‍රම එන්ජිම යළි ආරම්භ කළ නොහැකි විය: {error}"
   ,"settings.shortcuts.toggle_input_method": "යතුරුපුවරුව සහ පෙරනිමි ආදාන ක්‍රමය අතර මාරු වන්න"
@@ -282,4 +274,28 @@
   ,"theme.builtin.sakura": "සකුරා"
   ,"theme.builtin.nord": "නෝර්ඩ්"
   ,"theme.builtin.amber": "ඇම්බර්"
+  ,"nav.fcitx": "උසස්"
+  ,"settings.fcitx.subtitle": "Fcitx විකල්ප සහ සංරචක සැකසුම්"
+  ,"settings.fcitx.global": "පොදු විකල්ප"
+  ,"settings.fcitx.global_hint": "Fcitx හි හැසිරීම සහ කෙටිමං"
+  ,"settings.fcitx.addons": "සංරචක"
+  ,"settings.fcitx.addons_hint": "විකල්ප ඇති ආදාන ක්‍රම සහ සංරචක. ඔබ ස්ථාපනය කරන ප්ලගින ද මෙහි පෙන්වයි."
+  ,"settings.fcitx.open": "විකල්ප"
+  ,"settings.fcitx.back": "ආපසු"
+  ,"settings.fcitx.undo": "අහෝසි කරන්න"
+  ,"settings.fcitx.reset": "පෙරනිමිය ප්‍රතිසාධනය"
+  ,"settings.fcitx.reset_all": "සියල්ල පෙරනිමියට"
+  ,"settings.fcitx.loading": "විකල්ප කියවමින්…"
+  ,"settings.fcitx.saved": "සුරැකී යෙදිණි"
+  ,"settings.fcitx.save_failed": "සුරැකීමට නොහැකි විය: {error}"
+  ,"settings.fcitx.load_failed": "විකල්ප කියවීමට නොහැකි විය: {error}"
+  ,"settings.fcitx.unsupported": "තවම මෙහි සංස්කරණය කළ නොහැක"
+  ,"settings.fcitx.keys_hint": "යතුරු හිස්තැනකින් වෙන් කරන්න"
+  ,"settings.fcitx.lines_hint": "පේළියකට එක් අයිතමයක්"
+  ,"settings.fcitx.empty": "පෙන්වීමට සංරචක නැත. ආදාන ක්‍රමය ධාවනය වන බව තහවුරු කර නැවත කියවන්න."
+  ,"settings.fcitx.retry": "නැවත කියවන්න"
+  ,"settings.fcitx.error.engine_unavailable": "ආදාන ක්‍රම එන්ජිම ධාවනය නොවේ"
+  ,"settings.fcitx.error.no_response": "ආදාන ක්‍රම එන්ජිම ප්‍රතිචාර නොදැක්වීය"
+  ,"settings.fcitx.error.invalid": "එන්ජිම කියවිය නොහැකි විකල්ප එවීය"
+  ,"settings.input.options": "විකල්ප"
 }

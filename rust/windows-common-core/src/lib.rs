@@ -27,6 +27,11 @@ const IPC_MAGIC: u32 = 0x3457_4346;
 const IPC_VERSION: u16 = 14;
 const IPC_HEADER_SIZE: usize = 64;
 const IPC_MAX_HOT_FRAME_SIZE: usize = 256 * 1024;
+/// Settings' configuration request and response (types 13 and 14) may carry
+/// a whole configuration description, so they use the control frame limit.
+const IPC_MAX_CONTROL_FRAME_SIZE: usize = 1024 * 1024;
+const IPC_CONFIG_REQUEST_TYPE: u16 = 13;
+const IPC_CONFIG_RESPONSE_TYPE: u16 = 14;
 const ERROR_INVALID_DATA: u32 = 13;
 const ERROR_ALREADY_EXISTS: u32 = 183;
 const ERROR_SUCCESS: i32 = 0;
@@ -2063,16 +2068,27 @@ fn ipc_response_header_body_size(header: &[u8]) -> Option<usize> {
         return None;
     }
     let message_type = read_u16_le(header, 6)?;
-    if !(2..=11).contains(&message_type) || message_type == 3 || message_type == 5 {
-        return None;
-    }
+    let frame_limit = match message_type {
+        IPC_CONFIG_RESPONSE_TYPE => IPC_MAX_CONTROL_FRAME_SIZE,
+        3 | 5 => return None,
+        2..=11 => IPC_MAX_HOT_FRAME_SIZE,
+        _ => return None,
+    };
     let body_size = read_u32_le(header, 8)? as usize;
     let request_id = read_u64_le(header, 12)?;
     let response_to = read_u64_le(header, 20)?;
     if request_id == 0 || response_to == 0 {
         return None;
     }
-    (body_size <= IPC_MAX_HOT_FRAME_SIZE - IPC_HEADER_SIZE).then_some(body_size)
+    (body_size <= frame_limit - IPC_HEADER_SIZE).then_some(body_size)
+}
+
+/// The largest request frame the client sends for `request`'s type.
+fn ipc_request_frame_limit(request: &[u8]) -> usize {
+    match read_u16_le(request, 6) {
+        Some(IPC_CONFIG_REQUEST_TYPE) => IPC_MAX_CONTROL_FRAME_SIZE,
+        _ => IPC_MAX_HOT_FRAME_SIZE,
+    }
 }
 
 fn pipe_transact(
@@ -2083,7 +2099,7 @@ fn pipe_transact(
     deadline: u64,
 ) -> Fcitx5WindowsCommonPipeTransact {
     if request.is_empty()
-        || request.len() > IPC_MAX_HOT_FRAME_SIZE
+        || request.len() > ipc_request_frame_limit(request)
         || response_output.is_null()
         || response_capacity < IPC_HEADER_SIZE
         || !pipe_transfer(
@@ -2137,7 +2153,7 @@ fn pipe_transact_with_error(
     deadline: u64,
 ) -> Fcitx5WindowsCommonPipeTransactWithError {
     if request.is_empty()
-        || request.len() > IPC_MAX_HOT_FRAME_SIZE
+        || request.len() > ipc_request_frame_limit(request)
         || response_output.is_null()
         || response_capacity < IPC_HEADER_SIZE
     {

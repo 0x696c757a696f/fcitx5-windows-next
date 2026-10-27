@@ -146,6 +146,20 @@ struct FcitxInputMethodActionRequestC {
     std::uint32_t action;
 };
 
+// operation: 0 = get, 1 = set. value is empty for a get.
+struct FcitxConfigRequestC {
+    FcitxMetadataC metadata;
+    std::uint32_t operation;
+    FcitxBytesC uri;
+    FcitxBytesC value;
+};
+
+struct FcitxConfigResponseC {
+    FcitxMetadataC metadata;
+    std::uint32_t status;
+    FcitxBytesC payload;
+};
+
 struct FcitxEngineStatusResponseC {
     FcitxMetadataC metadata;
     std::uint32_t status;
@@ -205,6 +219,9 @@ std::uint8_t fcitx5_protocol_core_encode_engine_status_request(
 std::uint8_t fcitx5_protocol_core_encode_engine_status_response(
     const FcitxEngineStatusResponseC* message, std::uint8_t* out, std::size_t outCapacity,
     std::size_t* outLength);
+std::uint8_t fcitx5_protocol_core_encode_config_response(
+    const FcitxConfigResponseC* message, std::uint8_t* out, std::size_t outCapacity,
+    std::size_t* outLength);
 std::uint8_t fcitx5_protocol_core_encode_launcher_request(
     const FcitxLauncherRequestC* message, std::uint8_t* out, std::size_t outCapacity,
     std::size_t* outLength);
@@ -248,6 +265,10 @@ std::uint8_t fcitx5_protocol_core_decode_engine_status_request(
 std::uint8_t fcitx5_protocol_core_decode_input_method_action_request(
     const FcitxMetadataC* metadata, const std::uint8_t* body, std::size_t bodyLength,
     FcitxInputMethodActionRequestC* out, std::uint8_t* strings, std::size_t stringsCapacity,
+    std::size_t* stringsNeeded);
+std::uint8_t fcitx5_protocol_core_decode_config_request(
+    const FcitxMetadataC* metadata, const std::uint8_t* body, std::size_t bodyLength,
+    FcitxConfigRequestC* out, std::uint8_t* strings, std::size_t stringsCapacity,
     std::size_t* stringsNeeded);
 std::uint8_t fcitx5_protocol_core_decode_engine_status_response(
     const FcitxMetadataC* metadata, const std::uint8_t* body, std::size_t bodyLength,

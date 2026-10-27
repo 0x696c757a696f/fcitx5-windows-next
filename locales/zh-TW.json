@@ -184,8 +184,6 @@
   "settings.shortcuts.toggle_punctuation": "標點切換",
   "settings.appearance.subtitle": "主題、排版與候選預覽",
   "settings.theme.section": "主題",
-  "settings.reload": "重新載入",
-  "settings.save": "儲存設定",
   "settings.theme.choice": "候選視窗主題",
   "settings.theme.choice_hint": "內建、使用者與外掛提供的候選視窗主題",
   "settings.candidate.text_section": "候選文字",
@@ -196,7 +194,6 @@
   "settings.candidate.font_theme": "跟隨主題",
   "settings.candidate.opacity": "不透明度",
   "settings.candidate.opacity_hint": "候選視窗的不透明程度",
-  "settings.reloaded": "已從磁碟重新載入設定",
   "settings.saved": "設定已儲存",
   "settings.theme.toggle": "切換明暗主題",
   "settings.placeholder.description": "此頁面目前無法使用。",
@@ -223,13 +220,9 @@
   "settings.candidate.writing.vertical_lr": "直排文字，由左至右",
   "settings.candidate.writing_hint": "候選文字方向，與版面方向互相獨立",
   "settings.candidate.page_size_hint": "每頁最多顯示候選數（1–9）",
-  "settings.candidate.apply": "套用",
-  "settings.candidate.cancel": "取消",
   "settings.candidate.reset": "重設",
-  "settings.candidate.applied": "候選版面已套用並儲存",
-  "settings.candidate.draft_loaded": "已從 Config Core 載入候選版面草稿",
-  "settings.candidate.draft_discarded": "已捨棄候選版面變更",
-  "settings.candidate.draft_reset": "候選版面草稿已還原為繼承的預設值",
+  "settings.candidate.draft_loaded": "變更會立即儲存並生效",
+  "settings.candidate.draft_reset": "候選版面已還原為預設值並生效",
   "settings.plugins.subtitle": "fcitx5-plugins 目錄與受信任的 Windows 套件",
   "settings.plugins.repository.loading": "官方倉庫 · 正在讀取",
   "settings.plugins.repository.ready": "官方倉庫 · 簽章目錄可用",
@@ -254,7 +247,7 @@
   "settings.plugins.choose_operation": "選取外掛後即可執行受信任的套件操作",
   "settings.plugins.completed": "{operation}完成，已從 Control 讀取 {count} 個 Windows 套件狀態",
   "settings.plugins.operation_failed": "外掛操作「{operation}」失敗",
-  "settings.candidate.draft_updated": "{control}已更新草稿；按一下套用以儲存",
+  "settings.candidate.draft_updated": "{control}已儲存並生效",
   "settings.input.engine.wubi": "五筆",
   "settings.input.engine.pinyin": "拼音",
   "settings.input.engine.rime": "Rime",
@@ -273,7 +266,6 @@
   ,"settings.input.remove": "移除"
   ,"settings.input.add": "新增"
   ,"settings.input.add_hint": "已安裝外掛中的輸入法也會列在這裡。"
-  ,"settings.input.apply": "套用"
   ,"settings.input.applied": "已儲存，輸入法引擎正在重新啟動。"
   ,"settings.input.restart_failed": "已儲存，但輸入法引擎重新啟動失敗：{error}"
   ,"settings.shortcuts.toggle_input_method": "切換鍵盤與預設輸入法"
@@ -282,4 +274,28 @@
   ,"settings.startup.section": "啟動"
   ,"settings.startup.sign_in": "登入時自動啟動"
   ,"settings.startup.sign_in_hint": "讓市集 (UWP) 應用程式在登入後立即可以輸入。"
+  ,"nav.fcitx": "進階"
+  ,"settings.fcitx.subtitle": "Fcitx 全域選項與各元件設定"
+  ,"settings.fcitx.global": "全域選項"
+  ,"settings.fcitx.global_hint": "Fcitx 本身的行為和快速鍵"
+  ,"settings.fcitx.addons": "元件"
+  ,"settings.fcitx.addons_hint": "有設定項目的輸入法和元件，安裝的外掛也會出現在這裡。"
+  ,"settings.fcitx.open": "設定"
+  ,"settings.fcitx.back": "返回"
+  ,"settings.fcitx.undo": "復原"
+  ,"settings.fcitx.reset": "還原預設值"
+  ,"settings.fcitx.reset_all": "全部還原預設值"
+  ,"settings.fcitx.loading": "正在讀取設定…"
+  ,"settings.fcitx.saved": "已儲存並生效"
+  ,"settings.fcitx.save_failed": "儲存失敗：{error}"
+  ,"settings.fcitx.load_failed": "讀取設定失敗：{error}"
+  ,"settings.fcitx.unsupported": "暫不支援在此修改"
+  ,"settings.fcitx.keys_hint": "多個按鍵以空格分隔"
+  ,"settings.fcitx.lines_hint": "每行一項"
+  ,"settings.fcitx.empty": "沒有可顯示的元件。請確認輸入法正在執行，然後重新讀取。"
+  ,"settings.fcitx.retry": "重新讀取"
+  ,"settings.fcitx.error.engine_unavailable": "輸入法引擎沒有執行"
+  ,"settings.fcitx.error.no_response": "輸入法引擎沒有回應"
+  ,"settings.fcitx.error.invalid": "引擎傳回的設定無法辨識"
+  ,"settings.input.options": "選項"
 }
