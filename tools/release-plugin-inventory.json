@@ -7,6 +7,7 @@
       "summary": "Rime input engine",
       "type": "addon",
       "architecture": "x64",
+      "bundled": true,
       "license": "LGPL-2.1-or-later",
       "source": {
         "repository": "https://github.com/fcitx/fcitx5-rime.git",
@@ -31,6 +32,7 @@
       "summary": "Lua addon loader",
       "type": "addon",
       "architecture": "x64",
+      "bundled": true,
       "license": "LGPL-2.1-or-later",
       "source": {
         "repository": "https://github.com/fcitx/fcitx5-lua.git",
@@ -55,6 +57,7 @@
       "summary": "Vietnamese input method",
       "type": "addon",
       "architecture": "x64",
+      "bundled": false,
       "license": "GPL-2.0-or-later",
       "source": {
         "repository": "https://github.com/fcitx/fcitx5-unikey.git",
@@ -68,6 +71,190 @@
         "lib/fcitx5/libunikey.dll",
         "share/fcitx5/addon/unikey.conf",
         "share/fcitx5/inputmethod/unikey.conf"
+      ]
+    },
+    {
+      "id": "fcitx5-chinese-addons-wbx",
+      "title": "Wubi",
+      "summary": "Chinese table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "bundled": false,
+      "license": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+      "source": {
+        "repository": "https://github.com/fcitx/fcitx5-chinese-addons.git",
+        "commit": "e8d930f402e359cfd76a101ee3e46815d1331d83"
+      },
+      "build": {
+        "script": "tools/bootstrap-fcitx.ps1",
+        "dependencies": [
+          {"name": "libime", "commit": "5be1300ea00e899b3f2c46d1e9f6bca21139cdeb", "license": "LGPL-2.1-or-later"}
+        ]
+      },
+      "payload": [
+        "share/fcitx5/inputmethod/wbx.conf",
+        "share/fcitx5/table/wbx.main.dict"
+      ]
+    },
+    {
+      "id": "fcitx5-chinese-addons-wbpy",
+      "title": "Wubi Pinyin",
+      "summary": "Chinese table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "bundled": false,
+      "license": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+      "source": {
+        "repository": "https://github.com/fcitx/fcitx5-chinese-addons.git",
+        "commit": "e8d930f402e359cfd76a101ee3e46815d1331d83"
+      },
+      "build": {
+        "script": "tools/bootstrap-fcitx.ps1",
+        "dependencies": [
+          {"name": "libime", "commit": "5be1300ea00e899b3f2c46d1e9f6bca21139cdeb", "license": "LGPL-2.1-or-later"}
+        ]
+      },
+      "payload": [
+        "share/fcitx5/inputmethod/wbpy.conf",
+        "share/fcitx5/table/wbpy.main.dict"
+      ]
+    },
+    {
+      "id": "fcitx5-chinese-addons-cangjie",
+      "title": "Cangjie (Simplified Chinese)",
+      "summary": "Chinese table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "bundled": false,
+      "license": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+      "source": {
+        "repository": "https://github.com/fcitx/fcitx5-chinese-addons.git",
+        "commit": "e8d930f402e359cfd76a101ee3e46815d1331d83"
+      },
+      "build": {
+        "script": "tools/bootstrap-fcitx.ps1",
+        "dependencies": [
+          {"name": "libime", "commit": "5be1300ea00e899b3f2c46d1e9f6bca21139cdeb", "license": "LGPL-2.1-or-later"}
+        ]
+      },
+      "payload": [
+        "share/fcitx5/inputmethod/cangjie.conf",
+        "share/fcitx5/table/cj.main.dict"
+      ]
+    },
+    {
+      "id": "fcitx5-chinese-addons-erbi",
+      "title": "Erbi",
+      "summary": "Chinese table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "bundled": false,
+      "license": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+      "source": {
+        "repository": "https://github.com/fcitx/fcitx5-chinese-addons.git",
+        "commit": "e8d930f402e359cfd76a101ee3e46815d1331d83"
+      },
+      "build": {
+        "script": "tools/bootstrap-fcitx.ps1",
+        "dependencies": [
+          {"name": "libime", "commit": "5be1300ea00e899b3f2c46d1e9f6bca21139cdeb", "license": "LGPL-2.1-or-later"}
+        ]
+      },
+      "payload": [
+        "share/fcitx5/inputmethod/erbi.conf",
+        "share/fcitx5/table/erbi.main.dict"
+      ]
+    },
+    {
+      "id": "fcitx5-chinese-addons-qxm",
+      "title": "Bingchan",
+      "summary": "Chinese table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "bundled": false,
+      "license": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+      "source": {
+        "repository": "https://github.com/fcitx/fcitx5-chinese-addons.git",
+        "commit": "e8d930f402e359cfd76a101ee3e46815d1331d83"
+      },
+      "build": {
+        "script": "tools/bootstrap-fcitx.ps1",
+        "dependencies": [
+          {"name": "libime", "commit": "5be1300ea00e899b3f2c46d1e9f6bca21139cdeb", "license": "LGPL-2.1-or-later"}
+        ]
+      },
+      "payload": [
+        "share/fcitx5/inputmethod/qxm.conf",
+        "share/fcitx5/table/qxm.main.dict"
+      ]
+    },
+    {
+      "id": "fcitx5-chinese-addons-wanfeng",
+      "title": "Wanfeng",
+      "summary": "Chinese table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "bundled": false,
+      "license": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+      "source": {
+        "repository": "https://github.com/fcitx/fcitx5-chinese-addons.git",
+        "commit": "e8d930f402e359cfd76a101ee3e46815d1331d83"
+      },
+      "build": {
+        "script": "tools/bootstrap-fcitx.ps1",
+        "dependencies": [
+          {"name": "libime", "commit": "5be1300ea00e899b3f2c46d1e9f6bca21139cdeb", "license": "LGPL-2.1-or-later"}
+        ]
+      },
+      "payload": [
+        "share/fcitx5/inputmethod/wanfeng.conf",
+        "share/fcitx5/table/wanfeng.main.dict"
+      ]
+    },
+    {
+      "id": "fcitx5-chinese-addons-zrm",
+      "title": "Ziranma",
+      "summary": "Chinese table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "bundled": false,
+      "license": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+      "source": {
+        "repository": "https://github.com/fcitx/fcitx5-chinese-addons.git",
+        "commit": "e8d930f402e359cfd76a101ee3e46815d1331d83"
+      },
+      "build": {
+        "script": "tools/bootstrap-fcitx.ps1",
+        "dependencies": [
+          {"name": "libime", "commit": "5be1300ea00e899b3f2c46d1e9f6bca21139cdeb", "license": "LGPL-2.1-or-later"}
+        ]
+      },
+      "payload": [
+        "share/fcitx5/inputmethod/zrm.conf",
+        "share/fcitx5/table/zrm.main.dict"
+      ]
+    },
+    {
+      "id": "fcitx5-chinese-addons-db",
+      "title": "Dianbaoma",
+      "summary": "Chinese table input method data",
+      "type": "inputmethod-data",
+      "architecture": "any",
+      "bundled": false,
+      "license": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+      "source": {
+        "repository": "https://github.com/fcitx/fcitx5-chinese-addons.git",
+        "commit": "e8d930f402e359cfd76a101ee3e46815d1331d83"
+      },
+      "build": {
+        "script": "tools/bootstrap-fcitx.ps1",
+        "dependencies": [
+          {"name": "libime", "commit": "5be1300ea00e899b3f2c46d1e9f6bca21139cdeb", "license": "LGPL-2.1-or-later"}
+        ]
+      },
+      "payload": [
+        "share/fcitx5/inputmethod/db.conf",
+        "share/fcitx5/table/db.main.dict"
       ]
     }
   ]

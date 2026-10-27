@@ -122,6 +122,46 @@ Get-ChildItem -LiteralPath (Join-Path $root 'lib') -Filter '*.a' -File |
 Get-ChildItem -LiteralPath (Join-Path $root 'lib/fcitx5') -Filter 'libtest*.dll' -File `
   -ErrorAction SilentlyContinue | Remove-Item -Force
 
+# Table input methods name their dictionary by the build machine's absolute
+# path, which does not exist on the user's machine. Move each dictionary to
+# share/fcitx5/table and point File= there; Fcitx resolves a relative path
+# against its data directories, the installed plugins' included.
+$inputMethodDir = Join-Path $root 'share/fcitx5/inputmethod'
+foreach ($conf in @(Get-ChildItem -LiteralPath $inputMethodDir -Filter '*.conf' -File)) {
+  $text = [IO.File]::ReadAllText($conf.FullName)
+  $match = [regex]::Match($text, '(?m)^File=(.*/share/libime/([A-Za-z0-9_.-]+\.dict))\r?$')
+  if (-not $match.Success) { continue }
+  $name = $match.Groups[2].Value
+  $dictionary = Join-Path $root "share/libime/$name"
+  if (-not (Test-Path -LiteralPath $dictionary -PathType Leaf)) {
+    throw "$($conf.Name) names a dictionary the build did not install: $name"
+  }
+  $tableDir = Join-Path $root 'share/fcitx5/table'
+  New-Item -ItemType Directory -Force -Path $tableDir | Out-Null
+  Move-Item -LiteralPath $dictionary -Destination (Join-Path $tableDir $name) -Force
+  $text = $text.Remove($match.Groups[1].Index, $match.Groups[1].Length).Insert(
+    $match.Groups[1].Index, "table/$name")
+  [IO.File]::WriteAllText($conf.FullName, $text, [Text.UTF8Encoding]::new($false))
+}
+
+# Optional plugins built with the core (Unikey, the Chinese Addons tables)
+# leave the core payload. tools/release-plugin-artifacts.ps1 packages them
+# from plugin-payloads, next to the stage.
+$pluginPayloads = Join-Path $work 'plugin-payloads'
+$pluginInventory = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'release-plugin-inventory.json') -Raw |
+  ConvertFrom-Json
+foreach ($plugin in @($pluginInventory.packages | Where-Object { -not $_.bundled })) {
+  foreach ($relative in @($plugin.payload)) {
+    $source = Join-Path $root $relative
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+      throw "Plugin $($plugin.id) payload is missing from the build: $relative"
+    }
+    $destination = Join-Path $pluginPayloads $relative
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+    Move-Item -LiteralPath $source -Destination $destination
+  }
+}
+
 $bin = Join-Path $root 'bin'
 foreach ($name in @('fcitx5-config.exe', 'fcitx5-control.exe', 'fcitx5-launcher.exe',
                      'fcitx5-ui.exe', 'fcitx5-register.exe', 'fcitx5-package.exe',

@@ -17,6 +17,12 @@ stage, starting from the addon .conf files the inventory names:
 The inventory payload must be exactly that set plus any extra files it lists
 that exist in the stage, and every DLL it lists must be some addon's library.
 
+Packages that are not bundled leave the core: tools/stage-package.ps1 moves
+their payload to plugin-payloads next to the stage, so they are checked there,
+and none of their files may be left in the stage. An inputmethod-data package
+lists input method files whose addon the stage ships, and every table
+dictionary they name (File=, relative to share/fcitx5).
+
 With --fork-root, each prepared fork plugin payload (tools/prepare-fork-plugins.ps1)
 is also checked: its addon libraries and input method addons must resolve
 within the package or the stage.
@@ -82,38 +88,66 @@ def addon_name(rel):
     return Path(rel).stem
 
 
+def check_data_package(root, stage, payload):
+    problems = []
+    stage_addons = {p.stem for p in (stage / ADDON_DIR).glob("*.conf")}
+    methods = [rel for rel in payload if rel.startswith(INPUTMETHOD_DIR + "/") and rel.endswith(".conf")]
+    if not methods:
+        problems.append(f"lists no {INPUTMETHOD_DIR}/*.conf")
+    for rel in methods:
+        if not (root / rel).is_file():
+            continue
+        conf = read_conf(root / rel)
+        addon = conf.get("InputMethod", {}).get("Addon", "")
+        if addon not in stage_addons:
+            problems.append(f"{rel} uses addon {addon!r}, which the stage does not ship")
+        table = conf.get("Table", {}).get("File", "")
+        if table and (table.startswith("/") or ":" in table or f"share/fcitx5/{table}" not in payload):
+            problems.append(f"{rel} names table {table!r}, which is not a share/fcitx5 file of the package")
+    return problems
+
+
 def check_stage_packages(stage, inventory):
     errors = []
-    methods = inputmethods_by_addon(stage)
+    pool = stage.parent / "plugin-payloads"
     for package in inventory["packages"]:
         pid = package["id"]
         payload = list(package["payload"])
-        problems = [f"listed but not installed: {rel}" for rel in payload if not (stage / rel).is_file()]
+        root = stage if package["bundled"] else pool
+        problems = [f"listed but not installed: {rel}" for rel in payload if not (root / rel).is_file()]
+        if not package["bundled"]:
+            problems += [f"left in the core payload: {rel}" for rel in payload if (stage / rel).exists()]
+        if package["type"] == "inputmethod-data":
+            problems += check_data_package(root, stage, payload)
+            if problems:
+                errors.append((pid, problems, None))
+            continue
+        methods = inputmethods_by_addon(root)
         addons = [rel for rel in payload if rel.startswith(ADDON_DIR + "/") and rel.endswith(".conf")]
         if not addons:
             problems.append(f"lists no {ADDON_DIR}/*.conf")
         expected = set(addons)
         libraries = set()
         for rel in addons:
-            if not (stage / rel).is_file():
+            if not (root / rel).is_file():
                 continue
-            needed = addon_files(stage, rel, addon_name(rel))
+            needed = addon_files(root, rel, addon_name(rel))
             for need in needed:
-                if not (stage / need).is_file():
+                if not (root / need).is_file():
                     problems.append(f"{rel} needs {need}, which the build did not install")
             libraries.update(n for n in needed if n.startswith(LIBRARY_DIR + "/"))
             expected.update(needed)
             expected.update(methods.get(addon_name(rel), []))
         for rel in sorted(expected - set(payload)):
-            if (stage / rel).is_file():
+            if (root / rel).is_file():
                 problems.append(f"missing from payload: {rel}")
         for rel in payload:
             if rel.startswith(LIBRARY_DIR + "/") and rel.endswith(".dll") and rel not in libraries:
                 problems.append(f"{rel} is not the library of any addon the package lists")
         if problems:
-            extras = [rel for rel in payload if rel not in expected and (stage / rel).is_file()
+            extras = [rel for rel in payload if rel not in expected and (root / rel).is_file()
                       and not (rel.startswith(LIBRARY_DIR + "/") and rel.endswith(".dll"))]
-            corrected = sorted(r for r in expected | set(extras) if (stage / r).is_file())
+            corrected = sorted(r for r in expected | set(extras) if (root / r).is_file())
             errors.append((pid, problems, corrected))
     return errors
 
