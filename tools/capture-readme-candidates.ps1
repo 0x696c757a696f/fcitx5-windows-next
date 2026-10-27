@@ -7,8 +7,9 @@ param(
 
 # Captures the real candidate window (fcitx5-ui.exe --demo) in the layouts the
 # README shows, in light and dark mode, and composes one image per mode:
-# candidate-layouts-light.png and candidate-layouts-dark.png. Each window is
-# shown over a solid backdrop so its rounded corners and shadow come out
+# candidate-layouts-light.png and candidate-layouts-dark.png. The scroll demo
+# (--scroll-demo, a long bulk list) is saved per direction as
+# candidate-scroll-<direction>-expanded-<mode>.png. Each window is shown over a solid backdrop so its rounded corners and shadow come out
 # against the README card color instead of whatever the desktop shows.
 
 Set-StrictMode -Version Latest
@@ -79,7 +80,8 @@ function Get-StableRectangle([IntPtr] $window) {
   throw 'The candidate window did not settle.'
 }
 
-function Get-Capture([string] $mode, [hashtable] $layout, [Drawing.Color] $backdropColor) {
+function Get-Capture([string] $mode, [hashtable] $layout, [Drawing.Color] $backdropColor,
+    [string] $demo = '--demo') {
   $config = "format_version = 1`n`n[appearance]`nmode = `"$mode`"`ntheme = `"builtin:default`"`n`n[candidate]`n$($layout.settings)`n"
   [IO.File]::WriteAllText((Join-Path $dataRoot 'config.toml'), $config, [Text.UTF8Encoding]::new($false))
 
@@ -91,12 +93,12 @@ function Get-Capture([string] $mode, [hashtable] $layout, [Drawing.Color] $backd
   $backdrop.ShowInTaskbar = $false
   $backdrop.Show()
   [Windows.Forms.Application]::DoEvents()
-  $process = Start-Process -FilePath $ui -ArgumentList '--demo' -WorkingDirectory (Split-Path $ui) -PassThru
+  $process = Start-Process -FilePath $ui -ArgumentList $demo -WorkingDirectory (Split-Path $ui) -PassThru
   try {
     $window = [IntPtr]::Zero
     for ($attempt = 0; $attempt -lt 200 -and $window -eq [IntPtr]::Zero; $attempt++) {
       $process.Refresh()
-      if ($process.HasExited) { throw "fcitx5-ui.exe --demo exited with $($process.ExitCode)." }
+      if ($process.HasExited) { throw "fcitx5-ui.exe $demo exited with $($process.ExitCode)." }
       $window = [ReadmeCaptureNative]::FindVisibleWindow([uint32]$process.Id)
       [Windows.Forms.Application]::DoEvents()
       Start-Sleep -Milliseconds 25
@@ -119,7 +121,8 @@ function Get-Capture([string] $mode, [hashtable] $layout, [Drawing.Color] $backd
     } finally {
       $graphics.Dispose()
     }
-    $bitmap.Save((Join-Path $output "candidate-$($layout.name)-$mode.png"), [Drawing.Imaging.ImageFormat]::Png)
+    $name = if ($demo -eq '--demo') { $layout.name } else { "$($layout.name)-expanded" }
+    $bitmap.Save((Join-Path $output "candidate-$name-$mode.png"), [Drawing.Imaging.ImageFormat]::Png)
     return $bitmap
   } finally {
     if (-not $process.HasExited) { $process.Kill($true); $process.WaitForExit(5000) | Out-Null }
@@ -166,6 +169,10 @@ foreach ($mode in $modes.Keys) {
   $canvas.Save((Join-Path $output "candidate-layouts-$mode.png"), [Drawing.Imaging.ImageFormat]::Png)
   $canvas.Dispose()
   $captures | ForEach-Object { $_.Dispose() }
+  foreach ($direction in @('horizontal', 'vertical')) {
+    $scroll = @{ name = "scroll-$direction"; settings = "layout_type = `"scroll`"`nscroll_direction = `"$direction`"" }
+    (Get-Capture $mode $scroll $style.backdrop '--scroll-demo').Dispose()
+  }
 }
 Remove-Item -LiteralPath (Join-Path $dataRoot 'config.toml') -Force
 Write-Host "README candidate images written to $output"
