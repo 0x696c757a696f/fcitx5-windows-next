@@ -233,9 +233,14 @@ try {
   }
   $generatedAt = [DateTimeOffset]::UtcNow
   $expiresAt = $generatedAt.AddDays(7)
-  $targetCanonical = ($indexPackages | ForEach-Object {
+  # Package Core hashes the targets ordered by id, then architecture, in byte
+  # order. A tab sorts below every id character, so an ordinal sort of the
+  # whole lines gives the same order.
+  [string[]] $targetLines = @($indexPackages | ForEach-Object {
     "$($_.id)`t$Version`t$ReleaseSequence`t$($_.architecture)`t$($_.sha256)`n"
-  }) -join ''
+  })
+  [Array]::Sort($targetLines, [StringComparer]::Ordinal)
+  $targetCanonical = $targetLines -join ''
   $targetSha256 = (Get-FileHash -InputStream ([IO.MemoryStream]::new(
     [Text.Encoding]::UTF8.GetBytes($targetCanonical))) -Algorithm SHA256).Hash.ToLowerInvariant()
   $index = [ordered]@{
