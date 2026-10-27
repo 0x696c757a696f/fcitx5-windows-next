@@ -957,6 +957,77 @@ impl NamedEvent {
     }
 }
 
+impl AsHandle for NamedEvent {
+    fn as_handle(&self) -> BorrowedHandle<'_> {
+        self.handle.as_handle()
+    }
+}
+
+/// Owns an unnamed manual-reset event, for waking a thread that waits on kernel objects.
+pub struct LocalEvent {
+    handle: OwnedHandle,
+}
+
+impl LocalEvent {
+    /// Creates a non-signaled event.
+    ///
+    /// # Errors
+    ///
+    /// Returns the Win32 creation error.
+    pub fn new() -> io::Result<Self> {
+        // SAFETY: null attributes and a null name request a private, unnamed event.
+        let raw = unsafe { CreateEventW(std::ptr::null_mut(), 1, 0, std::ptr::null()) };
+        Ok(Self {
+            handle: owned_kernel_handle(raw)?,
+        })
+    }
+
+    /// Signals the event.
+    ///
+    /// # Errors
+    ///
+    /// Returns the Win32 signaling error.
+    pub fn signal(&self) -> io::Result<()> {
+        // SAFETY: `handle` owns a live event handle for this synchronous call.
+        if unsafe { SetEvent(self.handle.as_raw_handle()) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
+impl AsHandle for LocalEvent {
+    fn as_handle(&self) -> BorrowedHandle<'_> {
+        self.handle.as_handle()
+    }
+}
+
+/// Waits until one of `handles` is signaled and returns its index, or `None` when the wait
+/// times out or fails.
+#[must_use]
+pub fn wait_for_any(handles: &[BorrowedHandle<'_>], timeout: Option<Duration>) -> Option<usize> {
+    const WAIT_TIMEOUT_INFINITE: u32 = u32::MAX;
+    const MAXIMUM_WAIT_OBJECTS: usize = 64;
+    if handles.is_empty() || handles.len() > MAXIMUM_WAIT_OBJECTS {
+        return None;
+    }
+    let milliseconds = match timeout {
+        Some(timeout) => {
+            u32::try_from(timeout.as_millis().min(u128::from(MAX_DWORD_MINUS_ONE))).ok()?
+        }
+        None => WAIT_TIMEOUT_INFINITE,
+    };
+    let raw = handles
+        .iter()
+        .map(AsRawHandle::as_raw_handle)
+        .collect::<Vec<_>>();
+    // SAFETY: `raw` holds `handles.len()` (at most 64) live handles borrowed for the
+    // duration of this synchronous wait.
+    let result = unsafe { WaitForMultipleObjects(raw.len() as u32, raw.as_ptr(), 0, milliseconds) };
+    let index = result.wrapping_sub(WAIT_OBJECT_0) as usize;
+    (index < handles.len()).then_some(index)
+}
+
 /// Waits for a borrowed waitable handle until `timeout` expires.
 #[must_use]
 pub fn wait_for_handle(handle: BorrowedHandle<'_>, timeout: Duration) -> bool {
@@ -6181,6 +6252,19 @@ mod tests {
             ),
             invalid_handle_value()
         );
+    }
+
+    #[test]
+    fn wait_for_any_reports_the_first_signaled_handle() {
+        let first = LocalEvent::new().expect("first event");
+        let second = LocalEvent::new().expect("second event");
+        let handles = [first.as_handle(), second.as_handle()];
+        assert_eq!(wait_for_any(&handles, Some(Duration::ZERO)), None);
+        second.signal().expect("signal second");
+        assert_eq!(wait_for_any(&handles, Some(Duration::ZERO)), Some(1));
+        first.signal().expect("signal first");
+        assert_eq!(wait_for_any(&handles, None), Some(0));
+        assert_eq!(wait_for_any(&[], None), None);
     }
 
     #[test]
