@@ -21,6 +21,8 @@ namespace {
 // client failing open.
 constexpr auto kHeartbeatInterval = std::chrono::seconds(5);
 constexpr auto kHeartbeatTimeout = std::chrono::seconds(30);
+// How soon a setting saved in Settings reaches the running engine.
+constexpr auto kConfigPollInterval = std::chrono::seconds(1);
 constexpr UINT kRestartExitCode = 70;
 
 std::int64_t steadyMilliseconds() {
@@ -83,19 +85,29 @@ bool FcitxDispatcher::start(bool safeMode) {
 
 void FcitxDispatcher::watch() {
     std::unique_lock lock(watchdogMutex_);
-    while (!watchdogWake_.wait_for(lock, kHeartbeatInterval,
+    auto nextHeartbeat = std::chrono::steady_clock::now() + kHeartbeatInterval;
+    while (!watchdogWake_.wait_for(lock, kConfigPollInterval,
                                    [this] { return stopping_.load(std::memory_order_acquire); })) {
+        if (!accepting_.load(std::memory_order_acquire) || !dispatcher_)
+            continue;
+        dispatcher_->schedule([this] {
+            try {
+                runtime_->reloadConfigIfChanged();
+            } catch (...) {
+            }
+        });
+        if (std::chrono::steady_clock::now() < nextHeartbeat)
+            continue;
+        nextHeartbeat = std::chrono::steady_clock::now() + kHeartbeatInterval;
         const auto silentMs =
             steadyMilliseconds() - lastHeartbeatMs_.load(std::memory_order_acquire);
         if (silentMs >=
             std::chrono::duration_cast<std::chrono::milliseconds>(kHeartbeatTimeout).count()) {
             terminateForRestart("Fcitx event loop stopped responding");
         }
-        if (accepting_.load(std::memory_order_acquire) && dispatcher_) {
-            dispatcher_->schedule([this] {
-                lastHeartbeatMs_.store(steadyMilliseconds(), std::memory_order_release);
-            });
-        }
+        dispatcher_->schedule([this] {
+            lastHeartbeatMs_.store(steadyMilliseconds(), std::memory_order_release);
+        });
     }
 }
 

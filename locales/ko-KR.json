@@ -234,6 +234,7 @@
   "settings.plugins.repository.loading": "공식 저장소 · 읽는 중",
   "settings.plugins.repository.ready": "공식 저장소 · 서명된 카탈로그 사용 가능",
   "settings.plugins.repository.unavailable": "공식 저장소 · 사용할 수 없음{detail}",
+  "settings.plugins.repository.not_downloaded": "공식 저장소 · 카탈로그를 아직 내려받지 않았습니다. 온라인 새로 고침을 누르세요",
   "settings.plugins.fallback_category": "애드온",
   "settings.plugins.fallback_metadata": "메타데이터는 공식 Control 카탈로그에서 제공합니다",
   "settings.plugins.operation.list": "목록",

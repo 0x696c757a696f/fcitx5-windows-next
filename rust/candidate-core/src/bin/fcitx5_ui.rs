@@ -25,7 +25,8 @@ use fcitx5_candidate_core::presentation_server::serve_presentation;
 use fcitx5_candidate_core::renderer::resolve_candidate_family;
 use fcitx5_candidate_core::window_host::{
     fcitx5_candidate_window_create, fcitx5_candidate_window_destroy,
-    fcitx5_candidate_window_run_message_loop, Fcitx5CandidateWindowCreateInput,
+    fcitx5_candidate_window_run_message_loop, fcitx5_candidate_window_set_corner_region,
+    Fcitx5CandidateWindowCreateInput,
 };
 use fcitx5_candidate_core::{
     content_locale_or_default, content_locale_valid, default_dwrite_locale,
@@ -536,6 +537,8 @@ struct Host {
     tracking_mouse_leave: bool,
     /// Refreshed on system setting changes instead of queried every paint.
     high_contrast: bool,
+    /// (width, height, radius) of the window region last set.
+    corner_region: Option<(i32, i32, i32)>,
 }
 
 impl Host {
@@ -593,6 +596,7 @@ impl Host {
             hovered: None,
             tracking_mouse_leave: false,
             high_contrast: system_high_contrast(),
+            corner_region: None,
         }))
     }
 
@@ -747,6 +751,17 @@ impl Host {
         let window = self.window;
         // SAFETY: window is a valid HWND created by the Rust window host.
         unsafe {
+            // Same radius the renderer paints the background and border with,
+            // set before the window shows at its new size.
+            let region = (
+                outputs.window_width as i32,
+                outputs.window_height as i32,
+                self.visual_config.corner_radius_dip.round() as i32,
+            );
+            if self.corner_region != Some(region) {
+                fcitx5_candidate_window_set_corner_region(window, region.0, region.1, region.2);
+                self.corner_region = Some(region);
+            }
             SetWindowPos(
                 window,
                 HWND_TOPMOST,

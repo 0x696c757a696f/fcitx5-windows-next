@@ -234,6 +234,7 @@
   "settings.plugins.repository.loading": "公式リポジトリ · 読み込み中",
   "settings.plugins.repository.ready": "公式リポジトリ · 署名済みカタログを利用できます",
   "settings.plugins.repository.unavailable": "公式リポジトリ · 利用不可{detail}",
+  "settings.plugins.repository.not_downloaded": "公式リポジトリ · カタログ未取得です。「オンラインを更新」を押してください",
   "settings.plugins.fallback_category": "アドオン",
   "settings.plugins.fallback_metadata": "メタデータは公式 Control カタログから提供されます",
   "settings.plugins.operation.list": "一覧表示",

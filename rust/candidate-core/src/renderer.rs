@@ -578,19 +578,6 @@ pub(crate) struct RenderWindowInput<'a> {
     pub hovered: Option<usize>,
 }
 
-/// Total scrollable extent of the whole content along the viewport axis
-/// (clamped scroll_override may leave natural content beyond the applied
-/// offset). Unit px.
-fn total_scrollable(axis: &AxisLayoutResult) -> f32 {
-    let width = axis.content_size.width;
-    let height = axis.content_size.height;
-    let window_w = (axis.window.right - axis.window.left).max(0.0);
-    let window_h = (axis.window.bottom - axis.window.top).max(0.0);
-    (height - window_h)
-        .max(0.0)
-        .max((width - window_w).max(0.0))
-}
-
 /// A complete candidate-window bitmap in BGRA row-major order, window-local.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RenderWindowOutput {
@@ -833,7 +820,7 @@ pub(crate) fn render_candidate_window(input: &RenderWindowInput<'_>) -> RenderWi
     }
 
     // 5. Scrollbar (right edge) when the content overflows its viewport.
-    draw_scrollbar(&mut canvas, input, window_w, window_h, axis);
+    draw_scrollbar(&mut canvas, input, window_w, window_h, y_offset, axis);
 
     // 6. Outer rounded border.
     draw_border(&mut canvas, input, window_w, window_h);
@@ -1341,49 +1328,77 @@ fn draw_candidate_vertical(
     }
 }
 
-/// Frozen legacy scrollbar: 4px rounded bar on the window right edge, from
-/// `item_padding_y` to `height - item_padding_y`, drawn only when the vertical
-/// list viewport is active (`viewport_offset` carries a vertical scroll).
-/// Thumb length ∝ viewport extent / content extent (min 18px), position ∝
-/// the applied offset / total scrollable extent. Horizontal-row and
-/// vertical-column scrolling had no legacy bar and draw none.
+/// Scrollbar: a 4px rounded bar along the scrolling axis, drawn whenever the
+/// viewport is active (`viewport_offset` is set) and the content overflows
+/// that axis, including at offset 0. A vertical scroll puts it on the right
+/// edge, from `item_padding_y` to `height - item_padding_y`; a horizontal
+/// scroll puts it on the bottom edge, from `item_padding_x` to
+/// `width - item_padding_x`. Thumb length ∝ viewport extent / content extent
+/// (min 18px), position ∝ the applied offset / total scrollable extent.
 fn draw_scrollbar(
     canvas: &mut SkiaCanvas<'_>,
     input: &RenderWindowInput<'_>,
     window_w: f32,
     window_h: f32,
+    y_offset: f32,
     axis: &AxisLayoutResult,
 ) {
     let geometry = input.geometry;
-    let Some((_dx, dy)) = axis.viewport_offset else {
+    let Some((dx, dy)) = axis.viewport_offset else {
         return;
     };
-    if dy <= 0.0 || axis.content_size.height <= window_h {
+    // The candidates scroll below the preedit row; pick the axis the same way
+    // `Host::scroll_viewport` does, so the bar shows the axis the wheel moves.
+    let viewport_h = (window_h - y_offset).max(0.0);
+    let vertical = axis.content_size.height > viewport_h + 0.5;
+    let horizontal = !vertical && axis.content_size.width > window_w + 0.5;
+    let (track_x, track_y, track_w, track_h) = if vertical {
+        let pad_y = geometry.item_padding_y.max(0.0);
+        (
+            window_w - 6.0,
+            y_offset + pad_y,
+            4.0,
+            (viewport_h - pad_y * 2.0).max(1.0),
+        )
+    } else if horizontal {
+        let pad_x = geometry.item_padding_x.max(0.0);
+        (
+            pad_x,
+            window_h - 6.0,
+            (window_w - pad_x * 2.0).max(1.0),
+            4.0,
+        )
+    } else {
         return;
-    }
-    let pad_y = geometry.item_padding_y.max(0.0);
-    let track_x = window_w - 6.0;
-    let track_y = pad_y;
-    let track_h = (window_h - pad_y * 2.0).max(1.0);
-    let content = axis.content_size.height.max(window_h);
-    let scrollable = total_scrollable(axis);
-    let length = (track_h * window_h / content).clamp(18.0, track_h);
-    let travel = (track_h - length).max(0.0);
-    let thumb_y = track_y + travel * (dy / scrollable.max(1e-3)).clamp(0.0, 1.0);
+    };
+    let (track_len, viewport, content, offset) = if vertical {
+        (track_h, viewport_h, axis.content_size.height, dy)
+    } else {
+        (track_w, window_w, axis.content_size.width, dx)
+    };
+    let scrollable = content - viewport;
+    let length =
+        (track_len * viewport / content.max(viewport)).clamp(18.0_f32.min(track_len), track_len);
+    let thumb = (track_len - length).max(0.0) * (offset / scrollable.max(1e-3)).clamp(0.0, 1.0);
+    let (thumb_x, thumb_y, thumb_w, thumb_h) = if vertical {
+        (track_x, track_y + thumb, 4.0, length)
+    } else {
+        (track_x + thumb, track_y, length, 4.0)
+    };
     let radius = 2.0;
     canvas.fill_round_rect(
         track_x,
         track_y,
-        4.0,
+        track_w,
         track_h,
         radius,
         &WindPaint::fill(input.theme.scrollbar.wind()),
     );
     canvas.fill_round_rect(
-        track_x,
+        thumb_x,
         thumb_y,
-        4.0,
-        length,
+        thumb_w,
+        thumb_h,
         radius,
         &WindPaint::fill(input.theme.selected_text.wind()),
     );

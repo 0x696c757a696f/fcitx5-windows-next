@@ -229,6 +229,7 @@
   "settings.plugins.repository.loading": "Kho chính thức · Đang tải",
   "settings.plugins.repository.ready": "Kho chính thức · Danh mục đã ký có sẵn",
   "settings.plugins.repository.unavailable": "Kho chính thức · Không khả dụng{detail}",
+  "settings.plugins.repository.not_downloaded": "Kho chính thức · Chưa tải danh mục; hãy bấm Làm mới trực tuyến",
   "settings.plugins.fallback_category": "Tiện ích bổ sung",
   "settings.plugins.fallback_metadata": "Siêu dữ liệu do danh mục Control chính thức cung cấp",
   "settings.plugins.operation.list": "Liệt kê",

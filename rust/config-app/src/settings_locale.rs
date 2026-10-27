@@ -98,6 +98,7 @@ const WINDUI_SETTINGS_KEYS: &[&str] = &[
     "settings.plugins.repository.loading",
     "settings.plugins.repository.ready",
     "settings.plugins.repository.unavailable",
+    "settings.plugins.repository.not_downloaded",
     "settings.plugins.fallback_category",
     "settings.plugins.fallback_metadata",
     "settings.plugins.operation.list",

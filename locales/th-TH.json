@@ -229,6 +229,7 @@
   "settings.plugins.repository.loading": "ที่เก็บทางการ · กำลังโหลด",
   "settings.plugins.repository.ready": "ที่เก็บทางการ · ใช้แค็ตตาล็อกที่ลงลายเซ็นแล้วได้",
   "settings.plugins.repository.unavailable": "ที่เก็บทางการ · ใช้งานไม่ได้{detail}",
+  "settings.plugins.repository.not_downloaded": "ที่เก็บทางการ · ยังไม่ได้ดาวน์โหลดแค็ตตาล็อก กดรีเฟรชออนไลน์",
   "settings.plugins.fallback_category": "ส่วนเสริม",
   "settings.plugins.fallback_metadata": "ข้อมูลเมตาจัดทำโดยแค็ตตาล็อก Control ทางการ",
   "settings.plugins.operation.list": "แสดงรายการ",

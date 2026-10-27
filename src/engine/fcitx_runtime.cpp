@@ -119,6 +119,27 @@ std::string copyConfigUtf8(Fcitx5ConfigUtf8 value) {
 // Config Core owns parsing, validation, Current/LKG/default recovery, and the
 // resolved product schema. This direct Fcitx adapter only copies the few
 // values needed to configure upstream Fcitx objects.
+// The watchdog polls this every second on the Fcitx thread, and the data
+// directory cannot change while the engine runs, so it is resolved once.
+const std::filesystem::path& engineConfigPath() {
+    static const std::filesystem::path path = [] {
+        const auto data = localDataDirectory();
+        return data.empty() ? std::filesystem::path{} : data / L"config.toml";
+    }();
+    return path;
+}
+
+std::optional<std::filesystem::file_time_type> configStamp() {
+    std::error_code error;
+    const auto& path = engineConfigPath();
+    if (path.empty())
+        return std::nullopt;
+    const auto stamp = std::filesystem::last_write_time(path, error);
+    if (error)
+        return std::nullopt;
+    return stamp;
+}
+
 EngineConfig readEngineConfig() {
     EngineConfig config;
     const auto data = localDataDirectory();
@@ -543,10 +564,32 @@ class FcitxRuntime::Impl final {
     // hot path (processKey) reads this in memory instead of reopening and
     // re-parsing the file on every keystroke.
     EngineConfig config;
+    // config.toml's modification time when `config` was last read.
+    std::optional<std::filesystem::file_time_type> configReadStamp;
+
+    // The engine starts with only the addons of the startup configuration, so
+    // an input method enabled later has no entry until the engine restarts.
+    // Leaving it out keeps the switch hotkeys from cycling onto it.
+    void dropUnavailableInputMethods(EngineConfig& next) {
+        auto& manager = instance->inputMethodManager();
+        std::erase_if(next.enabled,
+                      [&manager](const std::string& id) { return !manager.entry(id); });
+    }
 
     void ensureInputMethods() {
         auto& manager = instance->inputMethodManager();
         manager.refresh();
+        configReadStamp = configStamp();
+        config = readEngineConfig();
+        dropUnavailableInputMethods(config);
+        applyInputMethodGroup();
+    }
+
+    // Rebuilds the current group from `config`. setGroup resets the input
+    // method of every input context, so this runs only when the list or the
+    // default changed.
+    void applyInputMethodGroup() {
+        auto& manager = instance->inputMethodManager();
         InputMethodGroup group = manager.currentGroup();
         auto& items = group.inputMethodList();
         auto contains = [&items](const std::string& name) {
@@ -554,7 +597,6 @@ class FcitxRuntime::Impl final {
                                [&](const auto& item) { return item.name() == name; });
         };
         const std::string previousDefault = group.defaultInputMethod();
-        config = readEngineConfig();
         // Config Core owns the enabled list and its order, so an input method
         // removed in Settings also leaves the switch cycle.
         items.clear();
@@ -678,7 +720,40 @@ class FcitxRuntime::Impl final {
         RawConfig raw;
         instance->globalConfig().save(raw);
         raw.setValueByPath("Behavior/DefaultPageSize", std::to_string(*config.candidatePageSize));
+        // The input methods accept 3 to 10 candidates per page and fall back
+        // to their default outside that range.
+        const std::string pageSize = std::to_string(std::clamp(*config.candidatePageSize, 3, 10));
         instance->globalConfig().load(raw, true);
+        // Pinyin, shuangpin and the tables page with their own PageSize option
+        // and ignore DefaultPageSize, so the Settings value goes to each
+        // enabled input method that has one.
+        auto& manager = instance->inputMethodManager();
+        for (const std::string& id : config.enabled) {
+            const auto* entry = manager.entry(id);
+            if (!entry || !entry->isConfigurable())
+                continue;
+            auto* engine = instance->inputMethodEngine(id);
+            if (!engine)
+                continue;
+            const auto* configuration = engine->getConfigForInputMethod(*entry);
+            if (!configuration)
+                continue;
+            RawConfig current;
+            configuration->save(current);
+            // Pinyin keeps PageSize at the top level, the tables in [Table].
+            for (const char* path : {"PageSize", "Table/PageSize"}) {
+                const auto* value = current.valueByPath(path);
+                if (!value)
+                    continue;
+                if (*value != pageSize) {
+                    RawConfig update;
+                    // Tables take the [Table] section itself.
+                    update.setValueByPath("PageSize", pageSize);
+                    engine->setConfigForInputMethod(*entry, update);
+                }
+                break;
+            }
+        }
     }
 
     void dispatchPendingEvents() {
@@ -1322,6 +1397,31 @@ InputMethodStatus FcitxRuntime::inputMethodAction(const ClientContextKey& key, b
         impl_->dispatchPendingEvents();
     }
     return inputMethodStatusFor(*impl_->instance, &context);
+}
+
+void FcitxRuntime::reloadConfigIfChanged() {
+    if (!impl_->instance)
+        return;
+    const auto stamp = configStamp();
+    if (!stamp || stamp == impl_->configReadStamp)
+        return;
+    EngineConfig next = readEngineConfig();
+    impl_->dropUnavailableInputMethods(next);
+    const bool groupChanged = next.enabled != impl_->config.enabled ||
+                              next.defaultInputMethod != impl_->config.defaultInputMethod;
+    const bool pageSizeChanged = next.candidatePageSize != impl_->config.candidatePageSize;
+    EngineConfig previous = std::exchange(impl_->config, std::move(next));
+    try {
+        if (groupChanged)
+            impl_->applyInputMethodGroup();
+        if (pageSizeChanged)
+            impl_->applyFcitxPageSize();
+    } catch (...) {
+        // Retry on the next poll instead of keeping a half-applied file.
+        impl_->config = std::move(previous);
+        throw;
+    }
+    impl_->configReadStamp = stamp;
 }
 
 bool FcitxRuntime::setDefaultInputMethod(std::string_view id) {

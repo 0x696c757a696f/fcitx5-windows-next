@@ -177,6 +177,14 @@ pub fn control_usage_text() -> &'static str {
 /// Returns an error when the current executable path cannot be resolved.
 pub fn control_install_root() -> Result<PathBuf, &'static str> {
     let executable = std::env::current_exe().map_err(|_| "unable to resolve installation root")?;
+    // A copy under `runtime\<generation>\bin` belongs to the installation two
+    // levels further up: `security`, `current.json` and the package data live
+    // only there, not in the generation.
+    if let Some(root) =
+        fcitx5_windows_common_core::engine_client::installation_root_for_module(&executable)
+    {
+        return Ok(root);
+    }
     let directory = executable
         .parent()
         .ok_or("unable to resolve installation root")?;
