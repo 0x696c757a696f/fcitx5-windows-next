@@ -464,12 +464,33 @@ fn pipe_security_sddl(service_account: bool, session_id: u32, user_sid: &str) ->
     ))
 }
 
+/// Like [`pipe_security_sddl`], but also admits the same user's packaged
+/// (AppContainer) apps, which run at low integrity. They get read/write on the
+/// pipe only; the user ACE still has to match, so other users stay out.
+fn app_container_pipe_security_sddl(
+    service_account: bool,
+    session_id: u32,
+    user_sid: &str,
+) -> Option<String> {
+    if service_account || session_id == 0 || user_sid.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "D:P(A;;GA;;;SY)(A;;GA;;;{user_sid})(A;;GRGW;;;AC)S:(ML;;NW;;;LW)"
+    ))
+}
+
 fn pipe_security_descriptor(
     service_account: bool,
     session_id: u32,
     user_sid: &str,
+    allow_app_containers: bool,
 ) -> Option<*mut c_void> {
-    let sddl = pipe_security_sddl(service_account, session_id, user_sid)?;
+    let sddl = if allow_app_containers {
+        app_container_pipe_security_sddl(service_account, session_id, user_sid)?
+    } else {
+        pipe_security_sddl(service_account, session_id, user_sid)?
+    };
     let mut wide: Vec<u16> = sddl.encode_utf16().collect();
     wide.push(0);
     let mut descriptor: *mut c_void = std::ptr::null_mut();
@@ -526,7 +547,17 @@ impl CurrentUserSecurityAttributes {
 
     fn from_pipe_identity(service_account: bool, session_id: u32, user_sid: &str) -> Option<Self> {
         Some(Self {
-            state: pipe_security_state(service_account, session_id, user_sid)?,
+            state: pipe_security_state(service_account, session_id, user_sid, false)?,
+        })
+    }
+
+    fn from_app_container_pipe_identity(
+        service_account: bool,
+        session_id: u32,
+        user_sid: &str,
+    ) -> Option<Self> {
+        Some(Self {
+            state: pipe_security_state(service_account, session_id, user_sid, true)?,
         })
     }
 
@@ -618,6 +649,26 @@ impl CurrentUserRuntimeIdentity {
             self.secure_desktop,
             &self.user_sid,
         )
+    }
+
+    /// Creates security attributes for a pipe that text-service clients use.
+    /// Unlike [`Self::security_attributes`], the same user's AppContainer
+    /// apps may also connect, so input works in packaged apps.
+    #[must_use]
+    pub fn app_container_pipe_security_attributes(&self) -> Option<CurrentUserSecurityAttributes> {
+        may_launch_user_engine(
+            self.service_account,
+            self.session_id,
+            self.secure_desktop,
+            &self.user_sid,
+        )
+        .then(|| {
+            CurrentUserSecurityAttributes::from_app_container_pipe_identity(
+                self.service_account,
+                self.session_id,
+                &self.user_sid,
+            )
+        })?
     }
 
     /// Creates the generation-aware, current-user/session named-pipe path.
@@ -1197,12 +1248,180 @@ impl Drop for PipeSecurityState {
     }
 }
 
+#[repr(C)]
+struct TrusteeW {
+    multiple_trustee: *mut TrusteeW,
+    multiple_trustee_operation: i32,
+    trustee_form: i32,
+    trustee_type: i32,
+    name: *mut c_void,
+}
+
+#[repr(C)]
+struct ExplicitAccessW {
+    access_permissions: u32,
+    access_mode: i32,
+    inheritance: u32,
+    trustee: TrusteeW,
+}
+
+/// Adds an allow ACE for ALL APPLICATION PACKAGES to the DACL of `object`.
+fn grant_app_containers(object: *mut c_void, access: u32) -> bool {
+    const SE_KERNEL_OBJECT: u32 = 6;
+    const DACL_SECURITY_INFORMATION: u32 = 0x4;
+    const GRANT_ACCESS: i32 = 1;
+    const TRUSTEE_IS_SID: i32 = 0;
+    const TRUSTEE_IS_WELL_KNOWN_GROUP: i32 = 5;
+    const ERROR_SUCCESS_CODE: u32 = 0;
+
+    let all_app_packages: Vec<u16> = "S-1-15-2-1\0".encode_utf16().collect();
+    let mut sid = std::ptr::null_mut();
+    // SAFETY: `all_app_packages` is NUL-terminated UTF-16 and `sid` is a
+    // valid out pointer; a returned SID is released with LocalFree below.
+    if unsafe { ConvertStringSidToSidW(all_app_packages.as_ptr(), &mut sid) } == 0 || sid.is_null()
+    {
+        return false;
+    }
+    let mut dacl = std::ptr::null_mut();
+    let mut descriptor = std::ptr::null_mut();
+    // SAFETY: `object` is a live handle opened with READ_CONTROL, and the out
+    // pointers are valid. `dacl` points into `descriptor`, which is released
+    // with LocalFree below.
+    let read = unsafe {
+        GetSecurityInfo(
+            object,
+            SE_KERNEL_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut dacl,
+            std::ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    let mut granted = false;
+    if read == ERROR_SUCCESS_CODE {
+        let entry = ExplicitAccessW {
+            access_permissions: access,
+            access_mode: GRANT_ACCESS,
+            inheritance: 0,
+            trustee: TrusteeW {
+                multiple_trustee: std::ptr::null_mut(),
+                multiple_trustee_operation: 0,
+                trustee_form: TRUSTEE_IS_SID,
+                trustee_type: TRUSTEE_IS_WELL_KNOWN_GROUP,
+                name: sid,
+            },
+        };
+        let mut new_dacl = std::ptr::null_mut();
+        // SAFETY: `entry` names a live SID, `dacl` is the object's current
+        // DACL (or null), and `new_dacl` is a valid out pointer released with
+        // LocalFree below.
+        if unsafe { SetEntriesInAclW(1, &entry, dacl, &mut new_dacl) } == ERROR_SUCCESS_CODE
+            && !new_dacl.is_null()
+        {
+            // SAFETY: `object` was opened with WRITE_DAC and `new_dacl` is a
+            // valid ACL for the duration of the call.
+            granted = unsafe {
+                SetSecurityInfo(
+                    object,
+                    SE_KERNEL_OBJECT,
+                    DACL_SECURITY_INFORMATION,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    new_dacl,
+                    std::ptr::null_mut(),
+                )
+            } == ERROR_SUCCESS_CODE;
+            // SAFETY: `new_dacl` was allocated by SetEntriesInAclW.
+            unsafe { LocalFree(new_dacl) };
+        }
+    }
+    // SAFETY: Each pointer is either null or was allocated by the matching
+    // Windows call above.
+    unsafe {
+        if !descriptor.is_null() {
+            LocalFree(descriptor);
+        }
+        LocalFree(sid);
+    }
+    granted
+}
+
+/// Lets the same user's AppContainer apps verify this process as a pipe
+/// server. Their text service opens the server process for
+/// `PROCESS_QUERY_LIMITED_INFORMATION` and its token for `TOKEN_QUERY` to
+/// check who is serving the pipe, and the default DACLs do not admit
+/// AppContainers.
+pub fn allow_app_container_peer_queries() -> bool {
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const TOKEN_QUERY: u32 = 0x0008;
+    const READ_CONTROL: u32 = 0x0002_0000;
+    const WRITE_DAC: u32 = 0x0004_0000;
+
+    // SAFETY: GetCurrentProcess returns a pseudo-handle with full access that
+    // does not need closing.
+    let process = unsafe { GetCurrentProcess() };
+    let process_granted = grant_app_containers(process, PROCESS_QUERY_LIMITED_INFORMATION);
+    let mut token = std::ptr::null_mut();
+    // SAFETY: `process` is the current-process pseudo-handle and `token` is a
+    // valid out pointer; a returned token is closed below.
+    if unsafe { OpenProcessToken(process, READ_CONTROL | WRITE_DAC, &mut token) } == 0
+        || token.is_null()
+    {
+        return false;
+    }
+    let token_granted = grant_app_containers(token, TOKEN_QUERY);
+    // SAFETY: `token` was returned by OpenProcessToken above.
+    unsafe {
+        CloseHandle(token);
+    }
+    process_granted && token_granted
+}
+
+/// Whether the current process runs inside an AppContainer (a packaged or
+/// sandboxed app).
+#[must_use]
+pub fn current_process_is_app_container() -> bool {
+    const TOKEN_QUERY: u32 = 0x0008;
+    const TOKEN_IS_APP_CONTAINER: u32 = 29;
+
+    let mut token = std::ptr::null_mut();
+    // SAFETY: GetCurrentProcess returns a pseudo-handle and `token` is a valid
+    // out pointer; a returned token is closed below.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0
+        || token.is_null()
+    {
+        return false;
+    }
+    let mut value = 0_u32;
+    let mut returned = 0_u32;
+    // SAFETY: `value` provides four writable bytes for the DWORD result and
+    // `returned` is a valid out pointer.
+    let ok = unsafe {
+        GetTokenInformation(
+            token,
+            TOKEN_IS_APP_CONTAINER,
+            (&mut value as *mut u32).cast::<c_void>(),
+            std::mem::size_of::<u32>() as u32,
+            &mut returned,
+        )
+    };
+    // SAFETY: `token` was returned by OpenProcessToken above.
+    unsafe {
+        CloseHandle(token);
+    }
+    ok != 0 && value != 0
+}
+
 fn pipe_security_state(
     service_account: bool,
     session_id: u32,
     user_sid: &str,
+    allow_app_containers: bool,
 ) -> Option<PipeSecurityState> {
-    let descriptor = pipe_security_descriptor(service_account, session_id, user_sid)?;
+    let descriptor =
+        pipe_security_descriptor(service_account, session_id, user_sid, allow_app_containers)?;
     Some(PipeSecurityState {
         descriptor,
         attributes: SecurityAttributes {
@@ -1363,6 +1582,32 @@ unsafe extern "system" {
         return_length: *mut u32,
     ) -> i32;
     fn ConvertSidToStringSidW(sid: *mut c_void, string_sid: *mut *mut u16) -> i32;
+    fn ConvertStringSidToSidW(string_sid: *const u16, sid: *mut *mut c_void) -> i32;
+    fn GetSecurityInfo(
+        handle: *mut c_void,
+        object_type: u32,
+        security_info: u32,
+        owner: *mut *mut c_void,
+        group: *mut *mut c_void,
+        dacl: *mut *mut c_void,
+        sacl: *mut *mut c_void,
+        security_descriptor: *mut *mut c_void,
+    ) -> u32;
+    fn SetSecurityInfo(
+        handle: *mut c_void,
+        object_type: u32,
+        security_info: u32,
+        owner: *mut c_void,
+        group: *mut c_void,
+        dacl: *mut c_void,
+        sacl: *mut c_void,
+    ) -> u32;
+    fn SetEntriesInAclW(
+        count: u32,
+        entries: *const ExplicitAccessW,
+        old_acl: *mut c_void,
+        new_acl: *mut *mut c_void,
+    ) -> u32;
     fn IsWellKnownSid(sid: *mut c_void, well_known_sid_type: i32) -> i32;
     fn RegGetValueW(
         key: *mut c_void,
@@ -1408,6 +1653,7 @@ unsafe extern "system" {
     fn GetNamedPipeServerProcessId(pipe: *mut c_void, server_process_id: *mut u32) -> i32;
     fn GetModuleFileNameW(module: *mut c_void, filename: *mut u16, size: u32) -> u32;
     fn GetCurrentProcessId() -> u32;
+    fn GetCurrentProcess() -> *mut c_void;
     fn GetProcessTimes(
         process: *mut c_void,
         creation_time: *mut u64,
@@ -3972,13 +4218,21 @@ pub unsafe extern "C" fn fcitx5_windows_common_may_launch_user_engine_utf16(
     ) as u8
 }
 
+/// Lets AppContainer text-service clients verify this process as the engine
+/// pipe server. Returns 1 when both grants succeeded.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcitx5_windows_common_allow_app_container_peer_queries() -> u8 {
+    u8::from(allow_app_container_peer_queries())
+}
+
 #[unsafe(no_mangle)]
 /// # Safety
 ///
 /// `user_sid` must be null only when `user_sid_len` is zero, or point to a valid
 /// UTF-16 buffer with exactly `user_sid_len` code units. The returned pointer is
 /// a Rust-owned opaque handle that must be released with
-/// `fcitx5_windows_common_pipe_security_destroy`.
+/// `fcitx5_windows_common_pipe_security_destroy`. The pipe also admits the
+/// same user's AppContainer apps so input works in packaged apps.
 pub unsafe extern "C" fn fcitx5_windows_common_pipe_security_create_utf16(
     service_account: u8,
     session_id: u32,
@@ -3988,7 +4242,7 @@ pub unsafe extern "C" fn fcitx5_windows_common_pipe_security_create_utf16(
     let Some(user_sid) = wide_string_from_raw(user_sid, user_sid_len) else {
         return std::ptr::null_mut();
     };
-    let Some(security) = CurrentUserSecurityAttributes::from_pipe_identity(
+    let Some(security) = CurrentUserSecurityAttributes::from_app_container_pipe_identity(
         service_account != 0,
         session_id,
         &user_sid,
@@ -4993,6 +5247,19 @@ mod tests {
             Some("D:P(A;;GA;;;SY)(A;;GA;;;S-1-5-21-test)S:(ML;;NW;;;ME)")
         );
         assert_eq!(pipe_security_sddl(true, 7, "S-1-5-21-test"), None);
+        assert_eq!(
+            app_container_pipe_security_sddl(false, 7, "S-1-5-21-test").as_deref(),
+            Some("D:P(A;;GA;;;SY)(A;;GA;;;S-1-5-21-test)(A;;GRGW;;;AC)S:(ML;;NW;;;LW)")
+        );
+        assert_eq!(
+            app_container_pipe_security_sddl(true, 7, "S-1-5-21-test"),
+            None
+        );
+        assert_eq!(
+            app_container_pipe_security_sddl(false, 0, "S-1-5-21-test"),
+            None
+        );
+        assert_eq!(app_container_pipe_security_sddl(false, 7, ""), None);
         assert_eq!(pipe_security_sddl(false, 0, "S-1-5-21-test"), None);
         assert_eq!(pipe_security_sddl(false, 7, ""), None);
     }
@@ -5005,7 +5272,7 @@ mod tests {
         let (sid, _service_account) =
             process_user_sid(current_process_id).expect("current process user sid");
         let sid = String::from_utf16(&sid).expect("sid is utf16");
-        let state = pipe_security_state(false, 7, &sid).expect("valid pipe security state");
+        let state = pipe_security_state(false, 7, &sid, false).expect("valid pipe security state");
         assert!(!state.descriptor.is_null());
         assert_eq!(
             state.attributes.n_length,
@@ -5013,9 +5280,10 @@ mod tests {
         );
         assert_eq!(state.attributes.security_descriptor, state.descriptor);
         assert_eq!(state.attributes.inherit_handle, 0);
-        assert!(pipe_security_state(true, 7, &sid).is_none());
-        assert!(pipe_security_state(false, 0, &sid).is_none());
-        assert!(pipe_security_state(false, 7, "").is_none());
+        assert!(pipe_security_state(true, 7, &sid, false).is_none());
+        assert!(pipe_security_state(false, 0, &sid, true).is_none());
+        assert!(pipe_security_state(false, 7, "", true).is_none());
+        assert!(pipe_security_state(false, 7, &sid, true).is_some());
     }
 
     #[test]

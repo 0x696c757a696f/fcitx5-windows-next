@@ -9,11 +9,11 @@ use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 
 use super::{
-    close_pipe_client, current_runtime_generation, current_runtime_generation_for_module,
-    install_root_for_module, invalid_handle_value, local_name, local_test_namespace,
-    open_pipe_client, pipe_client_is_connected, pipe_transact, pipe_transact_with_error,
-    process_image_path, process_session_id, process_user_sid, secure_input_desktop,
-    verify_pipe_server_peer, Fcitx5WindowsCommonPipeTransactWithError,
+    close_pipe_client, current_process_is_app_container, current_runtime_generation,
+    current_runtime_generation_for_module, install_root_for_module, invalid_handle_value,
+    local_name, local_test_namespace, open_pipe_client, pipe_client_is_connected, pipe_transact,
+    pipe_transact_with_error, process_image_path, process_session_id, process_user_sid,
+    secure_input_desktop, verify_pipe_server_peer, Fcitx5WindowsCommonPipeTransactWithError,
 };
 
 pub use super::{
@@ -29,6 +29,10 @@ pub struct ClientIdentity {
     pub secure_desktop: bool,
     pub session_id: u32,
     pub user_sid: Vec<u16>,
+    /// The process runs in an AppContainer (a packaged or sandboxed app). It
+    /// can use a running engine but must not start one, because a child
+    /// process would inherit the sandbox.
+    pub app_container: bool,
 }
 
 /// Queries the current process identity. Fails when the session, user SID or
@@ -50,6 +54,7 @@ pub fn current_client_identity() -> Option<ClientIdentity> {
         secure_desktop: secure_input_desktop(),
         session_id: session.session_id,
         user_sid,
+        app_container: current_process_is_app_container(),
     })
 }
 

@@ -21,9 +21,9 @@ use fcitx5_protocol_core::{
     HelloRequest, LauncherCommand, LauncherResponse, Metadata, Status,
 };
 use fcitx5_windows_common_core::{
-    current_runtime_generation_for_current_process, deadline_after,
-    default_fcitx5_data_root_for_current_process, monotonic_milliseconds, named_pipe_is_available,
-    next_launcher_request_id, wait_for_handle, CurrentUserRuntimeIdentity,
+    allow_app_container_peer_queries, current_runtime_generation_for_current_process,
+    deadline_after, default_fcitx5_data_root_for_current_process, monotonic_milliseconds,
+    named_pipe_is_available, next_launcher_request_id, wait_for_handle, CurrentUserRuntimeIdentity,
     CurrentUserSecurityAttributes, NamedEvent, NamedPipeServer, SingleInstance, VerifiedPipeClient,
 };
 
@@ -1167,6 +1167,11 @@ pub fn run_launcher(options: LauncherOptions) -> Result<(), LauncherError> {
     let security = identity.security_attributes().ok_or_else(|| {
         LauncherError::Runtime("launcher security policy is unavailable".to_owned())
     })?;
+    let pipe_security = identity
+        .app_container_pipe_security_attributes()
+        .ok_or_else(|| {
+            LauncherError::Runtime("launcher pipe security policy is unavailable".to_owned())
+        })?;
     let generation = generation(&options)
         .into_string()
         .map_err(|_| LauncherError::Runtime("launcher generation must be Unicode".to_owned()))?;
@@ -1189,6 +1194,9 @@ pub fn run_launcher(options: LauncherOptions) -> Result<(), LauncherError> {
         LauncherError::Runtime("launcher executable has no parent directory".to_owned())
     })?;
     let startup = prepare_supervisor_start(&options, directory, launcher_tick_milliseconds())?;
+    // Best-effort: without it, packaged (AppContainer) apps cannot verify the
+    // launcher, and only those apps lose input.
+    let _ = allow_app_container_peer_queries();
     let job = JobObject::new_kill_on_close().map_err(|error| {
         LauncherError::Runtime(format!("launcher job creation failed: {error}"))
     })?;
@@ -1224,9 +1232,10 @@ pub fn run_launcher(options: LauncherOptions) -> Result<(), LauncherError> {
     let mut sequence = 0_u64;
     let mut shutdown = false;
     let mut listener =
-        NamedPipeServer::create(&endpoint, &security, protocol::MAX_CONTROL_FRAME_SIZE).map_err(
-            |error| LauncherError::Runtime(format!("launcher pipe creation failed: {error}")),
-        )?;
+        NamedPipeServer::create(&endpoint, &pipe_security, protocol::MAX_CONTROL_FRAME_SIZE)
+            .map_err(|error| {
+                LauncherError::Runtime(format!("launcher pipe creation failed: {error}"))
+            })?;
     while !shutdown && !stop.is_signaled() {
         let now = launcher_tick_milliseconds();
         if let Some(current) = engine.as_mut() {
@@ -1306,7 +1315,7 @@ pub fn run_launcher(options: LauncherOptions) -> Result<(), LauncherError> {
         }
         let server = std::mem::replace(
             &mut listener,
-            NamedPipeServer::create(&endpoint, &security, protocol::MAX_CONTROL_FRAME_SIZE)
+            NamedPipeServer::create(&endpoint, &pipe_security, protocol::MAX_CONTROL_FRAME_SIZE)
                 .map_err(|error| {
                     LauncherError::Runtime(format!("launcher pipe creation failed: {error}"))
                 })?,

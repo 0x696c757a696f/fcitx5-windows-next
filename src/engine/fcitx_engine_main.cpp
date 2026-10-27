@@ -29,6 +29,7 @@ extern "C" std::uint8_t fcitx5_windows_common_pipe_transfer_with_stop(void* pipe
                                                                       void* stop_handle);
 extern "C" std::uint8_t
 fcitx5_windows_common_pipe_connect_client(void* pipe, std::uint64_t deadline, void* stop_handle);
+extern "C" std::uint8_t fcitx5_windows_common_allow_app_container_peer_queries();
 
 namespace {
 
@@ -375,6 +376,8 @@ int serve(const std::wstring& pipeName, unsigned testClientCount,
         !platform::PipeSecurity::create(identity, pipeSecurity)) {
         return 4;
     }
+    // Best-effort: packaged (AppContainer) apps verify the engine before use.
+    static_cast<void>(fcitx5_windows_common_allow_app_container_peer_queries());
     engine::FcitxDispatcher dispatcher;
     if (const char* delay = std::getenv("FCITX5_TEST_DISPATCH_DELAY_MS"); delay) {
         dispatcher.setTestDispatchDelay(static_cast<std::uint32_t>(std::atoi(delay)));
