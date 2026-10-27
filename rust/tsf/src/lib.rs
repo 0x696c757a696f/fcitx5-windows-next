@@ -2056,7 +2056,7 @@ impl EngineClient {
         } else {
             self.begin_request(false)?
         };
-        let request_id = common::fcitx5_windows_common_next_pipe_client_request_id();
+        let request_id = common::engine_client::next_pipe_client_request_id();
         let request = protocol::InputMethodActionRequest {
             metadata: protocol::Metadata {
                 request_id,
@@ -2088,7 +2088,7 @@ impl EngineClient {
     }
 
     fn attach_for_input_mode(&mut self) -> Option<u64> {
-        let now = common::fcitx5_windows_common_tick_milliseconds();
+        let now = common::engine_client::tick_milliseconds();
         if (self.failure_streak > 0 && now < self.retry_at) || now < self.mode_retry_at {
             return None;
         }
@@ -2096,9 +2096,8 @@ impl EngineClient {
         if self.pipe.is_none() {
             self.follow_current_generation();
         }
-        let deadline = common::fcitx5_windows_common_deadline_after_milliseconds(
-            INPUT_MODE_QUERY_MILLISECONDS,
-        );
+        let deadline =
+            common::engine_client::deadline_after_milliseconds(INPUT_MODE_QUERY_MILLISECONDS);
         if self.connect(deadline) && self.handshake(deadline) {
             return Some(deadline);
         }
