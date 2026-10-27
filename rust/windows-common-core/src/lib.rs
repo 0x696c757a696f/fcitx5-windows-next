@@ -1342,6 +1342,13 @@ fn ordered_system_font_families(discovered: &[String]) -> Vec<String> {
     ordered
 }
 
+/// Installed font families as GDI lists them, common UI fonts first and the
+/// rest in case-insensitive order.
+#[must_use]
+pub fn system_font_families() -> Vec<String> {
+    ordered_system_font_families(&discover_system_font_families())
+}
+
 fn system_font_family_payload() -> Vec<u16> {
     let ordered = ordered_system_font_families(&discover_system_font_families());
     let mut payload = Vec::new();
