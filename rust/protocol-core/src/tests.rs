@@ -828,36 +828,12 @@ fn utf8_check_matches_cpp_byte_structure_semantics() {
 }
 
 #[test]
-fn c_abi_accepts_and_reencodes_frames() {
+fn frames_are_accepted_and_reencoded_byte_identically() {
     let bytes = encode_key_request(&key_request_input()).expect("encoded");
-    assert_eq!(
-        // SAFETY: `bytes` is a valid buffer of `bytes.len()` elements.
-        unsafe { fcitx5_protocol_core_accepts_frame(bytes.as_ptr(), bytes.len()) },
-        1
-    );
-    let mut output = vec![0u8; bytes.len()];
-    let mut output_length = 0usize;
-    assert_eq!(
-        // SAFETY: all pointers point to valid buffers of the declared sizes.
-        unsafe {
-            fcitx5_protocol_core_reencode_frame(
-                bytes.as_ptr(),
-                bytes.len(),
-                output.as_mut_ptr(),
-                output.len(),
-                &mut output_length,
-            )
-        },
-        1
-    );
-    assert_eq!(output_length, bytes.len());
-    assert_eq!(output, bytes);
+    assert!(decode_frame(&bytes).is_some());
+    assert_eq!(decode_and_reencode(&bytes).as_deref(), Some(&bytes[..]));
 
     let mut bad = bytes.clone();
     bad[4] = (VERSION + 1) as u8;
-    assert_eq!(
-        // SAFETY: `bad` is a valid buffer of `bad.len()` elements.
-        unsafe { fcitx5_protocol_core_accepts_frame(bad.as_ptr(), bad.len()) },
-        0
-    );
+    assert!(decode_frame(&bad).is_none());
 }

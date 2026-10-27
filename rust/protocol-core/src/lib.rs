@@ -11,8 +11,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 // 084: per-site SAFETY documentation is enforced by clippy; keep it green.
 #![warn(clippy::undocumented_unsafe_blocks)]
-use std::ffi::c_void;
-use std::panic;
 
 // ---------------------------------------------------------------------------
 // Limits (mirror `protocol/protocol.h`)
@@ -1411,86 +1409,6 @@ pub fn decode_and_reencode(bytes: &[u8]) -> Option<Vec<u8>> {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// C ABI (narrow surface for the C++ differential gate and future cutover)
-// ---------------------------------------------------------------------------
-
-/// Returns 1 when `decode_frame` accepts the bytes (frame-level acceptance),
-/// 0 otherwise. Mirrors C++ `decodeFrame` rejection exactly.
-///
-/// # Safety
-/// `bytes` must describe a readable buffer of `length` bytes when `length` is
-/// non-zero.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn fcitx5_protocol_core_accepts_frame(bytes: *const u8, length: usize) -> u8 {
-    let result = panic::catch_unwind(|| {
-        if bytes.is_null() && length != 0 {
-            return 0;
-        }
-        let slice = if length == 0 {
-            &[][..]
-        } else {
-            // SAFETY: caller provides a valid buffer of `length` bytes; the
-            // pointer is non-null when `length` is non-zero.
-            unsafe { std::slice::from_raw_parts(bytes, length) }
-        };
-        if decode_frame(slice).is_some() {
-            1
-        } else {
-            0
-        }
-    });
-    result.unwrap_or(0)
-}
-
-/// Typed decode + re-encode of a frame. Returns 1 and writes the re-encoded
-/// bytes on success (byte-identical to the input when the input came from a
-/// matching C++ encode), 0 on any decode/validation rejection.
-///
-/// # Safety
-/// `bytes`/`length` must describe a readable buffer; `out`/`out_capacity`
-/// must describe a writable buffer; `out_length` must be writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn fcitx5_protocol_core_reencode_frame(
-    bytes: *const u8,
-    length: usize,
-    out: *mut u8,
-    out_capacity: usize,
-    out_length: *mut usize,
-) -> u8 {
-    let result = panic::catch_unwind(|| {
-        if (bytes.is_null() && length != 0)
-            || (out.is_null() && out_capacity != 0)
-            || out_length.is_null()
-        {
-            return 0;
-        }
-        let slice = if length == 0 {
-            &[][..]
-        } else {
-            // SAFETY: caller provides a valid buffer of `length` bytes.
-            unsafe { std::slice::from_raw_parts(bytes, length) }
-        };
-        let Some(reencoded) = decode_and_reencode(slice) else {
-            return 0;
-        };
-        if reencoded.len() > out_capacity {
-            return 0;
-        }
-        // SAFETY: `out` is writable for `out_capacity` bytes.
-        unsafe { std::ptr::copy_nonoverlapping(reencoded.as_ptr(), out, reencoded.len()) };
-        // SAFETY: `out_length` is writable.
-        unsafe { *out_length = reencoded.len() };
-        1
-    });
-    result.unwrap_or(0)
-}
-
-// Silence unused-import warning for the c_void fallback used by older rustc
-// (kept for ABI stability documentation only).
-#[allow(dead_code)]
-fn _c_void_marker(_: *const c_void) {}
 
 pub mod capi;
 

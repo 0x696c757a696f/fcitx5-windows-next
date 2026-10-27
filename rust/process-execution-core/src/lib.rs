@@ -5,7 +5,7 @@ use std::io;
 use std::mem::size_of;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::ptr::{null, null_mut};
 use std::thread;
 
@@ -33,20 +33,6 @@ const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS: Dword = 9;
 const PROC_THREAD_ATTRIBUTE_HANDLE_LIST: usize = 0x0002_0002;
 #[cfg(test)]
 const SYNCHRONIZE: Dword = 0x0010_0000;
-
-#[repr(C)]
-pub struct Fcitx5ProcessUtf16 {
-    ptr: *const u16,
-    len: usize,
-}
-
-#[repr(C)]
-pub struct Fcitx5ProcessRunResult {
-    success: u8,
-    reserved: [u8; 7],
-    output_ptr: *mut u16,
-    output_len: usize,
-}
 
 #[repr(C)]
 struct SecurityAttributes {
@@ -333,16 +319,6 @@ impl SendHandle {
     }
 }
 
-fn wide_from_slice(slice: Fcitx5ProcessUtf16) -> Option<OsString> {
-    if slice.ptr.is_null() {
-        return None;
-    }
-    // SAFETY: the FFI entry point documents that ptr is valid for len UTF-16
-    // values for this call, and the slice is only read before that call returns.
-    let value = unsafe { std::slice::from_raw_parts(slice.ptr, slice.len) };
-    Some(OsString::from_wide(value))
-}
-
 fn wide_z(value: &std::ffi::OsStr) -> Vec<u16> {
     let mut wide: Vec<u16> = value.encode_wide().collect();
     wide.push(0);
@@ -624,94 +600,6 @@ pub fn run_process_bounded(
     })
 }
 
-fn output_to_result(success: bool, output: Vec<u16>, result: *mut Fcitx5ProcessRunResult) -> i32 {
-    if result.is_null() {
-        return 1;
-    }
-    let mut boxed = output.into_boxed_slice();
-    let output_ptr = boxed.as_mut_ptr();
-    let output_len = boxed.len();
-    std::mem::forget(boxed);
-    // SAFETY: the FFI contract requires result to be writable. The leaked boxed
-    // slice is returned intact and is later reclaimed only by the paired free API.
-    unsafe {
-        *result = Fcitx5ProcessRunResult {
-            success: u8::from(success),
-            reserved: [0; 7],
-            output_ptr,
-            output_len,
-        };
-    }
-    0
-}
-
-/// # Safety
-///
-/// All UTF-16 slices must remain valid for the duration of the call. `arguments`
-/// must reference `argument_count` slices when `argument_count` is non-zero.
-/// `result` must point to writable storage. Any returned `output_ptr` must be
-/// released with `fcitx5_process_output_free`.
-#[no_mangle]
-pub unsafe extern "C" fn fcitx5_process_run_utf16(
-    executable: Fcitx5ProcessUtf16,
-    arguments: *const Fcitx5ProcessUtf16,
-    argument_count: usize,
-    timeout_ms: u32,
-    max_output_bytes: usize,
-    result: *mut Fcitx5ProcessRunResult,
-) -> i32 {
-    let run = std::panic::catch_unwind(|| {
-        let Some(executable) = wide_from_slice(executable) else {
-            return output_to_result(false, Vec::new(), result);
-        };
-        let argument_slices = if argument_count == 0 {
-            &[][..]
-        } else if arguments.is_null() {
-            return output_to_result(false, Vec::new(), result);
-        } else {
-            // SAFETY: the FFI contract guarantees argument_count valid
-            // Fcitx5ProcessUtf16 values at arguments for this call.
-            unsafe { std::slice::from_raw_parts(arguments, argument_count) }
-        };
-        let mut parsed_arguments = Vec::with_capacity(argument_slices.len());
-        for argument in argument_slices {
-            let Some(argument) = wide_from_slice(Fcitx5ProcessUtf16 {
-                ptr: argument.ptr,
-                len: argument.len,
-            }) else {
-                return output_to_result(false, Vec::new(), result);
-            };
-            parsed_arguments.push(argument);
-        }
-        match run_process(
-            &PathBuf::from(executable),
-            &parsed_arguments,
-            timeout_ms,
-            max_output_bytes,
-        ) {
-            Ok((success, output, _)) => output_to_result(success, output, result),
-            Err(_) => output_to_result(false, Vec::new(), result),
-        }
-    });
-    run.unwrap_or(1)
-}
-
-/// # Safety
-///
-/// `ptr` and `len` must be the exact buffer returned by
-/// `fcitx5_process_run_utf16`, or `ptr` must be null.
-#[no_mangle]
-pub unsafe extern "C" fn fcitx5_process_output_free(ptr: *mut u16, len: usize) {
-    if ptr.is_null() {
-        return;
-    }
-    // SAFETY: the FFI contract guarantees ptr and len came from the paired run
-    // API, so this reconstructs the exact allocation once for Drop.
-    unsafe {
-        drop(Vec::from_raw_parts(ptr, len, len));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -719,6 +607,7 @@ mod tests {
     use std::io::{BufRead, BufReader, Write};
     use std::net::{TcpListener, TcpStream};
     use std::os::windows::io::{AsHandle, AsRawHandle};
+    use std::path::PathBuf;
     use std::process::Command;
 
     fn wide_string(value: &str) -> Vec<u16> {
