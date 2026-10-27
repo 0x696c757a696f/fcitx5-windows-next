@@ -11,6 +11,9 @@ permissions:
   pull-requests: write
   actions: write
 
+concurrency:
+  group: sync-upstream
+
 defaults:
   run:
     shell: pwsh
