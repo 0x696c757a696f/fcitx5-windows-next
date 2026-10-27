@@ -81,6 +81,10 @@ Key keyFromRequest(const FcitxKeyRequestC& request) {
         return Key(FcitxKey_space, states, static_cast<int>(request.scanCode));
     case VK_ESCAPE:
         return Key(FcitxKey_Escape, states, static_cast<int>(request.scanCode));
+    case VK_TAB:
+        return Key(FcitxKey_Tab, states, static_cast<int>(request.scanCode));
+    case VK_DELETE:
+        return Key(FcitxKey_Delete, states, static_cast<int>(request.scanCode));
     case VK_SHIFT:
         return Key(FcitxKey_Shift_L, states, static_cast<int>(request.scanCode));
     case VK_CONTROL:
@@ -135,6 +139,18 @@ Key keyFromRequest(const FcitxKeyRequestC& request) {
         return Key((request.keyFlags & FCITX5_PROTOCOL_KEY_FLAG_SHIFT) != 0 ? FcitxKey_braceright
                                                                      : FcitxKey_bracketright,
                    states, static_cast<int>(request.scanCode));
+    case VK_OEM_2:
+        return Key((request.keyFlags & FCITX5_PROTOCOL_KEY_FLAG_SHIFT) != 0 ? FcitxKey_question
+                                                                     : FcitxKey_slash,
+                   states, static_cast<int>(request.scanCode));
+    case VK_OEM_3:
+        return Key((request.keyFlags & FCITX5_PROTOCOL_KEY_FLAG_SHIFT) != 0 ? FcitxKey_asciitilde
+                                                                     : FcitxKey_grave,
+                   states, static_cast<int>(request.scanCode));
+    case VK_OEM_5:
+        return Key((request.keyFlags & FCITX5_PROTOCOL_KEY_FLAG_SHIFT) != 0 ? FcitxKey_bar
+                                                                     : FcitxKey_backslash,
+                   states, static_cast<int>(request.scanCode));
     default:
         break;
     }
@@ -144,8 +160,16 @@ Key keyFromRequest(const FcitxKeyRequestC& request) {
                    states, static_cast<int>(request.scanCode));
     }
     if (vk >= '0' && vk <= '9') {
-        return Key(static_cast<KeySym>(FcitxKey_0 + (vk - '0')), states,
-                   static_cast<int>(request.scanCode));
+        // The TSF sends the layout's character as logical text; this US
+        // layout fallback only applies when it could not.
+        static constexpr KeySym shiftedDigits[] = {
+            FcitxKey_parenright, FcitxKey_exclam,    FcitxKey_at,          FcitxKey_numbersign,
+            FcitxKey_dollar,     FcitxKey_percent,   FcitxKey_asciicircum, FcitxKey_ampersand,
+            FcitxKey_asterisk,   FcitxKey_parenleft,
+        };
+        const bool shifted = (request.keyFlags & FCITX5_PROTOCOL_KEY_FLAG_SHIFT) != 0;
+        return Key(shifted ? shiftedDigits[vk - '0'] : static_cast<KeySym>(FcitxKey_0 + (vk - '0')),
+                   states, static_cast<int>(request.scanCode));
     }
     return Key::fromKeyCode(static_cast<int>(request.scanCode != 0 ? request.scanCode : vk),
                             states);
