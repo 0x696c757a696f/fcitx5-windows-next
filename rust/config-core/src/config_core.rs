@@ -9,6 +9,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +20,10 @@ const BUILTIN_THEME_ID: &str = "builtin:default";
 const BUILTIN_THEME_METADATA_ID: &str = "builtin.default";
 const COMPILED_DEFAULTS: &str = include_str!("../../../resources/config.toml");
 static STAGE_COUNTER: AtomicU64 = AtomicU64::new(0);
+const REPLACE_RETRIES: u32 = 6;
+const REPLACE_FIRST_RETRY_DELAY: Duration = Duration::from_millis(25);
+const REPLACE_MAX_RETRY_DELAY: Duration = Duration::from_millis(400);
+const ABANDONED_STAGE_AGE: Duration = Duration::from_secs(10 * 60);
 
 /// Uses the Windows display language.
 pub const UI_LANGUAGE_SYSTEM: &str = "system";
@@ -1635,7 +1640,8 @@ impl ConfigCore {
     /// Returns an error when Draft cannot be serialized or the destination cannot be atomically replaced.
     pub fn export_to(&self, store: &FileStore, path: &Path) -> Result<(), ConfigError> {
         let text = serialize_overrides(&self.draft)?;
-        let staged = store.stage(path, text.as_bytes(), CommitFault::None)?;
+        let mut stages = StagedFiles::default();
+        let staged = stages.keep(store.stage(path, text.as_bytes(), CommitFault::None)?);
         store.replace(&staged, path)
     }
 
@@ -1689,19 +1695,23 @@ impl ConfigCore {
     ) -> Result<(), ConfigError> {
         self.validate()?;
         let text = serialize_overrides(&self.draft)?;
-        let current_stage = store.stage(path, text.as_bytes(), fault)?;
+        let lkg_path = FileStore::last_known_good_path(path);
+        remove_abandoned_stages(path);
+        remove_abandoned_stages(&lkg_path);
+        // Every staged file is removed on return; the ones already renamed into place are
+        // simply gone by then.
+        let mut stages = StagedFiles::default();
+        let current_stage = stages.keep(store.stage(path, text.as_bytes(), fault)?);
         let reread = store.read_staged(&current_stage, fault)?;
         let reread_overrides = parse_overrides(&reread)?;
         validate_snapshot(&self.resolve(&reread_overrides))?;
         if reread_overrides != self.draft {
-            let _ = fs::remove_file(&current_stage);
             return Err(ConfigError::RereadMismatch);
         }
 
-        let lkg_path = FileStore::last_known_good_path(path);
         let previous_lkg_stage = if lkg_path.is_file() {
             let previous_lkg = store.read(&lkg_path)?;
-            Some(store.stage(&lkg_path, previous_lkg.as_bytes(), CommitFault::None)?)
+            Some(stages.keep(store.stage(&lkg_path, previous_lkg.as_bytes(), CommitFault::None)?))
         } else {
             None
         };
@@ -1712,13 +1722,9 @@ impl ConfigCore {
         } else {
             text.clone()
         };
-        let lkg_stage = store.stage(&lkg_path, lkg_text.as_bytes(), CommitFault::None)?;
+        let lkg_stage =
+            stages.keep(store.stage(&lkg_path, lkg_text.as_bytes(), CommitFault::None)?);
         if fault == CommitFault::LastKnownGoodReplace {
-            let _ = fs::remove_file(&current_stage);
-            let _ = fs::remove_file(&lkg_stage);
-            if let Some(stage) = previous_lkg_stage {
-                let _ = fs::remove_file(stage);
-            }
             return Err(ConfigError::InjectedFault {
                 stage: "last-known-good replace",
             });
@@ -1732,13 +1738,8 @@ impl ConfigCore {
             store.replace(&current_stage, path)
         };
         if let Err(error) = current_result {
-            let restore = store.restore_last_known_good(previous_lkg_stage.as_deref(), &lkg_path);
-            let _ = fs::remove_file(&current_stage);
-            restore?;
+            store.restore_last_known_good(previous_lkg_stage.as_deref(), &lkg_path)?;
             return Err(error);
-        }
-        if let Some(stage) = previous_lkg_stage {
-            let _ = fs::remove_file(stage);
         }
         self.current.clone_from(&self.draft);
         Ok(())
@@ -2416,11 +2417,26 @@ impl FileStore {
     }
 
     fn replace(&self, staged: &Path, destination: &Path) -> Result<(), ConfigError> {
-        fs::rename(staged, destination).map_err(|source| ConfigError::Io {
-            operation: "atomically replace configuration",
-            path: destination.to_path_buf(),
-            source,
-        })
+        let mut delay = REPLACE_FIRST_RETRY_DELAY;
+        for attempt in 0.. {
+            match fs::rename(staged, destination) {
+                Ok(()) => return Ok(()),
+                // The engine, an editor or a virus scanner can hold the file open for a
+                // moment; that should not fail a settings change.
+                Err(error) if attempt < REPLACE_RETRIES && is_transient_sharing_error(&error) => {
+                    std::thread::sleep(delay);
+                    delay = (delay * 2).min(REPLACE_MAX_RETRY_DELAY);
+                }
+                Err(source) => {
+                    return Err(ConfigError::Io {
+                        operation: "atomically replace configuration",
+                        path: destination.to_path_buf(),
+                        source,
+                    })
+                }
+            }
+        }
+        unreachable!("the retry loop always returns")
     }
 
     fn restore_last_known_good(
@@ -2439,6 +2455,70 @@ impl FileStore {
                 path: lkg_path.to_path_buf(),
                 source,
             }),
+        }
+    }
+}
+
+/// Staged files of one transaction, removed when it returns.
+#[derive(Default)]
+struct StagedFiles(Vec<PathBuf>);
+
+impl StagedFiles {
+    fn keep(&mut self, path: PathBuf) -> PathBuf {
+        self.0.push(path.clone());
+        path
+    }
+}
+
+impl Drop for StagedFiles {
+    fn drop(&mut self) {
+        for path in &self.0 {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+fn is_transient_sharing_error(error: &io::Error) -> bool {
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    const ERROR_LOCK_VIOLATION: i32 = 33;
+    cfg!(windows)
+        && matches!(
+            error.raw_os_error(),
+            Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)
+        )
+}
+
+/// Removes staged copies of `path` that a killed writer left behind.
+///
+/// Only files older than [`ABANDONED_STAGE_AGE`] are touched, so a stage another process is
+/// writing right now is left alone.
+fn remove_abandoned_stages(path: &Path) {
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return;
+    };
+    let mut prefix = name.to_os_string();
+    prefix.push(".stage-");
+    let Some(prefix) = prefix.to_str() else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let is_stage = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(prefix));
+        let abandoned = entry
+            .metadata()
+            .ok()
+            .filter(fs::Metadata::is_file)
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age >= ABANDONED_STAGE_AGE);
+        if is_stage && abandoned {
+            let _ = fs::remove_file(entry.path());
         }
     }
 }
@@ -2867,6 +2947,71 @@ mod visual_draft_tests {
 
         let reopened = ConfigCore::load(&store, &path).expect("reopen persisted config");
         assert_eq!(reopened.current().ui().language(), "ja-JP");
+        let _ = fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod staged_write_tests {
+    use super::*;
+    use std::fs;
+
+    fn temporary_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "fcitx5-config-{name}-{}-{}",
+            std::process::id(),
+            STAGE_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&root).expect("create temporary config directory");
+        root
+    }
+
+    fn stage_files(root: &Path) -> Vec<String> {
+        fs::read_dir(root)
+            .expect("list config directory")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".stage-"))
+            .collect()
+    }
+
+    #[test]
+    fn a_failed_apply_leaves_no_staged_files() {
+        let root = temporary_root("failed-apply");
+        let path = root.join("config.toml");
+        let lkg_path = FileStore::last_known_good_path(&path);
+        fs::write(&lkg_path, vec![b'#'; MAX_CONFIG_BYTES as usize + 1])
+            .expect("write oversized last-known-good");
+        let store = FileStore::new();
+        let mut core = ConfigCore::compiled_defaults();
+        core.apply(&store, &path, CommitFault::None)
+            .expect_err("an unreadable last-known-good stops the commit");
+        assert_eq!(stage_files(&root), Vec::<String>::new());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn apply_removes_stages_a_killed_writer_left_behind() {
+        let root = temporary_root("abandoned-stage");
+        let path = root.join("config.toml");
+        let abandoned = root.join("config.toml.stage-1-0");
+        let recent = root.join("config.toml.lkg.stage-2-0");
+        fs::write(&abandoned, b"partial").expect("write abandoned stage");
+        fs::write(&recent, b"in progress").expect("write recent stage");
+        fs::File::options()
+            .write(true)
+            .open(&abandoned)
+            .and_then(|file| {
+                file.set_modified(std::time::SystemTime::now() - ABANDONED_STAGE_AGE * 2)
+            })
+            .expect("age abandoned stage");
+
+        let store = FileStore::new();
+        let mut core = ConfigCore::compiled_defaults();
+        core.apply(&store, &path, CommitFault::None)
+            .expect("apply after an abandoned stage");
+        assert!(!abandoned.exists());
+        assert!(recent.exists(), "a stage still being written is kept");
         let _ = fs::remove_dir_all(root);
     }
 }
