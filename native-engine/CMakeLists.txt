@@ -148,7 +148,7 @@ target_link_libraries(
   fcitx5_engine
   PRIVATE Fcitx5::Core advapi32 user32
           fcitx5_protocol_core_rust fcitx5_engine_core_rust
-          fcitx5_windows_common_core_rust fcitx5_control_core_rust
+          fcitx5_windows_common_core_rust
           fcitx5_config_core_rust fcitx5_package_core_rust
           ntdll ws2_32 userenv bcrypt)
 fcitx_stage_native_runtime(fcitx5_engine)
