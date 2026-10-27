@@ -5,7 +5,6 @@ exclude = [
 ]
 members = [
   "rust/windows-common-core",
-  "rust/tsf-support-core",
   "rust/launcher-core",
   "rust/package-core",
   "rust/release-pqc-signer",
