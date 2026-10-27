@@ -387,6 +387,15 @@ impl FcitxConfigPages {
         })
     }
 
+    /// Whether the engine runs addon `id` and it has options.
+    pub(crate) fn addon_configurable(self, id: &str) -> bool {
+        self.addons.with(|addons| {
+            addons
+                .iter()
+                .any(|addon| addon.id == id && addon.configurable && addon.loaded)
+        })
+    }
+
     /// Whether the engine has options for input method `id`.
     pub(crate) fn input_method_configurable(self, id: &str) -> bool {
         self.input_methods.with(|entries| {

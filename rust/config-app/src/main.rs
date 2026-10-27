@@ -301,6 +301,11 @@ fn windui_settings_nav_item(
         .clickable()
         .on_click(move |_| {
             fcitx_pages.close();
+            // Plugins page and Advanced show which addons have options; a
+            // plugin installed or enabled since may have added some.
+            if i >= 2 {
+                fcitx_pages.refresh_lists();
+            }
             selected.set(i);
         })
         .width_match()
@@ -1090,9 +1095,20 @@ fn windui_plugin_row(
     row: PluginCatalogRow,
     selected: WindUiSignal<String>,
     snapshot: WindUiSignal<PluginManagerSnapshot>,
+    fcitx_pages: FcitxConfigPages,
     locale: LocaleCatalog,
 ) -> WindUiElement {
     let status = plugin_status(&row, &locale);
+    // A plugin package "fcitx5-<addon>" carries the Fcitx addon "<addon>";
+    // its options open here once the engine runs it.
+    let addon = row.id.strip_prefix("fcitx5-").unwrap_or(&row.id).to_owned();
+    let configurable_addon = addon.clone();
+    let options_title = row.title.clone();
+    let options = WindUiElement::button(locale.text("settings.fcitx.open"))
+        .small()
+        .outline()
+        .visible_when(move || fcitx_pages.addon_configurable(&configurable_addon))
+        .on_click(move |_| fcitx_pages.open(addon_uri(&addon), options_title.clone()));
     let row_id = row.id.clone();
     let title = row.title.clone();
     let summary = format!("{} · {}", row.id, row.summary);
@@ -1138,6 +1154,7 @@ fn windui_plugin_row(
                 .fg_role(WindUiRole::TextMuted)
                 .width(72),
         )
+        .child(options)
         .child(WindUiElement::badge_intent(status, WindUiIntent::Neutral))
 }
 
@@ -1177,6 +1194,7 @@ fn windui_plugins_page(
     busy: WindUiSignal<bool>,
     operation_status: WindUiSignal<String>,
     sender: WindUiSender<PluginResponse>,
+    fcitx_pages: FcitxConfigPages,
     locale: LocaleCatalog,
 ) -> WindUiElement {
     let selected = windui_signal("fcitx5-chinese-addons".to_owned());
@@ -1230,7 +1248,7 @@ fn windui_plugins_page(
     let list = WindUiElement::list_signal(
         rows,
         |row| row.id.clone(),
-        move |row| windui_plugin_row(row, selected, snapshot, row_locale.clone()),
+        move |row| windui_plugin_row(row, selected, snapshot, fcitx_pages, row_locale.clone()),
     )
     .width_match();
     let refresh_sender = sender.clone();
@@ -1968,6 +1986,7 @@ fn windui_settings_root(
                 plugin_busy,
                 plugin_status,
                 plugin_sender,
+                fcitx_pages,
                 plugin_locale,
             )
             .visible_when(move || shows(2)),
