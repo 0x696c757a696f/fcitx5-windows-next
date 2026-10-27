@@ -667,27 +667,38 @@ fn scroll_grid_columns(
         content_width += width;
     }
     let natural_width = content_width + padding_x * 2.0;
-    let budget = width_budget(input);
-    let window_width = natural_width.min(budget);
-    let content_budget = (window_width - padding_x * 2.0).max(0.0);
+    let budget_content = (width_budget(input) - padding_x * 2.0).max(0.0);
     // Group columns into viewports that fit the width budget (at most
-    // SCROLL_GRID_VISIBLE_LINES each) and show the group holding the highlight.
-    let selected_column = clamped_selected(input) / rows_per_column;
+    // SCROLL_GRID_VISIBLE_LINES each), the same way rows are capped in the
+    // horizontal direction. The window is as wide as the widest group, so the
+    // remaining columns scroll in instead of all showing at once.
+    let span = |first: usize, end: usize| {
+        column_offsets[end - 1] + column_widths[end - 1] - column_offsets[first]
+    };
+    let mut groups = Vec::new();
     let mut first_column = 0;
-    loop {
+    while first_column < columns {
         let mut end = first_column + 1;
         while end < columns
             && end - first_column < SCROLL_GRID_VISIBLE_LINES
-            && column_offsets[end] + column_widths[end] - column_offsets[first_column]
-                <= content_budget
+            && span(first_column, end + 1) <= budget_content
         {
             end += 1;
         }
-        if selected_column < end || end >= columns {
-            break;
-        }
+        groups.push((first_column, end));
         first_column = end;
     }
+    let viewport_content = groups
+        .iter()
+        .fold(0.0_f32, |width, &(first, end)| width.max(span(first, end)))
+        .min(budget_content);
+    let window_width = viewport_content + padding_x * 2.0;
+    let content_budget = viewport_content;
+    let selected_column = clamped_selected(input) / rows_per_column;
+    let first_column = groups
+        .iter()
+        .find(|&&(_, end)| selected_column < end)
+        .map_or(0, |&(first, _)| first);
     let natural_height = rows_per_column as f32 * row_height
         + (rows_per_column - 1) as f32 * row_gap
         + padding_y * 2.0;
@@ -1241,6 +1252,35 @@ mod tests {
             4.0 * 24.0 + 3.0 * input.row_gap + input.padding_y * 2.0
         ));
         assert!(result.items[9].visible);
+    }
+
+    #[test]
+    fn scrolling_vertical_grid_caps_window_to_six_columns() {
+        let mut input = input(vec![item(40.0, 24.0); 60]);
+        input.options = options().with_overflow(OverflowBehavior::Scrolling);
+        input.options.orientation = Orientation::Vertical;
+        input.page_size = 6;
+        input.max_width = 2000.0;
+        input.selected = 18;
+        let result = layout(&input);
+        let (dx, dy) = result.viewport_offset.expect("ten columns must scroll");
+        assert!(close(dx, 0.0), "column 3 sits in the first group");
+        assert!(close(dy, 0.0));
+        let window_width = result.window.right - result.window.left;
+        assert!(close(
+            window_width,
+            6.0 * 40.0 + 5.0 * input.column_gap + input.padding_x * 2.0
+        ));
+        assert!(result.content_size.width > window_width);
+        assert!(result.items[18].visible);
+        assert!(!result.items[59].visible);
+
+        input.selected = 45;
+        let result = layout(&input);
+        let (dx, _) = result.viewport_offset.expect("ten columns must scroll");
+        assert!(dx > 0.0, "column 7 scrolls the second group in");
+        assert!(result.items[45].visible);
+        assert!(!result.items[0].visible);
     }
 
     #[test]
