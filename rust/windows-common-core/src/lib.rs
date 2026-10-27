@@ -451,7 +451,9 @@ pub fn release_local_object_prefix() -> &'static str {
 #[must_use]
 pub fn default_fcitx5_data_root_for_current_process() -> Option<PathBuf> {
     let module_path = env::current_exe().ok()?;
-    default_data_root_for_module(&module_path, Path::new("Fcitx5"))
+    // The same channel directory the engine and the Candidate window read, so
+    // a beta or nightly Settings writes the config.toml they load.
+    default_data_root_for_module(&module_path, Path::new(release_data_directory()))
 }
 
 fn may_launch_user_engine(

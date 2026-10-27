@@ -2808,7 +2808,10 @@ impl WindUiConfigAdapter {
         let data_root = path.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
         let installation_root = env::current_exe()
             .ok()
-            .and_then(|path| path.parent()?.parent().map(Path::to_path_buf))
+            .and_then(|path| {
+                fcitx5_windows_common_core::engine_client::installation_root_for_module(&path)
+                    .or_else(|| path.parent()?.parent().map(Path::to_path_buf))
+            })
             .unwrap_or_default();
         Ok(Self {
             path,
