@@ -104,6 +104,7 @@ fn measure(
         },
         client_architecture_bits: (std::mem::size_of::<usize>() * 8) as u32,
         client_process_id: identity.process_id(),
+        notification_event: 0,
     })
     .ok_or_else(|| "failed to encode hello request".to_owned())?;
     let response_len = client

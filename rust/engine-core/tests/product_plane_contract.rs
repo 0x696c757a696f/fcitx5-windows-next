@@ -12,6 +12,7 @@ fn protocol_decodes_hello_through_engine_boundary() {
         },
         client_architecture_bits: 64,
         client_process_id: 1_234,
+        notification_event: 0,
     };
     let bytes = protocol::encode_hello_request(&expected).expect("valid hello request");
 
@@ -105,6 +106,7 @@ fn protocol_rejects_malformed_request_through_engine_boundary() {
         },
         client_architecture_bits: 64,
         client_process_id: 1_234,
+        notification_event: 0,
     };
     let mut bytes = protocol::encode_hello_request(&expected).expect("valid hello request");
     bytes.pop();

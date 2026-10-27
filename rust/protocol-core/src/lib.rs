@@ -124,6 +124,10 @@ pub struct HelloRequest {
     pub metadata: Metadata,
     pub client_architecture_bits: u32,
     pub client_process_id: u32,
+    /// Optional handle value, valid in the client process, of an event the
+    /// engine sets after a candidate click. Zero means none; it is encoded
+    /// only when set so older peers still read the frame.
+    pub notification_event: u64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -804,6 +808,9 @@ pub fn encode_hello_request(message: &HelloRequest) -> Option<Vec<u8>> {
     let mut writer = Writer::new(MessageType::HelloRequest, &message.metadata);
     writer.append_u32(message.client_architecture_bits);
     writer.append_u32(message.client_process_id);
+    if message.notification_event != 0 {
+        writer.append_u64(message.notification_event);
+    }
     Some(writer.finish())
 }
 
@@ -1019,6 +1026,7 @@ pub fn decode_hello_request(frame: &FrameView<'_>) -> Option<HelloRequest> {
     let mut reader = Reader::new(frame.body);
     let client_architecture_bits = reader.read_u32()?;
     let client_process_id = reader.read_u32()?;
+    let notification_event = if reader.done() { 0 } else { reader.read_u64()? };
     if !reader.done()
         || (client_architecture_bits != 32 && client_architecture_bits != 64)
         || client_process_id == 0
@@ -1029,6 +1037,7 @@ pub fn decode_hello_request(frame: &FrameView<'_>) -> Option<HelloRequest> {
         metadata: frame.metadata,
         client_architecture_bits,
         client_process_id,
+        notification_event,
     })
 }
 

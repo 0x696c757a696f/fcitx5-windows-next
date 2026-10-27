@@ -11,7 +11,7 @@ use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::windows::ffi::OsStringExt;
-use std::os::windows::io::AsHandle;
+use std::os::windows::io::{AsHandle, AsRawHandle};
 use std::panic::{catch_unwind, AssertUnwindSafe, UnwindSafe};
 use std::path::PathBuf;
 use std::process::Command;
@@ -1276,12 +1276,15 @@ fn destroy_candidate_dispatch_window(window: *mut c_void) {
     }
 }
 
+/// Watches this thread's own event, which the engine sets through a duplicated
+/// handle, and the per-process named event it falls back to when it cannot
+/// open this process (an elevated host, for example).
 fn start_candidate_notification_watch(
     event_name: Option<OsString>,
+    own_event: Option<Arc<common::LocalEvent>>,
     window: *mut c_void,
 ) -> Option<(Arc<common::LocalEvent>, JoinHandle<()>)> {
-    let event_name = event_name?;
-    if window.is_null() {
+    if window.is_null() || (event_name.is_none() && own_event.is_none()) {
         return None;
     }
     let stop = Arc::new(common::LocalEvent::new().ok()?);
@@ -1290,25 +1293,37 @@ fn start_candidate_notification_watch(
     let thread = std::thread::Builder::new()
         .name("fcitx5-tsf-candidate-notification".to_owned())
         .spawn(move || {
-            let Some(identity) = common::CurrentUserRuntimeIdentity::current() else {
-                trace_event("candidate_notification_watch_identity_failed");
+            let named = event_name.and_then(|event_name| {
+                let Some(identity) = common::CurrentUserRuntimeIdentity::current() else {
+                    trace_event("candidate_notification_watch_identity_failed");
+                    return None;
+                };
+                let Some(security) = identity.security_attributes() else {
+                    trace_event("candidate_notification_watch_security_failed");
+                    return None;
+                };
+                let event = common::NamedEvent::create(&event_name, &security).ok();
+                if event.is_none() {
+                    trace_event("candidate_notification_watch_event_failed");
+                }
+                event
+            });
+            if named.is_none() && own_event.is_none() {
                 return;
-            };
-            let Some(security) = identity.security_attributes() else {
-                trace_event("candidate_notification_watch_security_failed");
-                return;
-            };
-            let Ok(event) = common::NamedEvent::create(&event_name, &security) else {
-                trace_event("candidate_notification_watch_event_failed");
-                return;
-            };
+            }
+            let mut handles = vec![thread_stop.as_handle()];
+            handles.extend(own_event.as_deref().map(AsHandle::as_handle));
+            handles.extend(named.as_ref().map(AsHandle::as_handle));
             trace_event("candidate_notification_watch_started");
             // Sleep in the kernel until the candidate UI signals or the service stops,
             // instead of waking every host process on a timer.
-            while common::wait_for_any(&[thread_stop.as_handle(), event.as_handle()], None)
-                == Some(1)
-            {
-                let _ = event.reset();
+            while common::wait_for_any(&handles, None).is_some_and(|index| index != 0) {
+                if let Some(event) = &own_event {
+                    let _ = event.reset();
+                }
+                if let Some(event) = &named {
+                    let _ = event.reset();
+                }
                 // SAFETY: the TSF thread owns the message-only window. The
                 // stop path destroys it before joining this worker; a late
                 // post therefore fails harmlessly instead of dereferencing
@@ -1396,6 +1411,9 @@ struct EngineClient {
     retry_at: u64,
     last_used: u64,
     mode_retry_at: u64,
+    /// This thread's candidate-click event. Its handle value goes to the
+    /// engine in hello, so the client keeps it open while connected.
+    candidate_notification: Option<Arc<common::LocalEvent>>,
 }
 
 impl EngineClient {
@@ -1452,6 +1470,7 @@ impl EngineClient {
             *self = Self {
                 failure_streak: self.failure_streak,
                 retry_at: self.retry_at,
+                candidate_notification: self.candidate_notification.take(),
                 ..current
             };
         }
@@ -1798,6 +1817,10 @@ impl EngineClient {
             },
             client_architecture_bits: (std::mem::size_of::<usize>() * 8) as u32,
             client_process_id: std::process::id(),
+            notification_event: self
+                .candidate_notification
+                .as_ref()
+                .map_or(0, |event| event.as_handle().as_raw_handle() as usize as u64),
         };
         let Some(request) = protocol::encode_hello_request(&request) else {
             trace_event("engine_client_hello_encode_failed");
@@ -2995,8 +3018,12 @@ impl Fcitx5TsfService {
                 .engine_client
                 .as_ref()
                 .and_then(EngineClient::candidate_notification_name);
+            let own_event = common::LocalEvent::new().ok().map(Arc::new);
+            if let Some(client) = runtime.engine_client.as_mut() {
+                client.candidate_notification.clone_from(&own_event);
+            }
             if let Some((stop, thread)) =
-                start_candidate_notification_watch(event_name, dispatch_window)
+                start_candidate_notification_watch(event_name, own_event, dispatch_window)
             {
                 runtime.candidate_notification_stop = Some(stop);
                 runtime.candidate_notification_thread = Some(thread);

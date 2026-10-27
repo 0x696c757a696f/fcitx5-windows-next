@@ -1064,6 +1064,7 @@ fn engine_status(
         },
         client_architecture_bits: usize::BITS,
         client_process_id: identity.process_id(),
+        notification_event: 0,
     };
     let Some(hello_bytes) = encode_hello_request(&hello) else {
         return engine_status_failure("encode-hello");

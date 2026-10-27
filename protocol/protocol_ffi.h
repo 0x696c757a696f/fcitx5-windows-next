@@ -59,6 +59,7 @@ struct FcitxHelloRequestC {
     FcitxMetadataC metadata;
     std::uint32_t clientArchitectureBits;
     std::uint32_t clientProcessId;
+    std::uint64_t notificationEvent;
 };
 
 struct FcitxHelloResponseC {

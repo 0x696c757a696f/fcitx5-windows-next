@@ -141,6 +141,7 @@ fn encode_matches_rust_typed_api() {
         },
         client_architecture_bits: 64,
         client_process_id: 100,
+        notification_event: 0,
     };
     // SAFETY: `hello_c` is an initialized ABI fixture borrowed for this call.
     let via_ffi = unsafe { encode_once(fcitx5_protocol_core_encode_hello_request, &hello_c) }
@@ -157,6 +158,7 @@ fn encode_matches_rust_typed_api() {
         },
         client_architecture_bits: 64,
         client_process_id: 100,
+        notification_event: 0,
     })
     .expect("rust encode accepted");
     assert_eq!(via_ffi, via_rust);

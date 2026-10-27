@@ -1191,6 +1191,7 @@ RuntimeResult FcitxRuntime::selectCandidate(std::uint32_t targetProcessId,
     candidate.select(&context);
     (void)fcitx5_engine_core_clear_selected_override(impl_->ledger.get(), &ledgerKey);
     RuntimeResult output = impl_->collectResult(found->first, context, true);
+    output.ownerConnectionId = found->first.connectionId;
     // E5-3 (083): the pending snapshot store is Rust-owned; the flat
     // projection is marshaled without any serialization format crossing the
     // FFI edge. The record vector lives in this scope so the flat projection's
