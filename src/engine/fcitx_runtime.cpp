@@ -119,6 +119,22 @@ std::string copyConfigUtf8(Fcitx5ConfigUtf8 value) {
 // Config Core owns parsing, validation, Current/LKG/default recovery, and the
 // resolved product schema. This direct Fcitx adapter only copies the few
 // values needed to configure upstream Fcitx objects.
+std::filesystem::path engineConfigPath() {
+    const auto data = localDataDirectory();
+    return data.empty() ? std::filesystem::path{} : data / L"config.toml";
+}
+
+std::optional<std::filesystem::file_time_type> configStamp() {
+    std::error_code error;
+    const auto path = engineConfigPath();
+    if (path.empty())
+        return std::nullopt;
+    const auto stamp = std::filesystem::last_write_time(path, error);
+    if (error)
+        return std::nullopt;
+    return stamp;
+}
+
 EngineConfig readEngineConfig() {
     EngineConfig config;
     const auto data = localDataDirectory();
@@ -543,6 +559,8 @@ class FcitxRuntime::Impl final {
     // hot path (processKey) reads this in memory instead of reopening and
     // re-parsing the file on every keystroke.
     EngineConfig config;
+    // config.toml's modification time when `config` was last read.
+    std::optional<std::filesystem::file_time_type> configReadStamp;
 
     void ensureInputMethods() {
         auto& manager = instance->inputMethodManager();
@@ -554,6 +572,7 @@ class FcitxRuntime::Impl final {
                                [&](const auto& item) { return item.name() == name; });
         };
         const std::string previousDefault = group.defaultInputMethod();
+        configReadStamp = configStamp();
         config = readEngineConfig();
         // Config Core owns the enabled list and its order, so an input method
         // removed in Settings also leaves the switch cycle.
@@ -1319,6 +1338,16 @@ InputMethodStatus FcitxRuntime::inputMethodAction(const ClientContextKey& key, b
         impl_->dispatchPendingEvents();
     }
     return inputMethodStatusFor(*impl_->instance, &context);
+}
+
+void FcitxRuntime::reloadConfigIfChanged() {
+    if (!impl_->instance)
+        return;
+    const auto stamp = configStamp();
+    if (!stamp || stamp == impl_->configReadStamp)
+        return;
+    impl_->ensureInputMethods();
+    impl_->applyFcitxPageSize();
 }
 
 bool FcitxRuntime::setDefaultInputMethod(std::string_view id) {

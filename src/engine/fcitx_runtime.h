@@ -97,6 +97,10 @@ class FcitxRuntime final {
     // toggle hotkey does.
     [[nodiscard]] InputMethodStatus inputMethodAction(const ClientContextKey& key, bool toggle);
     [[nodiscard]] bool setDefaultInputMethod(std::string_view id);
+    // Applies config.toml again when Settings saved it since the last read,
+    // so enabled input methods, the default and candidate options take
+    // effect without restarting the engine.
+    void reloadConfigIfChanged();
     void forgetConnection(std::uint64_t connectionId);
 
     class Impl;
