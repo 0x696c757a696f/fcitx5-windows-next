@@ -21,7 +21,8 @@
       },
       "payload": [
         "lib/fcitx5/librime.dll",
-        "share/fcitx5/addon/rime.conf"
+        "share/fcitx5/addon/rime.conf",
+        "share/fcitx5/inputmethod/rime.conf"
       ]
     },
     {
