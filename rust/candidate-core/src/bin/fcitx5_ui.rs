@@ -22,6 +22,7 @@ use fcitx5_candidate_core::frame_update::{
     FrameUpdateOutcome, FrameWriting,
 };
 use fcitx5_candidate_core::presentation_server::fcitx5_candidate_presentation_serve;
+use fcitx5_candidate_core::renderer::resolve_candidate_family;
 use fcitx5_candidate_core::window_host::{
     fcitx5_candidate_window_create, fcitx5_candidate_window_destroy,
     fcitx5_candidate_window_run_message_loop, Fcitx5CandidateWindowCreateInput,
@@ -396,6 +397,7 @@ struct VisualConfig {
     corner_radius_dip: f32,
     colors: PaintColors,
     labels: Vec<String>,
+    font_family: String,
 }
 
 fn load_visual_config(safe_mode: bool) -> Option<VisualConfig> {
@@ -463,6 +465,7 @@ fn load_visual_config(safe_mode: bool) -> Option<VisualConfig> {
         corner_radius_dip: geometry.corner_radius_dip(),
         colors: PaintColors::from_map(candidate.colors()),
         labels: candidate.label().sequence().to_vec(),
+        font_family: resolve_candidate_family(snapshot.snapshot().fonts().candidate().families()),
     })
 }
 
@@ -576,6 +579,7 @@ impl Host {
 
     fn update(&mut self, response: &KeyResponse) {
         self.apply_content_locale(&response.content_locale_utf8);
+        self.measure.set_family(&self.visual_config.font_family);
         if response.caret.valid {
             self.last_caret = FrameCaret {
                 left: response.caret.left as f32,
@@ -1014,6 +1018,7 @@ impl Host {
                 anchor_stride: self.anchor_stride,
             },
             preedit: Some(preedit.as_ref()),
+            font_family: self.measure.family(),
             high_contrast,
             selected,
         };
