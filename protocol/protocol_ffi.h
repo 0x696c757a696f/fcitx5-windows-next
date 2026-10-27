@@ -139,6 +139,12 @@ struct FcitxEngineStatusRequestC {
     FcitxMetadataC metadata;
 };
 
+// action: 0 = query, 1 = toggle between keyboard and the default input method.
+struct FcitxInputMethodActionRequestC {
+    FcitxMetadataC metadata;
+    std::uint32_t action;
+};
+
 struct FcitxEngineStatusResponseC {
     FcitxMetadataC metadata;
     std::uint32_t status;
@@ -237,6 +243,10 @@ std::uint8_t fcitx5_protocol_core_decode_state_request(
 std::uint8_t fcitx5_protocol_core_decode_engine_status_request(
     const FcitxMetadataC* metadata, const std::uint8_t* body, std::size_t bodyLength,
     FcitxEngineStatusRequestC* out, std::uint8_t* strings, std::size_t stringsCapacity,
+    std::size_t* stringsNeeded);
+std::uint8_t fcitx5_protocol_core_decode_input_method_action_request(
+    const FcitxMetadataC* metadata, const std::uint8_t* body, std::size_t bodyLength,
+    FcitxInputMethodActionRequestC* out, std::uint8_t* strings, std::size_t stringsCapacity,
     std::size_t* stringsNeeded);
 std::uint8_t fcitx5_protocol_core_decode_engine_status_response(
     const FcitxMetadataC* metadata, const std::uint8_t* body, std::size_t bodyLength,

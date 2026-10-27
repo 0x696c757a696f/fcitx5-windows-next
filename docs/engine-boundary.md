@@ -109,6 +109,7 @@ Current request handlers:
 - `candidateSelectRequest`: accepts only from the product UI executable, calls `selectCandidate`, publishes updated state, then signals the UI event.
 - `stateRequest`: drains a pending state snapshot for a context when the UI missed an event.
 - `engineStatusRequest`: returns current input-method display metadata.
+- `inputMethodActionRequest`: reports or toggles the input method of one client context for the taskbar indicator and answers with an `EngineStatusResponse`.
 
 The dispatcher deadline check is part of the current contract: if queued work reaches the Fcitx event loop after the caller's deadline, it is dropped before touching Fcitx state.
 
@@ -144,6 +145,7 @@ Message types currently in the shared protocol:
 - `stateRequest`
 - `engineStatusRequest`
 - `engineStatusResponse`
+- `inputMethodActionRequest`
 
 Engine-facing metadata currently carries:
 
