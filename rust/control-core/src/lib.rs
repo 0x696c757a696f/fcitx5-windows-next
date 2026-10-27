@@ -557,7 +557,7 @@ fn theme_records_for_paths(
         .filter_map(|entry| {
             let text = read_file_bounded(entry.path, 512 * 1024).ok()?;
             let summary = parse_theme_summary(&text)?;
-            (summary.id == entry.id || entry.id == "builtin:default").then_some((
+            (summary.id == entry.id || entry.source == "builtin").then_some((
                 entry.id,
                 entry.source.to_owned(),
                 summary.name,
@@ -1741,19 +1741,6 @@ fn config_surfaces_json(owner: Fcitx5ControlUtf8, kinds: &[Fcitx5ControlUtf8]) -
 
 const THEME_FILE_NAME: &str = "theme.toml";
 
-fn builtin_theme_path(install_root: &std::path::Path) -> Option<PathBuf> {
-    if install_root.as_os_str().is_empty() {
-        return None;
-    }
-    Some(
-        install_root
-            .join("resources")
-            .join("themes")
-            .join("default")
-            .join(THEME_FILE_NAME),
-    )
-}
-
 fn user_themes_dir(data_root: &std::path::Path) -> Option<PathBuf> {
     if data_root.as_os_str().is_empty() {
         return None;
@@ -1775,9 +1762,7 @@ fn resolve_theme_path(
     builtin: bool,
 ) -> Option<PathBuf> {
     if builtin {
-        return (requested_id == "builtin:default")
-            .then(|| builtin_theme_path(install_root))
-            .flatten();
+        return fcitx5_config_core::builtin_theme_file(install_root, requested_id);
     }
     if !theme_id_valid(requested_id) {
         return None;
@@ -1836,7 +1821,7 @@ fn export_theme(
     data_root: &std::path::Path,
     id: &str,
 ) -> Result<Vec<u8>, i32> {
-    let builtin = id == "builtin:default";
+    let builtin = fcitx5_config_core::builtin_theme_name(id).is_some();
     if !builtin && !theme_id_valid(id) {
         return Err(CONTROL_THEME_OPERATION_INVALID);
     }
@@ -1939,12 +1924,15 @@ fn discover_themes(
     data_root: &std::path::Path,
 ) -> Vec<ThemeDiscoveryEntryOwned> {
     let mut entries = Vec::new();
-    if let Some(path) = builtin_theme_path(install_root) {
-        entries.push(ThemeDiscoveryEntryOwned {
-            path,
-            id: "builtin:default".to_owned(),
-            source: "builtin",
-        });
+    for name in fcitx5_config_core::BUILTIN_THEME_NAMES {
+        let id = format!("builtin:{name}");
+        if let Some(path) = fcitx5_config_core::builtin_theme_file(install_root, &id) {
+            entries.push(ThemeDiscoveryEntryOwned {
+                path,
+                id,
+                source: "builtin",
+            });
+        }
     }
     let Some(user_themes) = user_themes_dir(data_root) else {
         return entries;
@@ -2773,7 +2761,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let install = root.join("install");
         let data = root.join("data");
-        let builtin_dir = install.join("resources").join("themes").join("default");
+        let builtin_dir = install.join("themes").join("default");
         std::fs::create_dir_all(&builtin_dir).expect("create builtin theme");
         let builtin_text = br##"
 format_version = 1
@@ -3190,10 +3178,9 @@ description = "description is ordinary theme metadata"
         let data_root = PathBuf::from(r"C:\Users\Alice\AppData\Roaming\Fcitx5");
         let theme_dir = data_root.join("themes").join("solar");
         assert_eq!(
-            builtin_theme_path(&install_root),
+            fcitx5_config_core::builtin_theme_file(&install_root, "builtin:default"),
             Some(
                 install_root
-                    .join("resources")
                     .join("themes")
                     .join("default")
                     .join(THEME_FILE_NAME)
@@ -3204,7 +3191,11 @@ description = "description is ordinary theme metadata"
             theme_file_path(&theme_dir),
             Some(theme_dir.join(THEME_FILE_NAME))
         );
-        assert!(builtin_theme_path(std::path::Path::new("")).is_none());
+        assert!(fcitx5_config_core::builtin_theme_file(
+            std::path::Path::new(""),
+            "builtin:default"
+        )
+        .is_none());
         assert!(user_themes_dir(std::path::Path::new("")).is_none());
         assert!(theme_file_path(std::path::Path::new("")).is_none());
 
@@ -3219,11 +3210,14 @@ description = "description is ordinary theme metadata"
         std::fs::create_dir_all(&install).unwrap();
 
         let entries = discover_themes(&install, &temp.join("data"));
-        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries.len(),
+            fcitx5_config_core::BUILTIN_THEME_NAMES.len() + 1
+        );
         assert!(entries.iter().any(|entry| {
             entry.id == "builtin:default"
                 && entry.source == "builtin"
-                && entry.path.ends_with(r"resources\themes\default\theme.toml")
+                && entry.path.ends_with(r"themes\default\theme.toml")
         }));
         assert!(entries.iter().any(|entry| {
             entry.id == "solar" && entry.source == "user" && entry.path.ends_with("theme.toml")
@@ -3316,7 +3310,7 @@ version = "1"
         let data = std::path::PathBuf::from(r"C:\Users\Alice\AppData\Local\Fcitx5");
 
         let builtin = resolve_theme_path(&install, &data, "builtin:default", true).unwrap();
-        assert!(builtin.ends_with(r"resources\themes\default\theme.toml"));
+        assert!(builtin.ends_with(r"themes\default\theme.toml"));
         assert!(resolve_theme_path(&install, &data, "solar", true).is_none());
 
         let user = resolve_theme_path(&install, &data, "eosphoros-night", false).unwrap();

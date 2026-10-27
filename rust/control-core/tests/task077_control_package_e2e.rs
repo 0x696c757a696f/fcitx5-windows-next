@@ -44,7 +44,7 @@ impl Fixture {
         );
         write_text(&app_root.join("lib/fcitx5/libpinyin.dll"), "fixture");
         write_text(
-            &app_root.join("resources/themes/default/theme.toml"),
+            &app_root.join("themes/default/theme.toml"),
             &theme_fixture("builtin.default", "Fcitx5 Default"),
         );
         write_text(

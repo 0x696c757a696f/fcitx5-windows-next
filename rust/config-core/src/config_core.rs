@@ -16,8 +16,32 @@ use serde::{Deserialize, Serialize};
 const CONFIG_FORMAT_VERSION: u32 = 1;
 const MAX_CONFIG_BYTES: u64 = 256 * 1024;
 const MAX_THEME_BYTES: u64 = 512 * 1024;
-const BUILTIN_THEME_ID: &str = "builtin:default";
-const BUILTIN_THEME_METADATA_ID: &str = "builtin.default";
+/// Themes shipped with the package, each at `<install>/themes/<name>/theme.toml`
+/// and selected as `builtin:<name>` (metadata id `builtin.<name>`).
+pub const BUILTIN_THEME_NAMES: &[&str] = &["default", "ink", "azure", "sakura", "nord", "amber"];
+
+/// The `<name>` of a shipped `builtin:<name>` theme id.
+#[must_use]
+pub fn builtin_theme_name(id: &str) -> Option<&'static str> {
+    let name = id.strip_prefix("builtin:")?;
+    BUILTIN_THEME_NAMES
+        .iter()
+        .copied()
+        .find(|builtin| *builtin == name)
+}
+
+/// Where the package stores the shipped theme `id`; `installation_root` is
+/// the directory that holds `bin/`.
+#[must_use]
+pub fn builtin_theme_file(installation_root: &Path, id: &str) -> Option<PathBuf> {
+    let name = builtin_theme_name(id)?;
+    (!installation_root.as_os_str().is_empty()).then(|| {
+        installation_root
+            .join("themes")
+            .join(name)
+            .join("theme.toml")
+    })
+}
 const COMPILED_DEFAULTS: &str = include_str!("../../../resources/config.toml");
 static STAGE_COUNTER: AtomicU64 = AtomicU64::new(0);
 const REPLACE_RETRIES: u32 = 6;
@@ -2020,7 +2044,7 @@ fn load_theme_overrides(
     selected_id: &str,
     dark: bool,
 ) -> Option<ConfigOverrides> {
-    let builtin = selected_id == BUILTIN_THEME_ID;
+    let builtin = builtin_theme_name(selected_id).is_some();
     let path = resolve_theme_path(installation_root, data_root, selected_id, builtin)?;
     let text = read_theme_file(&path, !builtin)?;
     let theme: ThemeDocument = toml::from_str(&text).ok()?;
@@ -2052,14 +2076,7 @@ fn resolve_theme_path(
     builtin: bool,
 ) -> Option<PathBuf> {
     if builtin {
-        return (selected_id == BUILTIN_THEME_ID && !installation_root.as_os_str().is_empty())
-            .then(|| {
-                installation_root
-                    .join("resources")
-                    .join("themes")
-                    .join("default")
-                    .join("theme.toml")
-            });
+        return builtin_theme_file(installation_root, selected_id);
     }
     valid_user_theme_id(selected_id)
         .then_some(())
@@ -2096,7 +2113,8 @@ fn theme_is_valid(theme: &ThemeDocument, selected_id: &str, builtin: bool) -> bo
         && theme.theme.description.len() <= 4096
         && theme_common_is_exact(&theme.common)
         && (if builtin {
-            selected_id == BUILTIN_THEME_ID && theme.theme.id == BUILTIN_THEME_METADATA_ID
+            builtin_theme_name(selected_id)
+                .is_some_and(|name| theme.theme.id == format!("builtin.{name}"))
         } else {
             valid_user_theme_id(selected_id) && theme.theme.id == selected_id
         })
@@ -2895,10 +2913,74 @@ mod visual_draft_tests {
     use std::fs;
 
     #[test]
+    fn every_shipped_theme_resolves_distinct_light_and_dark_colors() {
+        let root = std::env::temp_dir().join(format!(
+            "fcitx5-config-builtin-themes-{}",
+            std::process::id()
+        ));
+        let sources =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/themes");
+        let store = FileStore::new();
+        let path = root.join("config.toml");
+        for name in BUILTIN_THEME_NAMES {
+            let theme = root.join("themes").join(name).join("theme.toml");
+            fs::create_dir_all(theme.parent().expect("theme parent")).expect("create theme dir");
+            fs::copy(sources.join(name).join("theme.toml"), &theme).expect("copy shipped theme");
+            let mut backgrounds = Vec::new();
+            for mode in ["light", "dark"] {
+                let mut core = ConfigCore::compiled_defaults();
+                for edit in [
+                    ConfigEdit::Theme(format!("builtin:{name}")),
+                    ConfigEdit::AppearanceMode(mode.to_owned()),
+                ] {
+                    core.execute(ConfigCommand::Set(edit), &store, &path)
+                        .expect("valid theme draft");
+                }
+                let snapshot = core.preview_visual_snapshot(&root, Path::new(""), false);
+                let colors = snapshot.candidate().colors();
+                let background = colors.get("background").cloned();
+                assert!(background.is_some(), "{name}/{mode} has a background");
+                assert_ne!(
+                    colors.get("selected_background"),
+                    colors.get("selected_candidate_text"),
+                    "{name}/{mode} selection text stays readable"
+                );
+                backgrounds.push(background);
+            }
+            assert_ne!(
+                backgrounds[0], backgrounds[1],
+                "{name} has distinct light and dark"
+            );
+        }
+        let mut core = ConfigCore::compiled_defaults();
+        core.execute(
+            ConfigCommand::Set(ConfigEdit::Theme("builtin:nord".to_owned())),
+            &store,
+            &path,
+        )
+        .expect("valid theme draft");
+        core.execute(
+            ConfigCommand::Set(ConfigEdit::AppearanceMode("dark".to_owned())),
+            &store,
+            &path,
+        )
+        .expect("valid mode draft");
+        let snapshot = core.preview_visual_snapshot(&root, Path::new(""), false);
+        assert_eq!(
+            snapshot.candidate().colors().get("background"),
+            Some(&"#2E3440FF".to_owned())
+        );
+        assert_eq!(builtin_theme_name("builtin:nord"), Some("nord"));
+        assert_eq!(builtin_theme_name("builtin:../x"), None);
+        assert_eq!(builtin_theme_name("nord"), None);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn draft_visual_snapshot_applies_theme_then_draft_overrides() {
         let root =
             std::env::temp_dir().join(format!("fcitx5-config-visual-draft-{}", std::process::id()));
-        let theme = root.join("resources/themes/default/theme.toml");
+        let theme = root.join("themes/default/theme.toml");
         fs::create_dir_all(theme.parent().expect("theme parent")).expect("create theme parent");
         fs::write(
             &theme,
