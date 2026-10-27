@@ -7,7 +7,6 @@ publish = false
 
 [lib]
 path = "src/lib.rs"
-crate-type = ["rlib", "staticlib"]
 
 [[bin]]
 name = "fcitx5-control"
