@@ -6,11 +6,30 @@
 
 #include <windows.h>
 
+#include <cstdlib>
 #include <future>
 #include <iostream>
 #include <utility>
 
 namespace fcitx::windows::engine {
+
+namespace {
+
+// The Fcitx event loop must answer a heartbeat within this window. A loop that
+// is stuck this long, or that has exited, can no longer serve keys; ending the
+// process lets the launcher start a fresh engine instead of leaving every
+// client failing open.
+constexpr auto kHeartbeatInterval = std::chrono::seconds(5);
+constexpr auto kHeartbeatTimeout = std::chrono::seconds(30);
+constexpr UINT kRestartExitCode = 70;
+
+std::int64_t steadyMilliseconds() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+} // namespace
 
 FcitxDispatcher::FcitxDispatcher() = default;
 FcitxDispatcher::~FcitxDispatcher() { stop(); }
@@ -21,6 +40,7 @@ bool FcitxDispatcher::start(bool safeMode) {
     auto ready = std::make_shared<std::promise<bool>>();
     auto future = ready->get_future();
     thread_ = std::thread([this, ready, safeMode] {
+        bool acceptingStarted = false;
         try {
             runtime_ = std::make_unique<FcitxRuntime>();
             if (!runtime_->initialize(safeMode)) {
@@ -31,14 +51,19 @@ bool FcitxDispatcher::start(bool safeMode) {
             dispatcher_ = std::make_unique<::fcitx::EventDispatcher>();
             dispatcher_->attach(&runtime_->eventLoop());
             accepting_.store(true, std::memory_order_release);
+            acceptingStarted = true;
             dispatcher_->schedule([ready] { ready->set_value(true); });
             runtime_->eventLoop().exec();
             accepting_.store(false, std::memory_order_release);
+            if (!stopping_.load(std::memory_order_acquire))
+                terminateForRestart("Fcitx event loop exited unexpectedly");
             dispatcher_->detach();
             dispatcher_.reset();
             runtime_.reset();
         } catch (...) {
             accepting_.store(false, std::memory_order_release);
+            if (acceptingStarted && !stopping_.load(std::memory_order_acquire))
+                terminateForRestart("Fcitx event loop failed");
             dispatcher_.reset();
             runtime_.reset();
             try {
@@ -51,7 +76,34 @@ bool FcitxDispatcher::start(bool safeMode) {
         thread_.join();
         return false;
     }
+    lastHeartbeatMs_.store(steadyMilliseconds(), std::memory_order_release);
+    watchdog_ = std::thread([this] { watch(); });
     return true;
+}
+
+void FcitxDispatcher::watch() {
+    std::unique_lock lock(watchdogMutex_);
+    while (!watchdogWake_.wait_for(lock, kHeartbeatInterval,
+                                   [this] { return stopping_.load(std::memory_order_acquire); })) {
+        const auto silentMs =
+            steadyMilliseconds() - lastHeartbeatMs_.load(std::memory_order_acquire);
+        if (silentMs >=
+            std::chrono::duration_cast<std::chrono::milliseconds>(kHeartbeatTimeout).count()) {
+            terminateForRestart("Fcitx event loop stopped responding");
+        }
+        if (accepting_.load(std::memory_order_acquire) && dispatcher_) {
+            dispatcher_->schedule([this] {
+                lastHeartbeatMs_.store(steadyMilliseconds(), std::memory_order_release);
+            });
+        }
+    }
+}
+
+void FcitxDispatcher::terminateForRestart(const char* reason) {
+    std::cerr << reason << "; exiting so the launcher restarts the engine\n";
+    std::cerr.flush();
+    TerminateProcess(GetCurrentProcess(), kRestartExitCode);
+    std::abort();
 }
 
 bool FcitxDispatcher::processKey(const ClientContextKey& context, const FcitxKeyRequestC& request,
@@ -217,6 +269,13 @@ void FcitxDispatcher::forgetConnection(std::uint64_t connectionId) {
 }
 
 void FcitxDispatcher::stop() {
+    {
+        std::lock_guard lock(watchdogMutex_);
+        stopping_.store(true, std::memory_order_release);
+    }
+    watchdogWake_.notify_all();
+    if (watchdog_.joinable())
+        watchdog_.join();
     accepting_.store(false, std::memory_order_release);
     if (dispatcher_ && runtime_) {
         dispatcher_->schedule([this] { runtime_->eventLoop().exit(); });

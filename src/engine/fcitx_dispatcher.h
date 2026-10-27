@@ -4,7 +4,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <cstdint>
 #include <memory>
+#include <mutex>
 #include <thread>
 
 namespace fcitx {
@@ -49,7 +52,15 @@ class FcitxDispatcher final {
     }
 
   private:
+    void watch();
+    [[noreturn]] static void terminateForRestart(const char* reason);
+
     std::thread thread_;
+    std::thread watchdog_;
+    std::mutex watchdogMutex_;
+    std::condition_variable watchdogWake_;
+    std::atomic<bool> stopping_{};
+    std::atomic<std::int64_t> lastHeartbeatMs_{};
     std::unique_ptr<FcitxRuntime> runtime_;
     std::unique_ptr<::fcitx::EventDispatcher> dispatcher_;
     std::atomic<bool> accepting_{};
