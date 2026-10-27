@@ -537,6 +537,8 @@ struct Host {
     tracking_mouse_leave: bool,
     /// Refreshed on system setting changes instead of queried every paint.
     high_contrast: bool,
+    /// (width, height, radius) of the window region last set.
+    corner_region: Option<(i32, i32, i32)>,
 }
 
 impl Host {
@@ -594,6 +596,7 @@ impl Host {
             hovered: None,
             tracking_mouse_leave: false,
             high_contrast: system_high_contrast(),
+            corner_region: None,
         }))
     }
 
@@ -758,12 +761,15 @@ impl Host {
                 SWP_NOACTIVATE | SWP_SHOWWINDOW,
             );
             // Same radius the renderer paints the background and border with.
-            fcitx5_candidate_window_set_corner_region(
-                window,
+            let region = (
                 outputs.window_width as i32,
                 outputs.window_height as i32,
                 self.visual_config.corner_radius_dip.round() as i32,
             );
+            if self.corner_region != Some(region) {
+                fcitx5_candidate_window_set_corner_region(window, region.0, region.1, region.2);
+                self.corner_region = Some(region);
+            }
             InvalidateRect(window, ptr::null(), 0);
             // Paint now instead of waiting for the low-priority WM_PAINT, so
             // a moved or grown window never shows stale pixels for a frame.

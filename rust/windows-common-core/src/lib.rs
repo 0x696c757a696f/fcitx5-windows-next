@@ -450,10 +450,9 @@ pub fn release_local_object_prefix() -> &'static str {
 /// native adapters, so Rust product frontends do not derive a competing path.
 #[must_use]
 pub fn default_fcitx5_data_root_for_current_process() -> Option<PathBuf> {
-    let module_path = env::current_exe().ok()?;
     // The same channel directory the engine and the Candidate window read, so
     // a beta or nightly Settings writes the config.toml they load.
-    default_data_root_for_module(&module_path, Path::new(release_data_directory()))
+    local_data_directory_for_module(&env::current_exe().ok()?)
 }
 
 fn may_launch_user_engine(

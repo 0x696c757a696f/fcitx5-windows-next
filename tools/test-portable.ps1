@@ -112,8 +112,10 @@ try {
         }
       }
     }
-    & (Join-Path $app 'bin/fcitx5-config.exe') --config (Join-Path $app 'data/config.toml') doctor
-    if ($LASTEXITCODE -ne 0) { throw "Config headless smoke failed at $location location." }
+    # fcitx5-config.exe is a GUI-subsystem program: `&` would not wait for it.
+    $doctor = Start-Process -FilePath (Join-Path $app 'bin/fcitx5-config.exe') -Wait -PassThru `
+      -NoNewWindow -ArgumentList @('--config', ('"{0}"' -f (Join-Path $app 'data/config.toml')), 'doctor')
+    if ($doctor.ExitCode -ne 0) { throw "Config headless smoke failed at $location location." }
     $status = (& (Join-Path $app 'bin/fcitx5-control.exe') --status) | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0) { throw "Control status failed at $location location." }
     $actual = [IO.Path]::GetFullPath($status.data_root.Replace('/', '\')).TrimEnd('\')

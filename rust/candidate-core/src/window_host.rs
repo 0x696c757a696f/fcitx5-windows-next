@@ -464,7 +464,7 @@ pub unsafe fn fcitx5_candidate_window_set_corner_region(
     }
     if radius <= 0 {
         // SAFETY: the caller supplies a live HWND; a null region removes clipping.
-        unsafe { SetWindowRgn(window, core::ptr::null_mut(), 1) };
+        unsafe { SetWindowRgn(window, core::ptr::null_mut(), 0) };
         return;
     }
     let diameter = radius.saturating_mul(2).min(width).min(height);
@@ -475,8 +475,9 @@ pub unsafe fn fcitx5_candidate_window_set_corner_region(
         return;
     }
     // SAFETY: the caller supplies a live HWND. On success the system owns the
-    // region; on failure it stays ours and is deleted here.
-    if unsafe { SetWindowRgn(window, region, 1) } == 0 {
+    // region; on failure it stays ours and is deleted here. No redraw: the
+    // caller paints the frame right after.
+    if unsafe { SetWindowRgn(window, region, 0) } == 0 {
         // SAFETY: the region was created above and not handed to the system.
         unsafe { DeleteObject(region) };
     }

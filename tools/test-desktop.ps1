@@ -377,8 +377,10 @@ try {
     }
   }
 
-  & $config --config (Join-Path $env:TEMP 'fcitx5-desktop-smoke-missing.toml') doctor
-  if ($LASTEXITCODE -ne 0) { throw 'Config headless smoke failed.' }
+  # fcitx5-config.exe is a GUI-subsystem program: `&` would not wait for it.
+  $doctor = Start-Process -FilePath $config -Wait -PassThru -NoNewWindow -ArgumentList @(
+    '--config', ('"{0}"' -f (Join-Path $env:TEMP 'fcitx5-desktop-smoke-missing.toml')), 'doctor')
+  if ($doctor.ExitCode -ne 0) { throw 'Config headless smoke failed.' }
   $evidence.checks.config_headless_smoke = $true
 
   & $notepadTest --raw-harness

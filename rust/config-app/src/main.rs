@@ -533,8 +533,8 @@ fn plugin_row_category(locale: &LocaleCatalog, package: &ControlPackage) -> Stri
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum PluginOperation {
     List,
-    /// The first list on page open, followed by an online refresh when no
-    /// verified catalog has been downloaded yet.
+    /// The first list on page open. When no verified catalog has been
+    /// downloaded yet, the page follows it with a Refresh.
     InitialLoad,
     Refresh,
     Install(String),
@@ -963,14 +963,7 @@ const REPOSITORY_NOT_DOWNLOADED: &str = "repository_unavailable";
 
 fn execute_plugin_operation(operation: &PluginOperation) -> Result<PluginManagerSnapshot, String> {
     if matches!(operation, PluginOperation::InitialLoad) {
-        let list = execute_plugin_operation(&PluginOperation::List)?;
-        if !needs_initial_refresh(&list) {
-            return Ok(list);
-        }
-        // A fresh install has no verified catalog yet; download it once so
-        // the page does not open with every plugin unavailable. If that
-        // fails the local list is still shown and Refresh stays available.
-        return Ok(execute_plugin_operation(&PluginOperation::Refresh).unwrap_or(list));
+        return execute_plugin_operation(&PluginOperation::List);
     }
     let arguments = plugin_control_arguments(operation)?;
     let timeout_ms = match operation {
@@ -1434,9 +1427,7 @@ fn addable_input_methods(
 }
 
 fn installed_input_method_choices(locale: &LocaleCatalog) -> Vec<InputMethodChoice> {
-    let install_root = env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent()?.parent().map(Path::to_path_buf));
+    let install_root = settings_installation_root();
     let data_root = fcitx5_windows_common_core::default_fcitx5_data_root_for_current_process();
     match (install_root, data_root) {
         (Some(install_root), Some(data_root)) => discover_input_methods(
@@ -1445,6 +1436,14 @@ fn installed_input_method_choices(locale: &LocaleCatalog) -> Vec<InputMethodChoi
         ),
         _ => Vec::new(),
     }
+}
+
+/// The installation Settings belongs to. A copy under `runtime\<generation>\bin`
+/// belongs to the installation two levels above the generation.
+fn settings_installation_root() -> Option<PathBuf> {
+    let exe = env::current_exe().ok()?;
+    fcitx5_windows_common_core::engine_client::installation_root_for_module(&exe)
+        .or_else(|| exe.parent()?.parent().map(Path::to_path_buf))
 }
 
 fn windui_engine_restart_channel(
@@ -2059,9 +2058,25 @@ fn windui_plugin_manager(
         locale.text("settings.plugins.choose_operation")
     });
     let response_locale = locale.clone();
+    let follow_up = windui_signal(None::<WindUiSender<PluginResponse>>);
     let sender = app.channel::<PluginResponse>(move |ctx, response| {
         busy.set(false);
         match response.result {
+            Ok(next)
+                if response.operation == PluginOperation::InitialLoad
+                    && needs_initial_refresh(&next) =>
+            {
+                // A fresh install has no verified catalog yet. Show the local
+                // list right away and download the catalog once, so the page
+                // does not stay with every plugin unavailable; a failure is
+                // reported like any Refresh.
+                snapshot.set(next);
+                if let Some(sender) = follow_up.get() {
+                    busy.set(true);
+                    status.set(response_locale.text("settings.plugins.refresh_signed"));
+                    spawn_plugin_operation(sender, PluginOperation::Refresh);
+                }
+            }
             Ok(next) => {
                 let count = next.packages.len();
                 let operation_label = response.operation.label(&response_locale);
@@ -2087,6 +2102,7 @@ fn windui_plugin_manager(
             }
         }
     });
+    follow_up.set(Some(sender.clone()));
     if initial_load {
         spawn_plugin_operation(sender.clone(), PluginOperation::InitialLoad);
     }
@@ -2806,13 +2822,7 @@ impl WindUiConfigAdapter {
             .map_err(|error| error.to_string())?
             .core;
         let data_root = path.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
-        let installation_root = env::current_exe()
-            .ok()
-            .and_then(|path| {
-                fcitx5_windows_common_core::engine_client::installation_root_for_module(&path)
-                    .or_else(|| path.parent()?.parent().map(Path::to_path_buf))
-            })
-            .unwrap_or_default();
+        let installation_root = settings_installation_root().unwrap_or_default();
         Ok(Self {
             path,
             installation_root,

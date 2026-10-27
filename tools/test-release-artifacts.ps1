@@ -112,9 +112,11 @@ try {
         (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne
           $file.sha256) { throw "Portable staged-file verification failed: $($file.path)" }
   }
-  & (Join-Path $portableRoot 'bin/fcitx5-config.exe') --config `
-    (Join-Path $portableRoot 'data/config.toml') doctor
-  if ($LASTEXITCODE -ne 0) { throw 'Signed portable Config smoke failed.' }
+  # fcitx5-config.exe is a GUI-subsystem program: `&` would not wait for it.
+  $doctor = Start-Process -FilePath (Join-Path $portableRoot 'bin/fcitx5-config.exe') -Wait `
+    -PassThru -NoNewWindow `
+    -ArgumentList @('--config', ('"{0}"' -f (Join-Path $portableRoot 'data/config.toml')), 'doctor')
+  if ($doctor.ExitCode -ne 0) { throw 'Signed portable Config smoke failed.' }
   & (Join-Path $portableRoot 'bin/fcitx5-control.exe') --schema
   if ($LASTEXITCODE -ne 0) { throw 'Signed portable Control smoke failed.' }
 } finally {

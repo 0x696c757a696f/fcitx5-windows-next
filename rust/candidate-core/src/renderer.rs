@@ -578,19 +578,6 @@ pub(crate) struct RenderWindowInput<'a> {
     pub hovered: Option<usize>,
 }
 
-/// Total scrollable extent of the whole content along the viewport axis
-/// (clamped scroll_override may leave natural content beyond the applied
-/// offset). Unit px.
-fn total_scrollable(axis: &AxisLayoutResult) -> f32 {
-    let width = axis.content_size.width;
-    let height = axis.content_size.height;
-    let window_w = (axis.window.right - axis.window.left).max(0.0);
-    let window_h = (axis.window.bottom - axis.window.top).max(0.0);
-    (height - window_h)
-        .max(0.0)
-        .max((width - window_w).max(0.0))
-}
-
 /// A complete candidate-window bitmap in BGRA row-major order, window-local.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RenderWindowOutput {
@@ -833,7 +820,7 @@ pub(crate) fn render_candidate_window(input: &RenderWindowInput<'_>) -> RenderWi
     }
 
     // 5. Scrollbar (right edge) when the content overflows its viewport.
-    draw_scrollbar(&mut canvas, input, window_w, window_h, axis);
+    draw_scrollbar(&mut canvas, input, window_w, window_h, y_offset, axis);
 
     // 6. Outer rounded border.
     draw_border(&mut canvas, input, window_w, window_h);
@@ -1353,22 +1340,25 @@ fn draw_scrollbar(
     input: &RenderWindowInput<'_>,
     window_w: f32,
     window_h: f32,
+    y_offset: f32,
     axis: &AxisLayoutResult,
 ) {
     let geometry = input.geometry;
     let Some((dx, dy)) = axis.viewport_offset else {
         return;
     };
-    let scrollable = total_scrollable(axis);
-    let vertical = axis.content_size.height > window_h;
-    let horizontal = !vertical && axis.content_size.width > window_w;
+    // The candidates scroll below the preedit row; pick the axis the same way
+    // `Host::scroll_viewport` does, so the bar shows the axis the wheel moves.
+    let viewport_h = (window_h - y_offset).max(0.0);
+    let vertical = axis.content_size.height > viewport_h + 0.5;
+    let horizontal = !vertical && axis.content_size.width > window_w + 0.5;
     let (track_x, track_y, track_w, track_h) = if vertical {
         let pad_y = geometry.item_padding_y.max(0.0);
         (
             window_w - 6.0,
-            pad_y,
+            y_offset + pad_y,
             4.0,
-            (window_h - pad_y * 2.0).max(1.0),
+            (viewport_h - pad_y * 2.0).max(1.0),
         )
     } else if horizontal {
         let pad_x = geometry.item_padding_x.max(0.0);
@@ -1382,10 +1372,11 @@ fn draw_scrollbar(
         return;
     };
     let (track_len, viewport, content, offset) = if vertical {
-        (track_h, window_h, axis.content_size.height, dy)
+        (track_h, viewport_h, axis.content_size.height, dy)
     } else {
         (track_w, window_w, axis.content_size.width, dx)
     };
+    let scrollable = content - viewport;
     let length =
         (track_len * viewport / content.max(viewport)).clamp(18.0_f32.min(track_len), track_len);
     let thumb = (track_len - length).max(0.0) * (offset / scrollable.max(1e-3)).clamp(0.0, 1.0);
