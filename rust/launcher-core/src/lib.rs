@@ -34,7 +34,10 @@ const MAXIMUM_BACKOFF_MS: u64 = 30_000;
 const SAFE_MODE_CRASH_THRESHOLD: u32 = 3;
 const STATE_FILE_NAME: &str = "launcher-state.v1";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-const READY_TIMEOUT: Duration = Duration::from_millis(2_000);
+// Matches the TSF cold-launch budget. A cold disk can take several seconds to
+// load the input method addons; killing the engine earlier counts as a startup
+// crash and three of them switch the user to Safe Mode.
+const READY_TIMEOUT: Duration = Duration::from_millis(20_000);
 const STOP_TIMEOUT: Duration = Duration::from_millis(2_000);
 const KILL_TIMEOUT: Duration = Duration::from_millis(1_000);
 const PIPE_CONNECT_TIMEOUT_MS: u32 = 250;
@@ -522,11 +525,13 @@ fn normalize_snapshot(
                 snapshot.next_start_allowed_milliseconds = now.saturating_add(INITIAL_BACKOFF_MS);
             }
         }
+        // Nothing in the product resets Safe Mode, so keeping it across
+        // launcher sessions would leave the user on the fallback input method
+        // for good after one bad start. Each session gets a normal attempt
+        // and falls back again only if the engine keeps crashing.
         LauncherState::SafeMode => {
-            snapshot.consecutive_startup_crashes = snapshot
-                .consecutive_startup_crashes
-                .max(SAFE_MODE_CRASH_THRESHOLD);
-            snapshot.next_start_allowed_milliseconds = 0;
+            snapshot.state = LauncherState::Normal as u32;
+            reset_crash_accounting(&mut snapshot);
         }
         _ => reset_crash_accounting(&mut snapshot),
     }
@@ -854,6 +859,28 @@ struct EngineProcess {
 struct UiProcess {
     child: Child,
     safe_mode: bool,
+    started: u64,
+}
+
+/// Paces restarts of the candidate window process so a UI that exits right
+/// after starting cannot keep the launcher busy respawning it.
+#[derive(Default)]
+struct UiRestart {
+    failures: u32,
+    next_start: u64,
+}
+
+impl UiRestart {
+    fn exited(&mut self, runtime: u64, now: u64) {
+        if runtime >= STABLE_RUNTIME_MS {
+            self.failures = 0;
+        }
+        self.failures = self.failures.saturating_add(1);
+        let delay = INITIAL_BACKOFF_MS
+            .saturating_mul(1_u64 << (self.failures - 1).min(16))
+            .min(MAXIMUM_BACKOFF_MS);
+        self.next_start = now.saturating_add(delay);
+    }
 }
 
 struct EngineStartContext<'a> {
@@ -932,7 +959,11 @@ fn spawn_ui(
         .spawn()
         .map_err(|error| LauncherError::Runtime(format!("UI launch failed: {error}")))?;
     assign(job, &mut child, "UI")?;
-    Ok(UiProcess { child, safe_mode })
+    Ok(UiProcess {
+        child,
+        safe_mode,
+        started: launcher_tick_milliseconds(),
+    })
 }
 
 fn stop_engine(engine: &mut Option<EngineProcess>) {
@@ -1184,11 +1215,8 @@ pub fn run_launcher(options: LauncherOptions) -> Result<(), LauncherError> {
         engine_state: EngineState::Stopped as u32,
     };
     let mut engine: Option<EngineProcess> = None;
-    let mut ui = startup
-        .ui_path
-        .as_deref()
-        .map(|path| spawn_ui(path, identity.process_id(), &generation, false, &job))
-        .transpose()?;
+    let mut ui: Option<UiProcess> = None;
+    let mut ui_restart = UiRestart::default();
     let mut restart = options.warmup;
     let mut epoch = 0_u64;
     let mut sequence = 0_u64;
@@ -1200,18 +1228,16 @@ pub fn run_launcher(options: LauncherOptions) -> Result<(), LauncherError> {
     while !shutdown && !stop.is_signaled() {
         let now = launcher_tick_milliseconds();
         if let Some(current) = engine.as_mut() {
-            let exited = current
-                .child
-                .try_wait()
-                .map_err(|error| LauncherError::Runtime(format!("engine status failed: {error}")))?
-                .is_some();
+            let exited = !matches!(current.child.try_wait(), Ok(None));
             let timed_out = machine.engine_state == EngineState::Starting as u32
                 && now.saturating_sub(current.started) >= READY_TIMEOUT.as_millis() as u64;
             if exited || timed_out {
                 let runtime = now.saturating_sub(current.started);
                 stop_engine(&mut engine);
                 engine_exited(&mut machine, runtime, now);
-                save_launcher_snapshot(&startup.state_path, machine.snapshot)?;
+                // The in-memory state stays authoritative; a failed write
+                // (antivirus lock, full disk) must not take input down.
+                let _ = save_launcher_snapshot(&startup.state_path, machine.snapshot);
                 restart = true;
             }
         }
@@ -1221,14 +1247,24 @@ pub fn run_launcher(options: LauncherOptions) -> Result<(), LauncherError> {
         {
             machine.engine_state = EngineState::Ready as u32;
         }
+        if let Some(current) = ui.as_mut() {
+            if !matches!(current.child.try_wait(), Ok(None)) {
+                let runtime = now.saturating_sub(current.started);
+                stop_ui(&mut ui);
+                ui_restart.exited(runtime, now);
+            }
+        }
         let safe_mode = machine.snapshot.state == LauncherState::SafeMode as u32;
         if ui.as_ref().is_some_and(|ui| ui.safe_mode != safe_mode) {
             stop_ui(&mut ui);
-            ui = startup
-                .ui_path
-                .as_deref()
-                .map(|path| spawn_ui(path, identity.process_id(), &generation, safe_mode, &job))
-                .transpose()?;
+        }
+        if ui.is_none() && now >= ui_restart.next_start {
+            if let Some(path) = startup.ui_path.as_deref() {
+                match spawn_ui(path, identity.process_id(), &generation, safe_mode, &job) {
+                    Ok(process) => ui = Some(process),
+                    Err(_) => ui_restart.exited(0, now),
+                }
+            }
         }
         if restart && engine.is_none() {
             match start_engine(
@@ -1253,7 +1289,7 @@ pub fn run_launcher(options: LauncherOptions) -> Result<(), LauncherError> {
                 }
                 Err(_) => {
                     engine_exited(&mut machine, 0, now);
-                    save_launcher_snapshot(&startup.state_path, machine.snapshot)?;
+                    let _ = save_launcher_snapshot(&startup.state_path, machine.snapshot);
                     restart = true;
                 }
             }
@@ -1391,6 +1427,37 @@ mod tests {
             now = machine.snapshot.next_start_allowed_milliseconds;
         }
         assert_eq!(machine.snapshot.state, LauncherState::SafeMode as u32);
+    }
+
+    #[test]
+    fn safe_mode_does_not_outlive_the_launcher_session() {
+        let snapshot = normalize_snapshot(
+            Fcitx5LauncherSnapshot {
+                state: LauncherState::SafeMode as u32,
+                consecutive_startup_crashes: SAFE_MODE_CRASH_THRESHOLD,
+                next_start_allowed_milliseconds: 0,
+            },
+            1,
+        )
+        .expect("snapshot");
+        assert_eq!(snapshot.state, LauncherState::Normal as u32);
+        assert_eq!(snapshot.consecutive_startup_crashes, 0);
+    }
+
+    #[test]
+    fn ui_restarts_back_off_and_recover_after_a_stable_run() {
+        let mut restart = UiRestart::default();
+        assert_eq!(restart.next_start, 0);
+        restart.exited(0, 1_000);
+        assert_eq!(restart.next_start, 1_000 + INITIAL_BACKOFF_MS);
+        restart.exited(0, 2_000);
+        assert_eq!(restart.next_start, 2_000 + 2 * INITIAL_BACKOFF_MS);
+        for _ in 0..20 {
+            restart.exited(0, 3_000);
+        }
+        assert_eq!(restart.next_start, 3_000 + MAXIMUM_BACKOFF_MS);
+        restart.exited(STABLE_RUNTIME_MS, 4_000);
+        assert_eq!(restart.next_start, 4_000 + INITIAL_BACKOFF_MS);
     }
 
     #[test]
