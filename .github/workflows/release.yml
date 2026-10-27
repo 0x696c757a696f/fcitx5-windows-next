@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version matching the protected v<version> tag
+        description: Version to publish; the v<version> tag is created on the dispatched commit
         required: true
         type: string
       channel:
@@ -48,12 +48,18 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
-      - name: Require the matching release tag
+      - name: Require an unpublished version
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if ('${{ github.ref }}' -ne 'refs/tags/v${{ inputs.version }}') {
-            throw 'Release must run from the matching v<version> tag.'
+          $tag = 'v${{ inputs.version }}'
+          if ('${{ github.ref_type }}' -eq 'tag' -and '${{ github.ref_name }}' -ne $tag) {
+            throw "Release dispatched from tag ${{ github.ref_name }} cannot publish $tag."
           }
+          & gh release view $tag -R '${{ github.repository }}' --json tagName 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) { throw "Release $tag is already published." }
+          $global:LASTEXITCODE = 0
 
       - name: Restore Rust toolchain and target cache
         uses: actions/cache@v6
@@ -337,8 +343,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $arguments = @('release', 'create', 'v${{ inputs.version }}',
-            'out/package/release-artifacts/*', '--verify-tag',
+          # The tag is created here, on the commit both jobs built and signed.
+          # A tag left by an earlier failed attempt has no release yet, so it
+          # is moved rather than trusted.
+          $tag = 'v${{ inputs.version }}'
+          $existing = & gh api "repos/${{ github.repository }}/git/ref/tags/$tag" --jq .object.sha 2>$null
+          if ($LASTEXITCODE -eq 0 -and $existing) {
+            & gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$tag"
+            if ($LASTEXITCODE -ne 0) { throw "Could not replace stale tag $tag." }
+          }
+          $global:LASTEXITCODE = 0
+          $arguments = @('release', 'create', $tag,
+            'out/package/release-artifacts/*', '--target', '${{ github.sha }}',
             '--title', 'Fcitx5 for Windows ${{ inputs.version }}', '--generate-notes')
           if ('${{ inputs.channel }}' -ne 'stable' -or '${{ inputs.without_authenticode }}' -eq 'true') {
             $arguments += '--prerelease'
