@@ -83,28 +83,33 @@ if ($inventory.format_version -ne 1 -or @($inventory.packages).Count -lt 3) {
   throw 'Release plugin inventory must contain the reviewed ecosystem packages.'
 }
 foreach ($plugin in @($inventory.packages)) {
-  if ($plugin.architecture -ne 'x64' -or $plugin.build.script -ne 'tools/bootstrap-fcitx.ps1' -or
+  $architecture = if ($plugin.type -eq 'inputmethod-data') { 'any' } else { 'x64' }
+  if ($plugin.architecture -ne $architecture -or $plugin.bundled -isnot [bool] -or
+      $plugin.build.script -ne 'tools/bootstrap-fcitx.ps1' -or
       [string]::IsNullOrWhiteSpace($plugin.source.commit)) {
     throw "Invalid pinned build input for plugin $($plugin.id)."
   }
 }
 
 # Each package source names its payload root, the payload paths relative to it,
-# and its provenance. Stage packages come from this repository's own build; fork
-# packages come from the pinned fcitx5-plugins release that
-# tools/prepare-fork-plugins.ps1 verified and laid out.
+# and its provenance. Stage packages come from this repository's own build:
+# bundled ones from the stage itself, the others from the plugin-payloads
+# folder tools/stage-package.ps1 moved them to. Fork packages come from the
+# pinned fcitx5-plugins release that tools/prepare-fork-plugins.ps1 verified
+# and laid out.
+$pluginPayloads = Join-Path (Split-Path -Parent $stage) 'plugin-payloads'
 $packageSources = @()
 foreach ($plugin in @($inventory.packages)) {
   $packageSources += [pscustomobject]@{
     Plugin = $plugin
-    Root = $stage
+    Root = $(if ($plugin.bundled) { $stage } else { $pluginPayloads })
     Payload = @($plugin.payload)
     PathPattern = '^[a-z0-9][a-z0-9._/-]*$'
     Repository = $plugin.source.repository
     Commit = $plugin.source.commit
     BuildScript = $plugin.build.script
     MinOs = '6.1-sp1'
-    Permissions = @('native-code')
+    Permissions = @($(if ($plugin.type -eq 'addon') { 'native-code' } else { 'input-data' }))
   }
 }
 if ([string]::IsNullOrWhiteSpace($ForkPayloadRoot)) {

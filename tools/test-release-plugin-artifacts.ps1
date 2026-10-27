@@ -7,10 +7,11 @@ $repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 
 $inventoryPath = Join-Path $PSScriptRoot 'release-plugin-inventory.json'
 $inventory = Get-Content -LiteralPath $inventoryPath -Raw | ConvertFrom-Json
-if ($inventory.format_version -ne 1 -or @($inventory.packages).Count -ne 3) {
-  throw 'Release plugin inventory shape is invalid.'
-}
-if ((@($inventory.packages.id) -join ',') -cne 'fcitx5-rime,fcitx5-lua,fcitx5-unikey') {
+$chineseTables = @('wbx', 'wbpy', 'cangjie', 'erbi', 'qxm', 'wanfeng', 'zrm', 'db')
+$expectedIds = @('fcitx5-rime', 'fcitx5-lua', 'fcitx5-unikey') +
+  @($chineseTables | ForEach-Object { "fcitx5-chinese-addons-$_" })
+if ($inventory.format_version -ne 1 -or
+    (@($inventory.packages.id) -join ',') -cne ($expectedIds -join ',')) {
   throw 'Release plugin inventory does not preserve the reviewed package order.'
 }
 $expectedCommits = @{
@@ -18,8 +19,16 @@ $expectedCommits = @{
   'fcitx5-lua' = '9bf8d3dd2c6240d8e3e194d09547acbfa6a81204'
   'fcitx5-unikey' = 'ed9170c35c1a6275d105e03d7f9bc4f674c1469c'
 }
+foreach ($table in $chineseTables) {
+  $expectedCommits["fcitx5-chinese-addons-$table"] = 'e8d930f402e359cfd76a101ee3e46815d1331d83'
+}
+# Pinyin, Shuangpin and Rime ship in the core; Unikey and the Chinese Addons
+# tables are optional plugins that tools/stage-package.ps1 moves out of it.
+$expectedBundled = @{ 'fcitx5-rime' = $true; 'fcitx5-lua' = $true }
 foreach ($plugin in @($inventory.packages)) {
-  if ($plugin.architecture -ne 'x64' -or $plugin.source.commit -ne $expectedCommits[$plugin.id] -or
+  $architecture = if ($plugin.type -eq 'inputmethod-data') { 'any' } else { 'x64' }
+  if ($plugin.architecture -ne $architecture -or $plugin.source.commit -ne $expectedCommits[$plugin.id] -or
+      $plugin.bundled -ne [bool]$expectedBundled[$plugin.id] -or
       $plugin.build.script -ne 'tools/bootstrap-fcitx.ps1' -or @($plugin.payload).Count -eq 0) {
     throw "Release plugin inventory has an invalid pinned build contract: $($plugin.id)."
   }
@@ -35,7 +44,8 @@ if (@($lua.payload) -notcontains 'lib/fcitx5/libluaaddonloader.dll' -or
 }
 $bootstrap = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'bootstrap-fcitx.ps1') -Raw
 foreach ($plugin in @($inventory.packages)) {
-  if ($bootstrap.IndexOf("@{ Name = '$($plugin.id)';", [StringComparison]::Ordinal) -lt 0 -or
+  $source = [IO.Path]::GetFileNameWithoutExtension($plugin.source.repository)
+  if ($bootstrap.IndexOf("@{ Name = '$source';", [StringComparison]::Ordinal) -lt 0 -or
       $bootstrap.IndexOf($plugin.source.commit, [StringComparison]::Ordinal) -lt 0) {
     throw "$($plugin.id) release inventory does not match the pinned bootstrap source."
   }

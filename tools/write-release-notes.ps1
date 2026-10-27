@@ -52,6 +52,9 @@ $titleZh = @{
   'Thai Table' = '泰语码表'; 'Arabic' = '阿拉伯语'; 'Amharic' = '阿姆哈拉语'
   'Malayalam Phonetic' = '马拉雅拉姆语拼音'; 'Tamil Remington' = '泰米尔语 Remington'
   'Hangul' = '韩文'; 'Thai' = '泰语'
+  'Wubi' = '五笔字型'; 'Wubi Pinyin' = '五笔拼音'; 'Cangjie (Simplified Chinese)' = '仓颉（简体中文）'
+  'Erbi' = '二笔'; 'Bingchan' = '冰蟾全息'; 'Wanfeng' = '晚风'; 'Ziranma' = '自然码'
+  'Dianbaoma' = '电报码'
 }
 $summaryZh = @{
   'Rime input engine' = 'Rime 输入法引擎（中州韵）'

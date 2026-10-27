@@ -437,7 +437,7 @@ const FCITX5_PLUGIN_CATALOG: &[PluginCatalogEntry] = &[
     },
     PluginCatalogEntry {
         id: "fcitx5-unikey",
-        windows_package: false,
+        windows_package: true,
     },
     PluginCatalogEntry {
         id: "fcitx5-rime",
@@ -4205,7 +4205,12 @@ mod tests {
                 .filter(|plugin| plugin.windows_package)
                 .map(|plugin| plugin.id)
                 .collect::<Vec<_>>(),
-            ["fcitx5-chinese-addons", "fcitx5-rime", "fcitx5-lua"]
+            [
+                "fcitx5-chinese-addons",
+                "fcitx5-unikey",
+                "fcitx5-rime",
+                "fcitx5-lua"
+            ]
         );
     }
 
