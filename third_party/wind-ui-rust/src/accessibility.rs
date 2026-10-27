@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn dynamic_name_tracks_real_text_content() {
         let label = signal(String::from("Before"));
-        let snapshot_before = snapshot_for(Element::col().child(Element::button(label.clone())));
+        let snapshot_before = snapshot_for(Element::col().child(Element::button(label)));
         assert_eq!(snapshot_before.nodes[1].name, "Before");
         label.set(String::from("After"));
         let snapshot_after = snapshot_for(Element::col().child(Element::button(label)));
@@ -468,10 +468,7 @@ mod tests {
         let clicks = signal(0);
         let mut tree = Tree::new();
         let root = Element::col()
-            .child(Element::button("Invoke").on_click({
-                let clicks = clicks.clone();
-                move |_| clicks.set(clicks.get() + 1)
-            }))
+            .child(Element::button("Invoke").on_click(move |_| clicks.set(clicks.get() + 1)))
             .build(&mut tree);
         tree.root = Some(root);
         tree.layout_root(Size::new(300, 120), &mut NullTextEngine);

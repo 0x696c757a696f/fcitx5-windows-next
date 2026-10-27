@@ -1,0 +1,12 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 7c23ef7..f20db09 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -307,3 +307,7 @@ strip = true
+ default-target = "x86_64-pc-windows-msvc"
+ targets = ["x86_64-pc-windows-msvc", "x86_64-apple-darwin", "aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
+ all-features = true
++
++# The vendored tree omits build.rs, which normally declares this cfg.
++[lints.rust]
++unexpected_cfgs = { level = "warn", check-cfg = ['cfg(gpu_backend)'] }

@@ -1,5 +1,5 @@
 diff --git a/Cargo.toml b/Cargo.toml
-index 37cdb6c..242fc19 100644
+index f20db09..1e588bc 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
 @@ -94,6 +94,7 @@ windows = { version = "0.62", features = [
@@ -10,384 +10,12 @@ index 37cdb6c..242fc19 100644
      "Win32_UI_Controls",
      "Win32_UI_HiDpi",
      "Win32_UI_Shell",
-@@ -112,6 +113,7 @@ windows = { version = "0.62", features = [
-     "Win32_System_Threading",
-     "Win32_Security",
-     "Win32_System_Ole",
-+    "Win32_System_Variant",
-     # 拖出（DoDragDrop）：IDropSource 的按键位在 SystemServices，IDataObject 的
-     # STGMEDIUM 挂在 Com_StructuredStorage 下。
-     "Win32_System_SystemServices",
-@@ -307,3 +309,7 @@ strip = true
- default-target = "x86_64-pc-windows-msvc"
- targets = ["x86_64-pc-windows-msvc", "x86_64-apple-darwin", "aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
- all-features = true
-+
-+# The vendored tree omits build.rs, which normally declares this cfg.
-+[lints.rust]
-+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(gpu_backend)'] }
-diff --git a/examples/uia_smoke.rs b/examples/uia_smoke.rs
-new file mode 100644
-index 0000000..a3513e5
---- /dev/null
-+++ b/examples/uia_smoke.rs
-@@ -0,0 +1,350 @@
-+//! 双进程真实 HWND 的 OS UIA 冒烟：验证 Win32 raw UIA provider 能被**独立进程**的
-+//! UI Automation 客户端看到。
-+//!
-+//! 用法：
-+//!   cargo run --example uia_smoke            # 客户端（父进程，默认）
-+//!   cargo run --example uia_smoke -- --host  # 宿主（子进程，被父进程拉起）
-+//!
-+//! 之所以要两个进程：provider 与 client 在同一 UI 线程里会互相读到自己的缓存，
-+//! 只有跨进程才真正经过 `WM_GETOBJECT` 与 OS 的 UIA 客户端栈。
-+
-+#[cfg(not(windows))]
-+fn main() {
-+    eprintln!("uia_smoke: Windows only");
-+}
-+
-+#[cfg(windows)]
-+fn main() {
-+    let is_host = std::env::args().any(|argument| argument == "--host");
-+    match if is_host { run_host() } else { run_client() } {
-+        Ok(()) => {}
-+        Err(error) => {
-+            eprintln!("uia_smoke FAILED: {error}");
-+            std::process::exit(1);
-+        }
-+    }
-+}
-+
-+#[cfg(windows)]
-+const HOST_TITLE: &str = "WindUI UIA smoke host";
-+#[cfg(windows)]
-+const STATIC_LABEL: &str = "Accessibility smoke";
-+#[cfg(windows)]
-+const DYNAMIC_INITIAL: &str = "Invoked 0";
-+#[cfg(windows)]
-+const DYNAMIC_AFTER: &str = "Invoked 1";
-+#[cfg(windows)]
-+const BUTTON_NAME: &str = "Invoke me";
-+#[cfg(windows)]
-+const HIDDEN_NAME: &str = "Hidden button";
-+
-+/// 宿主：一个普通 WindUI 窗口，内容固定。Button 的回调只把动态标签改成 `Invoked 1`。
-+#[cfg(windows)]
-+fn run_host() -> Result<(), String> {
-+    use windui::prelude::*;
-+
-+    let invoked = windui::signal::signal(false);
-+    let dynamic = invoked.map(|flag| {
-+        if *flag {
-+            DYNAMIC_AFTER.to_owned()
-+        } else {
-+            DYNAMIC_INITIAL.to_owned()
-+        }
-+    });
-+
-+    let ui = Element::col()
-+        .fill()
-+        .padding(16)
-+        .spacing(12)
-+        .child(
-+            Element::label(STATIC_LABEL)
-+                .font_size(18.0)
-+                .width_match()
-+                .height(28),
-+        )
-+        .child(
-+            Element::label_signal(dynamic)
-+                .font_size(16.0)
-+                .width_match()
-+                .height(24),
-+        )
-+        .child(
-+            Element::row()
-+                .width_match()
-+                .height(40)
-+                .spacing(12)
-+                .child(Element::button(BUTTON_NAME).on_click(move |_| invoked.set(true)))
-+                .child(Element::button(HIDDEN_NAME).visible(false)),
-+        );
-+
-+    App::new(HOST_TITLE, 420, 260).content(ui).run();
-+    Ok(())
-+}
-+
-+#[cfg(windows)]
-+fn run_client() -> Result<(), String> {
-+    use std::time::{Duration, Instant};
-+    use windows::core::w;
-+    use windows::Win32::Foundation::HWND;
-+    use windows::Win32::System::Com::{
-+        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
-+    };
-+    use windows::Win32::UI::Accessibility::{
-+        CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
-+        TreeScope_Descendants, UIA_ButtonControlTypeId, UIA_InvokePatternId, UIA_TextControlTypeId,
-+        UIA_WindowControlTypeId,
-+    };
-+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowThreadProcessId};
-+
-+    // SAFETY: the COM apartment is initialized for this thread before any UIA object is created;
-+    // RPC_E_CHANGED_MODE only means another apartment mode is already active, which is harmless.
-+    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-+
-+    let exe = std::env::current_exe().map_err(|error| format!("current_exe failed: {error}"))?;
-+    let mut host = std::process::Command::new(&exe)
-+        .arg("--host")
-+        .spawn()
-+        .map_err(|error| format!("host spawn failed: {error}"))?;
-+    let host_pid = host.id();
-+
-+    let outcome = (|| -> Result<(), String> {
-+        let hwnd = wait_for_host_window(&mut host)?;
-+        // SAFETY: CUIAutomation is a documented in-proc coclass and the apartment is initialized.
-+        let automation: IUIAutomation =
-+            unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
-+                .map_err(|error| format!("CoCreateInstance(CUIAutomation) failed: {error}"))?;
-+        // SAFETY: `hwnd` is a live window owned by the host process.
-+        let root = unsafe { automation.ElementFromHandle(hwnd) }
-+            .map_err(|error| format!("ElementFromHandle failed: {error}"))?;
-+
-+        // (1) root is the Window element.
-+        let root_type = current_control_type(&root)?;
-+        if root_type != UIA_WindowControlTypeId.0 {
-+            return Err(format!("root control type was {root_type}, expected Window"));
-+        }
-+
-+        // (2) the flattened semantic tree exposes Text and Button, and never the hidden button.
-+        let elements = descendants(&automation, &root)?;
-+        let mut names = Vec::new();
-+        let mut button: Option<IUIAutomationElement> = None;
-+        let mut saw_static = false;
-+        let mut saw_dynamic = false;
-+        for element in &elements {
-+            let name = current_name(element)?;
-+            let kind = current_control_type(element)?;
-+            names.push(format!("{name}({kind})"));
-+            if name == HIDDEN_NAME {
-+                return Err("hidden button was exposed to UIA".to_owned());
-+            }
-+            if kind == UIA_TextControlTypeId.0 && name == STATIC_LABEL {
-+                saw_static = true;
-+            }
-+            if kind == UIA_TextControlTypeId.0 && name == DYNAMIC_INITIAL {
-+                saw_dynamic = true;
-+            }
-+            if kind == UIA_ButtonControlTypeId.0 && name == BUTTON_NAME {
-+                button = Some(element.clone());
-+            }
-+        }
-+        if !saw_static {
-+            return Err(format!("static label missing; saw {names:?}"));
-+        }
-+        if !saw_dynamic {
-+            return Err(format!("initial dynamic label missing; saw {names:?}"));
-+        }
-+        let button = button.ok_or_else(|| format!("invoke button missing; saw {names:?}"))?;
-+
-+        // (3) Button properties.
-+        // SAFETY: provider elements are only queried while the host window is alive.
-+        let enabled = unsafe { button.CurrentIsEnabled() }
-+            .map_err(|error| format!("CurrentIsEnabled failed: {error}"))?
-+            .as_bool();
-+        let focusable = unsafe { button.CurrentIsKeyboardFocusable() }
-+            .map_err(|error| format!("CurrentIsKeyboardFocusable failed: {error}"))?
-+            .as_bool();
-+        if !enabled {
-+            return Err("invoke button reported disabled".to_owned());
-+        }
-+        if !focusable {
-+            return Err("invoke button reported not keyboard focusable".to_owned());
-+        }
-+
-+        // (4) BoundingRectangle is inside the real window rectangle (physical screen pixels).
-+        let window_rect = window_rect(hwnd)?;
-+        // SAFETY: same as above.
-+        let bounds = unsafe { button.CurrentBoundingRectangle() }
-+            .map_err(|error| format!("CurrentBoundingRectangle failed: {error}"))?;
-+        if bounds.left < window_rect.left
-+            || bounds.top < window_rect.top
-+            || bounds.right > window_rect.right
-+            || bounds.bottom > window_rect.bottom
-+        {
-+            return Err(format!(
-+                "button bounds {bounds:?} escaped window rect {window_rect:?}"
-+            ));
-+        }
-+
-+        // (5) SetFocus is visible through the OS UIA client.
-+        // SAFETY: same as above.
-+        unsafe { button.SetFocus() }.map_err(|error| format!("SetFocus failed: {error}"))?;
-+        poll_until(Duration::from_secs(3), || {
-+            // SAFETY: same as above.
-+            unsafe { button.CurrentHasKeyboardFocus() }
-+                .map(|value| value.as_bool())
-+                .unwrap_or(false)
-+        })
-+        .map_err(|_| "HasKeyboardFocus stayed false after SetFocus".to_owned())?;
-+
-+        // (6) Invoke through the real UIA pattern, then observe the dynamic label change.
-+        // SAFETY: the pattern id is the documented Invoke pattern.
-+        let pattern: IUIAutomationInvokePattern = unsafe {
-+            button
-+                .GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
-+        }
-+        .map_err(|error| format!("InvokePattern unavailable: {error}"))?;
-+        // SAFETY: the pattern was obtained from a live provider element.
-+        unsafe { pattern.Invoke() }.map_err(|error| format!("Invoke failed: {error}"))?;
-+        poll_until(Duration::from_secs(5), || {
-+            let Ok(elements) = descendants(&automation, &root) else {
-+                return false;
-+            };
-+            elements.iter().any(|element| {
-+                current_control_type(element) == Ok(UIA_TextControlTypeId.0)
-+                    && current_name(element).as_deref() == Ok(DYNAMIC_AFTER)
-+            })
-+        })
-+        .map_err(|_| format!("dynamic label never became {DYNAMIC_AFTER}"))?;
-+        println!(
-+            "uia_smoke OK: root=Window, {} descendant(s) [{}], Invoke produced {DYNAMIC_AFTER}",
-+            names.len(),
-+            names.join(" | ")
-+        );
-+
-+        // (7) After the host dies, held elements must fail as unavailable, not hang or crash.
-+        let _ = host.kill();
-+        let _ = host.wait();
-+        std::thread::sleep(Duration::from_millis(500));
-+        // SAFETY: intentionally querying a stale element; a failure here is the expected outcome.
-+        let stale = unsafe { button.CurrentName() };
-+        match stale {
-+            Err(error) => println!("stale element reported: {error}"),
-+            Ok(name) => {
-+                return Err(format!(
-+                    "stale element still answered with {:?}",
-+                    name.to_string()
-+                ))
-+            }
-+        }
-+        Ok(())
-+    })();
-+
-+    if outcome.is_err() {
-+        let _ = host.kill();
-+        let _ = host.wait();
-+    }
-+    outcome
-+}
-+
-+#[cfg(windows)]
-+fn wait_for_host_window(
-+    host: &mut std::process::Child,
-+) -> Result<windows::Win32::Foundation::HWND, String> {
-+    use std::time::{Duration, Instant};
-+    use windows::core::w;
-+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowThreadProcessId};
-+
-+    let host_pid = host.id();
-+    let deadline = Instant::now() + Duration::from_secs(15);
-+    while Instant::now() < deadline {
-+        if let Some(status) = host
-+            .try_wait()
-+            .map_err(|error| format!("host try_wait failed: {error}"))?
-+        {
-+            return Err(format!("host exited before showing a window: {status}"));
-+        }
-+        // SAFETY: a null class name matches any class; the title is a static wide literal.
-+        // `FindWindowW` reports "no such window" as `Err(HRESULT(0))`, which is a normal
-+        // not-found result here rather than a failure.
-+        if let Ok(hwnd) = unsafe { FindWindowW(None, w!("WindUI UIA smoke host")) } {
-+            if !hwnd.is_invalid() {
-+                let mut pid = 0_u32;
-+                // SAFETY: `hwnd` came from FindWindowW and `pid` is a valid out pointer.
-+                unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-+                if pid == host_pid {
-+                    return Ok(hwnd);
-+                }
-+            }
-+        }
-+        std::thread::sleep(Duration::from_millis(50));
-+    }
-+    Err("host window did not appear within 15s".to_owned())
-+}
-+
-+#[cfg(windows)]
-+fn descendants(
-+    automation: &windows::Win32::UI::Accessibility::IUIAutomation,
-+    root: &windows::Win32::UI::Accessibility::IUIAutomationElement,
-+) -> Result<Vec<windows::Win32::UI::Accessibility::IUIAutomationElement>, String> {
-+    use windows::Win32::UI::Accessibility::TreeScope_Descendants;
-+
-+    // SAFETY: `automation` is a live IUIAutomation and the condition is created per call.
-+    let condition = unsafe { automation.CreateTrueCondition() }
-+        .map_err(|error| format!("CreateTrueCondition failed: {error}"))?;
-+    // SAFETY: `root` is a live element and the condition outlives the call.
-+    let found = unsafe { root.FindAll(TreeScope_Descendants, &condition) }
-+        .map_err(|error| format!("FindAll failed: {error}"))?;
-+    // SAFETY: `found` is a live element array.
-+    let count = unsafe { found.Length() }.map_err(|error| format!("Length failed: {error}"))?;
-+    let mut elements = Vec::new();
-+    for index in 0..count {
-+        // SAFETY: index is within the array length reported above.
-+        if let Ok(element) = unsafe { found.GetElement(index) } {
-+            elements.push(element);
-+        }
-+    }
-+    Ok(elements)
-+}
-+
-+#[cfg(windows)]
-+fn current_name(
-+    element: &windows::Win32::UI::Accessibility::IUIAutomationElement,
-+) -> Result<String, String> {
-+    // SAFETY: element is a live provider element.
-+    unsafe { element.CurrentName() }
-+        .map(|value| value.to_string())
-+        .map_err(|error| format!("CurrentName failed: {error}"))
-+}
-+
-+#[cfg(windows)]
-+fn current_control_type(
-+    element: &windows::Win32::UI::Accessibility::IUIAutomationElement,
-+) -> Result<i32, String> {
-+    // SAFETY: element is a live provider element.
-+    unsafe { element.CurrentControlType() }
-+        .map(|value| value.0)
-+        .map_err(|error| format!("CurrentControlType failed: {error}"))
-+}
-+
-+#[cfg(windows)]
-+fn window_rect(hwnd: windows::Win32::Foundation::HWND) -> Result<windows::Win32::Foundation::RECT, String> {
-+    use windows::Win32::Foundation::RECT;
-+    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
-+
-+    let mut rect = RECT::default();
-+    // SAFETY: `hwnd` is the live host window and `rect` is a valid out pointer.
-+    unsafe { GetWindowRect(hwnd, &mut rect) }
-+        .map_err(|error| format!("GetWindowRect failed: {error}"))?;
-+    Ok(rect)
-+}
-+
-+#[cfg(windows)]
-+fn poll_until(timeout: std::time::Duration, mut predicate: impl FnMut() -> bool) -> Result<(), ()> {
-+    let deadline = std::time::Instant::now() + timeout;
-+    while std::time::Instant::now() < deadline {
-+        if predicate() {
-+            return Ok(());
-+        }
-+        std::thread::sleep(std::time::Duration::from_millis(50));
-+    }
-+    Err(())
-+}
 diff --git a/src/accessibility.rs b/src/accessibility.rs
 new file mode 100644
-index 0000000..64a0c94
+index 0000000..1537ff7
 --- /dev/null
 +++ b/src/accessibility.rs
-@@ -0,0 +1,487 @@
+@@ -0,0 +1,484 @@
 +//! Platform-neutral accessibility projection for the real WindUI tree.
 +//!
 +//! This is deliberately a projection, not a second UI state tree: every node and every value
@@ -716,7 +344,7 @@ index 0000000..64a0c94
 +    #[test]
 +    fn dynamic_name_tracks_real_text_content() {
 +        let label = signal(String::from("Before"));
-+        let snapshot_before = snapshot_for(Element::col().child(Element::button(label.clone())));
++        let snapshot_before = snapshot_for(Element::col().child(Element::button(label)));
 +        assert_eq!(snapshot_before.nodes[1].name, "Before");
 +        label.set(String::from("After"));
 +        let snapshot_after = snapshot_for(Element::col().child(Element::button(label)));
@@ -858,10 +486,7 @@ index 0000000..64a0c94
 +        let clicks = signal(0);
 +        let mut tree = Tree::new();
 +        let root = Element::col()
-+            .child(Element::button("Invoke").on_click({
-+                let clicks = clicks.clone();
-+                move |_| clicks.set(clicks.get() + 1)
-+            }))
++            .child(Element::button("Invoke").on_click(move |_| clicks.set(clicks.get() + 1)))
 +            .build(&mut tree);
 +        tree.root = Some(root);
 +        tree.layout_root(Size::new(300, 120), &mut NullTextEngine);
@@ -876,7 +501,7 @@ index 0000000..64a0c94
 +    }
 +}
 diff --git a/src/app/mod.rs b/src/app/mod.rs
-index 3ad0134..5cc25c7 100644
+index 2dfee59..aa5447c 100644
 --- a/src/app/mod.rs
 +++ b/src/app/mod.rs
 @@ -22,6 +22,9 @@ use std::time::Duration;
@@ -889,7 +514,7 @@ index 3ad0134..5cc25c7 100644
  use crate::core::{DamageReq, DispatchResult, EventCtx, NodeId, Tree};
  use crate::event::{
      CursorShape, Key, MouseButton, PointerEvent, PointerKind, WindowOp, WindowRequest,
-@@ -3884,6 +3887,45 @@ impl AppHandler for UiHost {
+@@ -3884,6 +3887,44 @@ impl AppHandler for UiHost {
          repaint
      }
  
@@ -931,11 +556,10 @@ index 3ad0134..5cc25c7 100644
 +        result
 +    }
 +
-+
      fn wants_close(&self) -> bool {
          self.close
      }
-@@ -4326,6 +4368,59 @@ mod test_support {
+@@ -4326,6 +4367,60 @@ mod test_support {
  mod tests {
      use super::*;
  
@@ -946,12 +570,10 @@ index 3ad0134..5cc25c7 100644
 +        use tiny_skia::Pixmap;
 +
 +        let invoked = crate::signal::signal(0);
-+        let app = App::new("accessibility", 300, 160).content(
-+            Element::col().child(Element::button("Invoke").on_click({
-+                let invoked = invoked.clone();
-+                move |_| invoked.set(invoked.get() + 1)
-+            })),
-+        );
++        let app = App::new("accessibility", 300, 160)
++            .content(Element::col().child(
++                Element::button("Invoke").on_click(move |_| invoked.set(invoked.get() + 1)),
++            ));
 +        let mut handler = app.into_handler_for_test();
 +        let mut pixmap = Pixmap::new(300, 160).unwrap();
 +        handler.render(
@@ -974,7 +596,11 @@ index 3ad0134..5cc25c7 100644
 +            handler.accessibility_action(button.id, AccessibilityAction::Invoke),
 +            AccessibilityActionResult::Performed
 +        );
-+        assert_eq!(invoked.get(), 1, "Invoke must use the normal callback exactly once");
++        assert_eq!(
++            invoked.get(),
++            1,
++            "Invoke must use the normal callback exactly once"
++        );
 +
 +        assert_eq!(
 +            handler.accessibility_action(button.id, AccessibilityAction::SetFocus),
@@ -991,12 +617,11 @@ index 3ad0134..5cc25c7 100644
 +        );
 +    }
 +
-+
      /// 标题栏宿主不是窗口：渲染它不认领通道消费权（否则消费权持有者关窗后可能落到它身上，
      /// 消息画进标题栏、开窗请求无人取走、只在悬停时才排空）。之后出帧的内容宿主照常认领。
      #[test]
 diff --git a/src/core.rs b/src/core.rs
-index 895396f..f3d205a 100644
+index faadb91..b79c638 100644
 --- a/src/core.rs
 +++ b/src/core.rs
 @@ -159,6 +159,16 @@ impl NodeId {
@@ -1036,7 +661,7 @@ index 895396f..f3d205a 100644
      /// `text` 供需要测量文本的控件（如 Label）使用。
      fn measure(&self, _avail: Size, _style: &Style, _text: &mut dyn TextEngine) -> Size {
 diff --git a/src/lib.rs b/src/lib.rs
-index 9371b00..573ad86 100644
+index af5f113..3ffd27e 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
 @@ -6,6 +6,7 @@
@@ -1047,17 +672,17 @@ index 9371b00..573ad86 100644
  /// 本 crate 的版本号（取自 `Cargo.toml`），供应用的「关于」页显示所用框架版本。
  ///
  /// 下游读不到依赖的 `Cargo.toml`，`env!("CARGO_PKG_VERSION")` 在应用里展开的是应用自己的
-@@ -35,6 +36,10 @@ pub mod ui;
+@@ -34,6 +35,10 @@ pub mod theme;
+ pub mod ui;
  
  pub mod prelude {
-     pub use crate::anim::MotionLevel;
 +    pub use crate::accessibility::{
 +        AccessibilityAction, AccessibilityNode, AccessibilityNodeId, AccessibilityRole,
 +        AccessibilitySnapshot,
 +    };
+     pub use crate::anim::MotionLevel;
      pub use crate::app::{App, HotkeyHandle, ThemeHandle, Window};
      pub use crate::event::{
-         window_open, window_state, CursorShape, Hotkey, HotkeyCtx, HotkeyOp, ImeField, ImeHints,
 diff --git a/src/platform/mod.rs b/src/platform/mod.rs
 index 8f4eb44..d137e70 100644
 --- a/src/platform/mod.rs
@@ -1084,10 +709,10 @@ index 8f4eb44..d137e70 100644
          false
 diff --git a/src/platform/win32/accessibility.rs b/src/platform/win32/accessibility.rs
 new file mode 100644
-index 0000000..8cd98dd
+index 0000000..1680bde
 --- /dev/null
 +++ b/src/platform/win32/accessibility.rs
-@@ -0,0 +1,762 @@
+@@ -0,0 +1,792 @@
 +//! Native UI Automation provider for a WindUI HWND.
 +//!
 +//! The provider is intentionally a stateless COM façade.  It stores only the HWND and the
@@ -1105,23 +730,23 @@ index 0000000..8cd98dd
 +use windows::Win32::System::Com::SAFEARRAY;
 +use windows::Win32::System::Ole::{SafeArrayCreateVector, SafeArrayDestroy, SafeArrayPutElement};
 +use windows::Win32::System::Variant::{
-+    VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_BSTR, VT_BOOL, VT_I4,
++    VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_BOOL, VT_BSTR, VT_I4,
 +};
 +use windows::Win32::UI::Accessibility::{
 +    IInvokeProvider, IInvokeProvider_Impl, IRawElementProviderFragment,
 +    IRawElementProviderFragmentRoot, IRawElementProviderFragmentRoot_Impl,
 +    IRawElementProviderFragment_Impl, IRawElementProviderSimple, IRawElementProviderSimple_Impl,
 +    NavigateDirection, NavigateDirection_FirstChild, NavigateDirection_LastChild,
-+    NavigateDirection_NextSibling, NavigateDirection_PreviousSibling, NavigateDirection_Parent,
++    NavigateDirection_NextSibling, NavigateDirection_Parent, NavigateDirection_PreviousSibling,
 +    ProviderOptions, ProviderOptions_ServerSideProvider, UIA_ButtonControlTypeId,
-+    UIA_ControlTypePropertyId, UIA_E_ELEMENTNOTAVAILABLE, UIA_E_ELEMENTNOTENABLED,
-+    UIA_E_NOTSUPPORTED, UIA_HasKeyboardFocusPropertyId, UIA_InvokePatternId,
++    UIA_ControlTypePropertyId, UIA_HasKeyboardFocusPropertyId, UIA_InvokePatternId,
 +    UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId, UIA_NamePropertyId,
 +    UIA_TextControlTypeId, UIA_WindowControlTypeId, UiaAppendRuntimeId, UiaRect,
++    UIA_E_ELEMENTNOTAVAILABLE, UIA_E_ELEMENTNOTENABLED, UIA_E_NOTSUPPORTED,
 +};
 +use windows::Win32::UI::HiDpi::GetDpiForWindow;
 +use windows::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_APP};
-+use windows_core::{implement, BSTR, ComObject, Error, HRESULT, IUnknown, Result};
++use windows_core::{implement, ComObject, Error, IUnknown, Result, BSTR, HRESULT};
 +
 +use crate::accessibility::{
 +    AccessibilityAction, AccessibilityActionResult, AccessibilityNode, AccessibilityNodeId,
@@ -1256,7 +881,11 @@ index 0000000..8cd98dd
 +    .into_interface()
 +}
 +
-+fn provider_for(hwnd: HWND, snapshot: &AccessibilitySnapshot, id: AccessibilityNodeId) -> IRawElementProviderFragment {
++fn provider_for(
++    hwnd: HWND,
++    snapshot: &AccessibilitySnapshot,
++    id: AccessibilityNodeId,
++) -> IRawElementProviderFragment {
 +    if snapshot.root == Some(id) {
 +        root_fragment(hwnd)
 +    } else {
@@ -1295,7 +924,9 @@ index 0000000..8cd98dd
 +fn node_for(state: ProviderState) -> Result<(AccessibilitySnapshot, AccessibilityNode)> {
 +    let snapshot = snapshot_for(state)?;
 +    let id = match state.target {
-+        ProviderTarget::Root => snapshot.root.ok_or_else(|| uia_error(UIA_E_ELEMENTNOTAVAILABLE))?,
++        ProviderTarget::Root => snapshot
++            .root
++            .ok_or_else(|| uia_error(UIA_E_ELEMENTNOTAVAILABLE))?,
 +        ProviderTarget::Node(id) => id,
 +    };
 +    let node = snapshot
@@ -1392,7 +1023,9 @@ index 0000000..8cd98dd
 +    }
 +    let (_, node) = node_for(state)?;
 +    if node.role != AccessibilityRole::Button
-+        || !node.supported_actions.contains(&AccessibilityAction::Invoke)
++        || !node
++            .supported_actions
++            .contains(&AccessibilityAction::Invoke)
 +    {
 +        return Err(no_element_error());
 +    }
@@ -1425,14 +1058,19 @@ index 0000000..8cd98dd
 +            let Some(parent) = snapshot.node(parent_id) else {
 +                return unavailable();
 +            };
-+            let Some(index) = parent.children.iter().position(|candidate| *candidate == node.id)
++            let Some(index) = parent
++                .children
++                .iter()
++                .position(|candidate| *candidate == node.id)
 +            else {
 +                return unavailable();
 +            };
 +            if direction == NavigateDirection_NextSibling {
 +                parent.children.get(index + 1).copied()
 +            } else {
-+                index.checked_sub(1).and_then(|i| parent.children.get(i).copied())
++                index
++                    .checked_sub(1)
++                    .and_then(|i| parent.children.get(i).copied())
 +            }
 +        }
 +        _ => return unsupported(),
@@ -1475,7 +1113,11 @@ index 0000000..8cd98dd
 +}
 +
 +fn runtime_id(id: AccessibilityNodeId) -> Result<*mut SAFEARRAY> {
-+    let values = [UiaAppendRuntimeId as i32, id.index() as i32, id.generation() as i32];
++    let values = [
++        UiaAppendRuntimeId as i32,
++        id.index() as i32,
++        id.generation() as i32,
++    ];
 +    // SAFETY: SafeArrayCreateVector allocates a COM-owned VT_I4 array; ownership is transferred to
 +    // UIA on success. Every put uses a valid element index and pointer to a live i32.
 +    let array = unsafe { SafeArrayCreateVector(VT_I4, 0, values.len() as u32) };
@@ -1496,7 +1138,10 @@ index 0000000..8cd98dd
 +    Ok(array)
 +}
 +
-+fn focused_fragment(state: ProviderState, snapshot: &AccessibilitySnapshot) -> Result<IRawElementProviderFragment> {
++fn focused_fragment(
++    state: ProviderState,
++    snapshot: &AccessibilitySnapshot,
++) -> Result<IRawElementProviderFragment> {
 +    let id = snapshot
 +        .nodes
 +        .iter()
@@ -1549,7 +1194,10 @@ index 0000000..8cd98dd
 +        Ok(ProviderOptions_ServerSideProvider)
 +    }
 +
-+    fn GetPatternProvider(&self, patternid: windows::Win32::UI::Accessibility::UIA_PATTERN_ID) -> Result<IUnknown> {
++    fn GetPatternProvider(
++        &self,
++        patternid: windows::Win32::UI::Accessibility::UIA_PATTERN_ID,
++    ) -> Result<IUnknown> {
 +        pattern_provider(self.0, patternid.0)
 +    }
 +
@@ -1594,7 +1242,11 @@ index 0000000..8cd98dd
 +            ProviderTarget::Node(id) => id,
 +            ProviderTarget::Root => return unsupported(),
 +        };
-+        action_result(bridge_action(self.0.hwnd, id, AccessibilityAction::SetFocus))
++        action_result(bridge_action(
++            self.0.hwnd,
++            id,
++            AccessibilityAction::SetFocus,
++        ))
 +    }
 +
 +    fn FragmentRoot(&self) -> Result<IRawElementProviderFragmentRoot> {
@@ -1612,7 +1264,10 @@ index 0000000..8cd98dd
 +        Ok(ProviderOptions_ServerSideProvider)
 +    }
 +
-+    fn GetPatternProvider(&self, patternid: windows::Win32::UI::Accessibility::UIA_PATTERN_ID) -> Result<IUnknown> {
++    fn GetPatternProvider(
++        &self,
++        patternid: windows::Win32::UI::Accessibility::UIA_PATTERN_ID,
++    ) -> Result<IUnknown> {
 +        pattern_provider(self.0, patternid.0)
 +    }
 +
@@ -1723,7 +1378,7 @@ index 0000000..8cd98dd
 +        assert_eq!(read(1), id.index() as i32);
 +        assert_eq!(read(2), id.generation() as i32);
 +        // SAFETY: UIA never received this array, so ownership is still ours to release.
-+        unsafe { SafeArrayDestroy(array) };
++        let _ = unsafe { SafeArrayDestroy(array) };
 +    }
 +
 +    #[test]
@@ -1851,46 +1506,26 @@ index 0000000..8cd98dd
 +    }
 +}
 diff --git a/src/platform/win32/mod.rs b/src/platform/win32/mod.rs
-index 88a21b0..b568c4a 100644
+index 88a21b0..bbddfd1 100644
 --- a/src/platform/win32/mod.rs
 +++ b/src/platform/win32/mod.rs
-@@ -11,6 +11,7 @@ pub mod dragdrop;
- pub mod hotkey;
- pub mod tray;
- mod tsf;
+@@ -4,6 +4,7 @@
+ //! 「拷贝 + R/B 交换」进一块 BGRA 上传缓冲，再 `SetDIBitsToDevice` 拷屏。不在 pixmap 上
+ //! 原地交换，是因为宿主的局部重绘要靠它保存上一帧画面。空闲时阻塞在 `GetMessageW`，零 CPU。
+ 
 +mod accessibility;
- 
- use std::cell::{Cell, RefCell};
- use std::ffi::c_void;
-@@ -78,7 +79,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
-     SW_SHOWNORMAL, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE,
-     WM_ACTIVATE, WM_APP, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COPYDATA, WM_DESTROY,
-     WM_DPICHANGED, WM_DROPFILES, WM_DWMCOLORIZATIONCOLORCHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE,
--    WM_GETMINMAXINFO, WM_HOTKEY, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_SETCONTEXT,
-+    WM_GETMINMAXINFO, WM_GETOBJECT, WM_HOTKEY, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_SETCONTEXT,
-     WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-     WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCCREATE,
-     WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCMBUTTONDOWN, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN,
-@@ -87,6 +88,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
-     WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP,
-     WS_THICKFRAME,
+ pub mod clipboard;
+ #[cfg(feature = "d2d")]
+ pub(super) mod d2d;
+@@ -33,6 +34,7 @@ use windows::Win32::Graphics::Gdi::{
  };
+ use windows::Win32::Media::{timeBeginPeriod, timeEndPeriod};
+ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 +use windows::Win32::UI::Accessibility::UiaReturnRawElementProvider;
- // 窗口图标（`App::icon`）：HICON 由 tray 那份 RGBA 转换复用，销毁归 WindowState::drop。
- use windows::Win32::UI::WindowsAndMessaging::{
-     DestroyIcon, SendMessageW, HICON, ICON_BIG, ICON_SMALL, SM_CXICON, SM_CXSMICON,
-@@ -1270,6 +1272,10 @@ const CLASS_NAME: PCWSTR = w!("WindUiWindowClass");
- /// 跨线程唤醒消息（WM_APP+2；WM_APP+1 已用于托盘）。
- const WM_APP_WAKE: u32 = WM_APP + 2;
- 
-+/// The UIA provider sends synchronous requests through this window message.  Only this
-+/// `wnd_proc` arm reads the AppHandler accessibility seam; the provider never reaches into
-+/// WindowState directly.
-+
- /// 跨线程唤醒句柄：仅持 HWND 数值，PostMessage 线程安全。
- struct Win32Wake {
-     hwnd: isize,
-@@ -1979,6 +1985,15 @@ unsafe fn window_frame_interval_ms(hwnd: HWND) -> u128 {
+ use windows::Win32::UI::Controls::{MARGINS, WM_MOUSELEAVE};
+ use windows::Win32::UI::HiDpi::{
+     AdjustWindowRectExForDpi, GetDpiForSystem, GetDpiForWindow, GetSystemMetricsForDpi,
+@@ -1979,6 +1981,15 @@ unsafe fn window_frame_interval_ms(hwnd: HWND) -> u128 {
      (1000 / fps.max(1)) as u128
  }
  
@@ -1906,7 +1541,7 @@ index 88a21b0..b568c4a 100644
  unsafe extern "system" fn wnd_proc(
      hwnd: HWND,
      msg: u32,
-@@ -1997,6 +2012,41 @@ unsafe extern "system" fn wnd_proc(
+@@ -1997,6 +2008,42 @@ unsafe extern "system" fn wnd_proc(
              }
              DefWindowProcW(hwnd, msg, wparam, lparam)
          }
@@ -1926,14 +1561,15 @@ index 88a21b0..b568c4a 100644
 +                        (*request).snapshot = state.handler.accessibility_snapshot();
 +                    }
 +                    accessibility::BridgeOperation::Action { id, action } => {
-+                        (*request).action_result = Some(state.handler.accessibility_action(id, action));
++                        (*request).action_result =
++                            Some(state.handler.accessibility_action(id, action));
 +                    }
 +                }
 +                (*request).delivered = true;
 +            }
 +            LRESULT(1)
 +        }
-+        WM_GETOBJECT if is_uia_root_object(lparam) => {
++        windows::Win32::UI::WindowsAndMessaging::WM_GETOBJECT if is_uia_root_object(lparam) => {
 +            // Check liveness before constructing the root provider, then end the WindowState
 +            // borrow before calling the OS UIA hand-off routine.
 +            if state_from(hwnd).is_none() {
@@ -1948,21 +1584,13 @@ index 88a21b0..b568c4a 100644
          WM_PAINT => {
              if let Some(state) = state_from(hwnd) {
                  state.paint(hwnd);
-@@ -4698,7 +4748,7 @@ mod live_windows_tests {
- 
- #[cfg(test)]
- mod tests {
--    use super::{accumulate_char, frame_size_for_client, ClickTracker};
-+    use super::{accumulate_char, frame_size_for_client, is_uia_root_object, ClickTracker, LPARAM};
- 
-     /// 无边框窗外框即客户区（按缩放取整）；带框窗口外框严格更大——差值就是无边框窗曾经
-     /// 多出来的那一圈。
-@@ -4723,6 +4773,17 @@ mod tests {
+@@ -4723,6 +4770,18 @@ mod tests {
          }
      }
  
 +    #[test]
 +    fn only_the_uia_root_object_id_takes_the_accessibility_path() {
++        use super::{is_uia_root_object, LPARAM};
 +        // The UIA root request is the single object id that may create a raw provider.
 +        let root = LPARAM(windows::Win32::UI::Accessibility::UiaRootObjectId as isize);
 +        assert!(is_uia_root_object(root));
@@ -1975,48 +1603,8 @@ index 88a21b0..b568c4a 100644
      #[test]
      fn bmp_char_passes_through() {
          let mut pend = None;
-diff --git a/src/platform/win32/tray.rs b/src/platform/win32/tray.rs
-index 5187cff..c35e2c2 100644
---- a/src/platform/win32/tray.rs
-+++ b/src/platform/win32/tray.rs
-@@ -501,11 +501,16 @@ mod tests {
-             HICON(std::ptr::null_mut()),
-             "提示",
-         );
--        assert_eq!(nid.uFlags, NIF_ICON | NIF_MESSAGE | NIF_TIP);
--        assert_eq!(nid.uCallbackMessage, WM_TRAYICON, "漏了它则图标点了没反应");
--        assert_eq!(nid.uID, 1);
--        let tip: String = nid
--            .szTip
-+        // `NOTIFYICONDATAW` is packed on Windows. Copy fields by value before
-+        // assertions/iteration so x86 never creates an unaligned reference.
-+        let flags = nid.uFlags;
-+        let callback_message = nid.uCallbackMessage;
-+        let id = nid.uID;
-+        let tip_buffer = nid.szTip;
-+        assert_eq!(flags, NIF_ICON | NIF_MESSAGE | NIF_TIP);
-+        assert_eq!(callback_message, WM_TRAYICON, "漏了它则图标点了没反应");
-+        assert_eq!(id, 1);
-+        let tip: String = tip_buffer
-             .iter()
-             .take_while(|c| **c != 0)
-             .map(|c| char::from_u32(*c as u32).unwrap())
-@@ -525,9 +530,10 @@ mod tests {
-             HICON(std::ptr::null_mut()),
-             &long,
-         );
--        let n = nid.szTip.len();
--        assert_eq!(nid.szTip[n - 1], 0, "定长缓冲必须以 NUL 收尾");
--        assert!(nid.szTip[..n - 1].iter().all(|c| *c != 0), "截断前应写满");
-+        let tip_buffer = nid.szTip;
-+        let n = tip_buffer.len();
-+        assert_eq!(tip_buffer[n - 1], 0, "定长缓冲必须以 NUL 收尾");
-+        assert!(tip_buffer[..n - 1].iter().all(|c| *c != 0), "截断前应写满");
-     }
- 
-     /// 注册成功时按消息号精确匹配。
 diff --git a/src/ui/mod.rs b/src/ui/mod.rs
-index b862588..6cd0e0d 100644
+index 3054b33..cbc8ecd 100644
 --- a/src/ui/mod.rs
 +++ b/src/ui/mod.rs
 @@ -172,6 +172,12 @@ impl Label {

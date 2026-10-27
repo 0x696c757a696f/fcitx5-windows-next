@@ -80,14 +80,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SW_SHOWNORMAL, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE,
     WM_ACTIVATE, WM_APP, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COPYDATA, WM_DESTROY,
     WM_DPICHANGED, WM_DROPFILES, WM_DWMCOLORIZATIONCOLORCHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE,
-    WM_GETMINMAXINFO, WM_GETOBJECT, WM_HOTKEY, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION,
-    WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE,
-    WM_NCCREATE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCMBUTTONDOWN, WM_NCMOUSEMOVE,
-    WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-    WM_SETCURSOR, WM_SETICON, WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
-    WM_TIMER, WM_TOUCH, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
-    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
+    WM_GETMINMAXINFO, WM_HOTKEY, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_SETCONTEXT,
+    WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+    WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCCREATE,
+    WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCMBUTTONDOWN, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN,
+    WM_NCRBUTTONUP, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETICON,
+    WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WM_TOUCH,
+    WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP,
+    WS_THICKFRAME,
 };
 // 窗口图标（`App::icon`）：HICON 由 tray 那份 RGBA 转换复用，销毁归 WindowState::drop。
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -1272,10 +1272,6 @@ const CLASS_NAME: PCWSTR = w!("WindUiWindowClass");
 /// 跨线程唤醒消息（WM_APP+2；WM_APP+1 已用于托盘）。
 const WM_APP_WAKE: u32 = WM_APP + 2;
 
-/// The UIA provider sends synchronous requests through this window message.  Only this
-/// `wnd_proc` arm reads the AppHandler accessibility seam; the provider never reaches into
-/// WindowState directly.
-
 /// 跨线程唤醒句柄：仅持 HWND 数值，PostMessage 线程安全。
 struct Win32Wake {
     hwnd: isize,
@@ -2036,7 +2032,7 @@ unsafe extern "system" fn wnd_proc(
             }
             LRESULT(1)
         }
-        WM_GETOBJECT if is_uia_root_object(lparam) => {
+        windows::Win32::UI::WindowsAndMessaging::WM_GETOBJECT if is_uia_root_object(lparam) => {
             // Check liveness before constructing the root provider, then end the WindowState
             // borrow before calling the OS UIA hand-off routine.
             if state_from(hwnd).is_none() {
@@ -4749,7 +4745,7 @@ mod live_windows_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{accumulate_char, frame_size_for_client, is_uia_root_object, ClickTracker, LPARAM};
+    use super::{accumulate_char, frame_size_for_client, ClickTracker};
 
     /// 无边框窗外框即客户区（按缩放取整）；带框窗口外框严格更大——差值就是无边框窗曾经
     /// 多出来的那一圈。
@@ -4776,6 +4772,7 @@ mod tests {
 
     #[test]
     fn only_the_uia_root_object_id_takes_the_accessibility_path() {
+        use super::{is_uia_root_object, LPARAM};
         // The UIA root request is the single object id that may create a raw provider.
         let root = LPARAM(windows::Win32::UI::Accessibility::UiaRootObjectId as isize);
         assert!(is_uia_root_object(root));

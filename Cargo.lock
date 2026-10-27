@@ -1909,7 +1909,7 @@ dependencies = [
 
 [[package]]
 name = "windui"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "ab_glyph_rasterizer",
  "bytemuck",
