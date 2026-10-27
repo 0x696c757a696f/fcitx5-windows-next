@@ -104,7 +104,7 @@ fcitx5-engine.exe
 
 Current request handlers:
 
-- `helloRequest`: establishes one client handshake and validates process/session identity.
+- `helloRequest`: establishes one client handshake and validates process/session identity. It may carry the handle value of the client thread's candidate-click event; the engine duplicates it to wake only that thread and falls back to the per-process named event.
 - `keyRequest`: calls `FcitxDispatcher::processKey`, then publishes a `KeyResponse`.
 - `candidateSelectRequest`: accepts only from the product UI executable, calls `selectCandidate`, publishes updated state, then signals the UI event.
 - `stateRequest`: drains a pending state snapshot for a context when the UI missed an event.

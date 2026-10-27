@@ -125,6 +125,7 @@ pub mod safe {
                 },
                 client_architecture_bits: (std::mem::size_of::<usize>() * 8) as u32,
                 client_process_id: std::process::id(),
+                notification_event: 0,
             };
             let Some(request_bytes) = fcitx5_protocol_core::encode_hello_request(&request) else {
                 self.disconnect();
