@@ -114,6 +114,18 @@ impl PipeClient {
         (!pipe.is_null() && pipe != invalid_handle_value()).then_some(Self(pipe))
     }
 
+    /// Like [`Self::open`], but reports the Win32 error when the pipe cannot
+    /// be opened, so a caller can tell an access policy that denies the pipe
+    /// from a server that is not running yet. A name or deadline that never
+    /// reaches the open reports 0.
+    pub fn open_with_error(name: &[u16], deadline: u64, wait_when_busy: bool) -> Result<Self, i32> {
+        if name.is_empty() || !deadline_has_time(deadline) {
+            return Err(0);
+        }
+        Self::open(name, deadline, wait_when_busy)
+            .ok_or_else(|| std::io::Error::last_os_error().raw_os_error().unwrap_or(0))
+    }
+
     /// Whether the server end is still connected.
     #[must_use]
     pub fn is_connected(&self) -> bool {

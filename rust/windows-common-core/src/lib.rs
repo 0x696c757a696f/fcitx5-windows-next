@@ -425,8 +425,16 @@ pub(crate) fn release_data_directory() -> &'static str {
 #[must_use]
 pub fn local_data_directory() -> Option<PathBuf> {
     let module_path = CurrentUserRuntimeIdentity::current()?.executable_path;
-    portable_data_root_for_module(&module_path)
-        .or_else(|| default_data_root_for_module(&module_path, Path::new(release_data_directory())))
+    local_data_directory_for_module(&module_path)
+}
+
+/// Local data root for an installed module such as the TSF DLL, which runs
+/// inside other apps' processes, so the current executable says nothing about
+/// where the install keeps its data.
+#[must_use]
+pub fn local_data_directory_for_module(module_path: &Path) -> Option<PathBuf> {
+    portable_data_root_for_module(module_path)
+        .or_else(|| default_data_root_for_module(module_path, Path::new(release_data_directory())))
 }
 
 /// Local kernel-object class prefix from the release-identity contract
