@@ -694,10 +694,34 @@ class FcitxRuntime::Impl final {
     void applyFcitxPageSize() {
         if (!config.candidatePageSize)
             return;
+        const std::string pageSize = std::to_string(*config.candidatePageSize);
         RawConfig raw;
         instance->globalConfig().save(raw);
-        raw.setValueByPath("Behavior/DefaultPageSize", std::to_string(*config.candidatePageSize));
+        raw.setValueByPath("Behavior/DefaultPageSize", pageSize);
         instance->globalConfig().load(raw, true);
+        // Pinyin, shuangpin and the tables page with their own PageSize option
+        // and ignore DefaultPageSize, so the Settings value goes to each
+        // enabled input method that has one.
+        auto& manager = instance->inputMethodManager();
+        for (const std::string& id : config.enabled) {
+            const auto* entry = manager.entry(id);
+            if (!entry || !entry->isConfigurable())
+                continue;
+            auto* engine = instance->inputMethodEngine(id);
+            if (!engine)
+                continue;
+            const auto* configuration = engine->getConfigForInputMethod(*entry);
+            if (!configuration)
+                continue;
+            RawConfig current;
+            configuration->save(current);
+            const auto option = current.get("PageSize");
+            if (!option || option->value() == pageSize)
+                continue;
+            RawConfig update;
+            update.setValueByPath("PageSize", pageSize);
+            engine->setConfigForInputMethod(*entry, update);
+        }
     }
 
     void dispatchPendingEvents() {
