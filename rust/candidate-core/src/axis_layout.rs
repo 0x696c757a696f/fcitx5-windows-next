@@ -16,7 +16,7 @@ use crate::{Orientation, Placement, Point, Rect, Size};
 /// What happens when candidates exceed the visible space (mirror of
 /// `fcitx5_config_core::OverflowBehavior`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
-pub enum OverflowBehavior {
+pub(crate) enum OverflowBehavior {
     /// A page holds at most `page_size` candidates; navigation pages.
     #[default]
     Paging,
@@ -44,7 +44,7 @@ pub enum WritingMode {
 /// (mirror of `fcitx5_config_core::CandidateLayoutOptions`; the arrangement
 /// axis uses this crate's `Orientation`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CandidateLayoutOptions {
+pub(crate) struct CandidateLayoutOptions {
     pub orientation: Orientation,
     pub overflow: OverflowBehavior,
     pub writing_mode: WritingMode,
@@ -60,17 +60,18 @@ impl Default for CandidateLayoutOptions {
     }
 }
 
+#[cfg(test)]
 impl CandidateLayoutOptions {
     /// Arranges `candidates` with the effective `overflow` behavior.
     #[must_use]
-    pub fn with_overflow(mut self, overflow: OverflowBehavior) -> Self {
+    pub(crate) fn with_overflow(mut self, overflow: OverflowBehavior) -> Self {
         self.overflow = overflow;
         self
     }
 
     /// Sets the text writing mode without touching the arrangement axis.
     #[must_use]
-    pub fn with_writing(mut self, writing_mode: WritingMode) -> Self {
+    pub(crate) fn with_writing(mut self, writing_mode: WritingMode) -> Self {
         self.writing_mode = writing_mode;
         self
     }
@@ -80,7 +81,7 @@ impl CandidateLayoutOptions {
 /// and height (already DPI scaled); column width is the glyph advance for
 /// vertical writing and the row cell budget otherwise.
 #[derive(Clone, Debug)]
-pub struct AxisLayoutInput {
+pub(crate) struct AxisLayoutInput {
     pub options: CandidateLayoutOptions,
     pub items: Vec<Size>,
     pub caret: Point,
@@ -129,7 +130,7 @@ impl Default for AxisLayoutInput {
 
 /// One laid-out candidate for the single paint path.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct AxisLayoutItem {
+pub(crate) struct AxisLayoutItem {
     /// Final rectangle in window coordinates (viewport scroll already applied).
     pub rect: Rect,
     /// Whether the rectangle intersects the window and should be painted.
@@ -139,7 +140,7 @@ pub struct AxisLayoutItem {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct AxisLayoutResult {
+pub(crate) struct AxisLayoutResult {
     /// The window/viewport rectangle (already placement-clamped to work area).
     pub window: Rect,
     pub placement: Placement,
@@ -171,7 +172,7 @@ impl Default for AxisLayoutResult {
 /// Single entry point for the effective three-axis combinations. Branches only
 /// on the model, never on paint-time state, and returns only geometry.
 #[must_use]
-pub fn layout(input: &AxisLayoutInput) -> AxisLayoutResult {
+pub(crate) fn layout(input: &AxisLayoutInput) -> AxisLayoutResult {
     if input.items.is_empty() {
         return AxisLayoutResult::default();
     }

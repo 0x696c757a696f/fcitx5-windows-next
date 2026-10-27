@@ -14,7 +14,6 @@ fcitx5-config-core = { path = "../config-core" }
 
 [lib]
 path = "src/lib.rs"
-crate-type = ["rlib", "staticlib"]
 
 [[bin]]
 name = "fcitx5-ui"
