@@ -65,9 +65,10 @@ use windows::Win32::UI::TextServices::{
     ITfTextInputProcessorEx_Impl, ITfTextInputProcessor_Impl, ITfThreadFocusSink,
     ITfThreadFocusSink_Impl, ITfThreadMgr, ITfThreadMgrEventSink, ITfThreadMgrEventSink_Impl,
     ITfUIElement, ITfUIElementMgr, ITfUIElement_Impl, InputScope, GUID_PROP_INPUTSCOPE,
-    GUID_TFCAT_TIP_KEYBOARD, IS_ALPHANUMERIC_PIN, IS_ALPHANUMERIC_PIN_SET, IS_NUMERIC_PASSWORD,
-    IS_NUMERIC_PIN, IS_PASSWORD, IS_PRIVATE, TF_DEFAULT_SELECTION, TF_ES_READ, TF_ES_READWRITE,
-    TF_ES_SYNC, TF_SELECTION,
+    GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT, GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
+    GUID_TFCAT_TIPCAP_UIELEMENTENABLED, GUID_TFCAT_TIP_KEYBOARD, IS_ALPHANUMERIC_PIN,
+    IS_ALPHANUMERIC_PIN_SET, IS_NUMERIC_PASSWORD, IS_NUMERIC_PIN, IS_PASSWORD, IS_PRIVATE,
+    TF_DEFAULT_SELECTION, TF_ES_READ, TF_ES_READWRITE, TF_ES_SYNC, TF_SELECTION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetGUIThreadInfo, GUITHREADINFO};
 use windows_core::{
@@ -382,16 +383,28 @@ fn register_profiles() -> Result<()> {
     // for the system TSF category manager interface.
     let categories: ITfCategoryMgr =
         unsafe { CoCreateInstance(&CLSID_TF_CategoryMgr, None, CLSCTX_INPROC_SERVER)? };
-    // SAFETY: GUID pointers refer to immutable constants.
-    unsafe {
-        categories.RegisterCategory(
-            &FCITX5_TEXT_SERVICE_CLSID,
-            &GUID_TFCAT_TIP_KEYBOARD,
-            &FCITX5_TEXT_SERVICE_CLSID,
-        )?;
+    for category in TEXT_SERVICE_CATEGORIES {
+        // SAFETY: GUID pointers refer to immutable constants.
+        unsafe {
+            categories.RegisterCategory(
+                &FCITX5_TEXT_SERVICE_CLSID,
+                category,
+                &FCITX5_TEXT_SERVICE_CLSID,
+            )?;
+        }
     }
     Ok(())
 }
+
+/// Keyboard TIP, plus the capabilities Windows checks before offering the
+/// text service in packaged (immersive) apps, the system tray and other
+/// UI-less hosts.
+const TEXT_SERVICE_CATEGORIES: [&GUID; 4] = [
+    &GUID_TFCAT_TIP_KEYBOARD,
+    &GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT,
+    &GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
+    &GUID_TFCAT_TIPCAP_UIELEMENTENABLED,
+];
 
 fn unregister_profiles() -> HRESULT {
     // SAFETY: CoCreateInstance is called after COM initialization and requested
@@ -399,15 +412,17 @@ fn unregister_profiles() -> HRESULT {
     if let Ok(categories) = unsafe {
         CoCreateInstance::<_, ITfCategoryMgr>(&CLSID_TF_CategoryMgr, None, CLSCTX_INPROC_SERVER)
     } {
-        // SAFETY: GUID pointers refer to immutable constants. Best-effort
-        // cleanup should continue even if this category is already absent.
-        let _ = unsafe {
-            categories.UnregisterCategory(
-                &FCITX5_TEXT_SERVICE_CLSID,
-                &GUID_TFCAT_TIP_KEYBOARD,
-                &FCITX5_TEXT_SERVICE_CLSID,
-            )
-        };
+        for category in TEXT_SERVICE_CATEGORIES {
+            // SAFETY: GUID pointers refer to immutable constants. Best-effort
+            // cleanup should continue even if a category is already absent.
+            let _ = unsafe {
+                categories.UnregisterCategory(
+                    &FCITX5_TEXT_SERVICE_CLSID,
+                    category,
+                    &FCITX5_TEXT_SERVICE_CLSID,
+                )
+            };
+        }
     }
     // SAFETY: CoCreateInstance is called after COM initialization and requested
     // for the system TSF profile manager interface.
@@ -1731,6 +1746,12 @@ impl EngineClient {
     fn start_launcher_process(&self) -> bool {
         if self.identity.service_account || self.identity.secure_desktop {
             trace_event("engine_client_launcher_process_rejected_identity");
+            return false;
+        }
+        if self.identity.app_container {
+            // A child of an AppContainer app would run in its sandbox and could
+            // not serve other apps; use a launcher a desktop app has started.
+            trace_event("engine_client_launcher_process_rejected_app_container");
             return false;
         }
         if self.expected_launcher_path.is_empty() {

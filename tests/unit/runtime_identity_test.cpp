@@ -147,9 +147,13 @@ int main() {
     }
     const std::wstring sddl(rawSddl);
     LocalFree(rawSddl);
+    // AppContainer (packaged) apps run at low integrity, so the engine pipe
+    // admits them by ACE and carries a low no-write-up label.
     if (sddl.find(L"(A;;GA;;;SY)") == std::wstring::npos ||
-        sddl.find(L"S:(ML;;NW;;;ME)") == std::wstring::npos) {
-        std::cerr << "pipe DACL/SACL did not contain the required principals\n";
+        sddl.find(L";;;AC)") == std::wstring::npos ||
+        sddl.find(L"S:(ML;;NW;;;LW)") == std::wstring::npos) {
+        std::cerr << "pipe DACL/SACL did not contain the required principals: ";
+        std::wcerr << sddl << L"\n";
         return 1;
     }
     // ConvertSecurityDescriptorToStringSecurityDescriptorW abbreviates
