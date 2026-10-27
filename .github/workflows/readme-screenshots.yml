@@ -1,0 +1,98 @@
+name: README Screenshots
+
+# Captures the real candidate window for the README
+# (tools/capture-readme-candidates.ps1): a published portable package with
+# fcitx5-ui.exe and the built-in themes replaced by this commit's, so the
+# images show the code being merged. Windows Server 2025 gives the Windows 11
+# rounded corners and shadow. The images are uploaded
+# as an artifact and pushed to the screenshots/readme branch, one commit on
+# its own, so they can be fetched with git; copy them to docs/assets/.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release whose portable package to capture; empty for the newest release
+        required: false
+        type: string
+  pull_request:
+    paths:
+      - tools/capture-readme-candidates.ps1
+      - .github/workflows/readme-screenshots.yml
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  capture:
+    runs-on: windows-2025
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the capture script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Download the portable package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          $tag = $env:TAG
+          if (-not $tag) {
+            $tag = & gh api "repos/${{ github.repository }}/releases?per_page=1" --jq '.[0].tag_name'
+            if ($LASTEXITCODE -ne 0 -or -not $tag) { throw 'Could not find the newest release.' }
+          }
+          $download = Join-Path $env:RUNNER_TEMP 'portable'
+          & gh release download $tag -R '${{ github.repository }}' -p '*-portable.zip' -D $download
+          if ($LASTEXITCODE -ne 0) { throw "Could not download the portable package of $tag." }
+          $zip = Get-ChildItem -LiteralPath $download -Filter '*-portable.zip' | Select-Object -First 1
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $download
+          Write-Host "Capturing $($zip.Name)"
+
+      - name: Build the candidate window from this commit
+        env:
+          RUSTC_WRAPPER: ''
+          CARGO_BUILD_RUSTC_WRAPPER: ''
+        run: |
+          & cargo build --release --locked -p fcitx5-candidate-core --bin fcitx5-ui `
+            --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'fcitx5-ui build failed.' }
+          $portable = "$env:RUNNER_TEMP/portable/Fcitx5"
+          Copy-Item -LiteralPath target/x86_64-pc-windows-msvc/release/fcitx5-ui.exe `
+            -Destination "$portable/bin/fcitx5-ui.exe" -Force
+          Copy-Item -Path resources/themes/* -Destination "$portable/themes" -Recurse -Force
+
+      - name: Capture the candidate window
+        run: |
+          ./tools/capture-readme-candidates.ps1 -PortableRoot "$env:RUNNER_TEMP/portable/Fcitx5" `
+            -OutputDirectory "$env:RUNNER_TEMP/readme-screenshots"
+
+      - name: Upload the images
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: readme-screenshots
+          path: ${{ runner.temp }}/readme-screenshots
+          if-no-files-found: error
+
+      - name: Push the images to screenshots/readme
+        if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $images = Join-Path $env:RUNNER_TEMP 'readme-screenshots'
+          $work = Join-Path $env:RUNNER_TEMP 'screenshots-branch'
+          & git init -q $work
+          Copy-Item -Path (Join-Path $images '*.png') -Destination $work
+          & git -C $work add -A
+          & git -C $work -c user.name='github-actions[bot]' `
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' `
+            commit -q -m "README candidate screenshots from ${{ github.sha }}"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not commit the images.' }
+          & git -C $work push -q --force "https://x-access-token:$env:GH_TOKEN@github.com/${{ github.repository }}.git" HEAD:refs/heads/screenshots/readme
+          if ($LASTEXITCODE -ne 0) { throw 'Could not push screenshots/readme.' }

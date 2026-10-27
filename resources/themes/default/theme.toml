@@ -6,7 +6,7 @@ id = "builtin.default"
 name = "Fcitx5 Default"
 version = "1.0.0"
 license = "MIT"
-description = "WeChat-like green candidate theme"
+description = "Green selection on a slate-tinted surface"
 
 [common.candidate]
 layout_type = "scroll" # automatic | stacked | flow | scroll | vertical_text
@@ -46,20 +46,20 @@ background = "#FFFFFFFF"
 # The native rounded popup owns the outer silhouette. Matching this to the
 # surface avoids a second gray outline one pixel inside that shell.
 border = "#FFFFFFFF"
-candidate_text = "#181818FF"
-label_text = "#7F7F7FFF"
-comment_text = "#7F7F7FFF"
+candidate_text = "#0F172AFF"
+label_text = "#64748BFF"
+comment_text = "#64748BFF"
 selected_background = "#07C160FF"
 selected_candidate_text = "#FFFFFFFF"
 selected_label_text = "#FFFFFFFF"
 selected_comment_text = "#FFFFFFFF"
 
 [dark.candidate.colors]
-background = "#181818F7"
-border = "#303030FF"
-candidate_text = "#EDEDEDFF"
-label_text = "#7F7F7FFF"
-comment_text = "#7F7F7FFF"
+background = "#1B2236F7"
+border = "#2C3550FF"
+candidate_text = "#E5E7EBFF"
+label_text = "#94A3B8FF"
+comment_text = "#94A3B8FF"
 selected_background = "#07C160FF"
 selected_candidate_text = "#FFFFFFFF"
 selected_label_text = "#FFFFFFFF"

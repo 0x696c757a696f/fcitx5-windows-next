@@ -75,10 +75,39 @@ Plugins and updates activate transactionally and can roll back. Repository verif
 
 ## 🎯 Candidate window
 
+Real screenshots of the candidate window; light or dark follows your GitHub theme.
+
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/candidate-layouts-dark.svg">
-  <img src="docs/assets/candidate-layouts-light.svg" alt="Candidate window in the scroll, stacked and vertical_text layouts" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/candidate-layouts-dark.png">
+  <img src="docs/assets/candidate-layouts-light.png" alt="Candidate window in the scroll, stacked and vertical_text layouts" width="100%">
 </picture>
+
+**Scroll mode, expanded.** With a long candidate list, the scroll layout opens into a grid you move through with the arrow keys, PageUp / PageDown and Home / End.
+
+<table>
+<tr>
+<td width="50%" align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/candidate-scroll-rows-dark.png">
+  <img src="docs/assets/candidate-scroll-rows-light.png" alt="Horizontal: rows of one page" width="100%">
+</picture>
+<br><sub>Horizontal: rows of one page</sub>
+
+</td>
+<td width="50%" align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/candidate-scroll-expanded-dark.png">
+  <img src="docs/assets/candidate-scroll-expanded-light.png" alt="Vertical: columns of one page" width="100%">
+</picture>
+<br><sub>Vertical: columns of one page</sub>
+
+</td>
+</tr>
+</table>
+
+<sub>Captured from the built `fcitx5-ui.exe --demo` by the [README Screenshots](.github/workflows/readme-screenshots.yml) workflow.</sub>
 
 Candidate semantics, model and layout are implemented in Rust; Fcitx remains the single source of input semantics.
 

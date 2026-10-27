@@ -75,10 +75,39 @@ DirectWrite 渲染，按显示器 DPI 缩放，跟随系统浅色/深色模式�
 
 ## 🎯 候选窗
 
+以下都是候选窗的真实截图，浅色、深色会跟随你的 GitHub 主题切换。
+
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/candidate-layouts-dark.svg">
-  <img src="docs/assets/candidate-layouts-light.svg" alt="候选窗的 scroll、stacked 与 vertical_text 布局" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/candidate-layouts-dark.png">
+  <img src="docs/assets/candidate-layouts-light.png" alt="候选窗的 scroll、stacked 与 vertical_text 布局" width="100%">
 </picture>
+
+**卷轴模式展开。** 候选很多时，卷轴布局会展开成网格，用方向键、PageUp / PageDown、Home / End 连续翻动。
+
+<table>
+<tr>
+<td width="50%" align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/candidate-scroll-rows-dark.png">
+  <img src="docs/assets/candidate-scroll-rows-light.png" alt="横向：一页一行" width="100%">
+</picture>
+<br><sub>横向：一页一行</sub>
+
+</td>
+<td width="50%" align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/candidate-scroll-expanded-dark.png">
+  <img src="docs/assets/candidate-scroll-expanded-light.png" alt="纵向：一页一列" width="100%">
+</picture>
+<br><sub>纵向：一页一列</sub>
+
+</td>
+</tr>
+</table>
+
+<sub>图片由 [README Screenshots](.github/workflows/readme-screenshots.yml) 工作流从构建出的 `fcitx5-ui.exe --demo` 截取。</sub>
 
 候选窗的语义、模型与布局由 Rust 实现，Fcitx 仍是输入语义的唯一来源。
 
