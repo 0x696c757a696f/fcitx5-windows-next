@@ -105,6 +105,8 @@ pub struct FramePaint<'a> {
     pub font_family: &'a str,
     pub high_contrast: bool,
     pub selected: Option<usize>,
+    /// Candidate under the mouse pointer; never the selected one.
+    pub hovered: Option<usize>,
 }
 
 /// Paints `frame` into `dc` without laying the candidates out again, so the
@@ -197,5 +199,6 @@ pub fn render_frame(frame: &FramePaint<'_>) -> RenderWindowOutput {
         dpi_scale: 1.0,
         high_contrast: frame.high_contrast,
         selected: frame.selected,
+        hovered: frame.hovered,
     })
 }

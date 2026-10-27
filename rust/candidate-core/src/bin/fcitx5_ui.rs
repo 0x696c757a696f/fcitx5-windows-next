@@ -67,7 +67,10 @@ mod ffi {
     pub const WM_PRINTCLIENT: u32 = 0x0318;
     pub const WM_LBUTTONDOWN: u32 = 0x0201;
     pub const WM_LBUTTONUP: u32 = 0x0202;
+    pub const WM_MOUSEMOVE: u32 = 0x0200;
     pub const WM_MOUSEWHEEL: u32 = 0x020A;
+    pub const WM_MOUSELEAVE: u32 = 0x02A3;
+    pub const TME_LEAVE: u32 = 0x0000_0002;
     pub const WM_CANCELMODE: u32 = 0x001F;
     pub const WM_CAPTURECHANGED: u32 = 0x0215;
     pub const WM_KEYDOWN: u32 = 0x0100;
@@ -117,6 +120,14 @@ mod ffi {
         pub monitor: Rect,
         pub work: Rect,
         pub flags: u32,
+    }
+
+    #[repr(C)]
+    pub struct TrackMouseEventInfo {
+        pub cb_size: u32,
+        pub flags: u32,
+        pub hwnd_track: Hwnd,
+        pub hover_time: u32,
     }
 
     #[repr(C)]
@@ -206,6 +217,8 @@ mod ffi {
             flags: u32,
         ) -> i32;
         pub fn ShowWindow(window: Hwnd, command: i32) -> i32;
+        pub fn TrackMouseEvent(track: *mut TrackMouseEventInfo) -> i32;
+        pub fn UpdateWindow(window: Hwnd) -> i32;
         pub fn SystemParametersInfoW(action: u32, param: u32, data: *mut c_void, init: u32) -> i32;
         pub fn WaitForSingleObject(handle: *mut c_void, milliseconds: u32) -> u32;
     }
@@ -507,6 +520,11 @@ struct Host {
     candidate_client: Option<CandidateSelectClient>,
     captured_test_intent: Option<Fcitx5CandidateSelectionIntent>,
     target_foreground: *mut c_void,
+    /// Local index of the candidate under the mouse pointer.
+    hovered: Option<usize>,
+    tracking_mouse_leave: bool,
+    /// Refreshed on system setting changes instead of queried every paint.
+    high_contrast: bool,
 }
 
 impl Host {
@@ -561,6 +579,9 @@ impl Host {
             candidate_client,
             captured_test_intent: None,
             target_foreground: ptr::null_mut(),
+            hovered: None,
+            tracking_mouse_leave: false,
+            high_contrast: system_high_contrast(),
         }))
     }
 
@@ -595,6 +616,7 @@ impl Host {
             self.font_dpi_scale = requested_font_scale;
         }
         self.item_rects.clear();
+        self.hovered = None;
         self.visible_indices.clear();
         self.has_scrollbar = false;
         self.preedit_panel_text.clear();
@@ -724,6 +746,9 @@ impl Host {
                 SWP_NOACTIVATE | SWP_SHOWWINDOW,
             );
             InvalidateRect(window, ptr::null(), 0);
+            // Paint now instead of waiting for the low-priority WM_PAINT, so
+            // a moved or grown window never shows stale pixels for a frame.
+            UpdateWindow(window);
         }
     }
 
@@ -748,6 +773,7 @@ impl Host {
         };
         let next = self.scroll.wheel_viewport(current, max, delta);
         let shift = next - current;
+        self.hovered = None;
         for rect in &mut self.item_rects {
             if vertical {
                 rect.top -= shift;
@@ -779,6 +805,7 @@ impl Host {
         self.presentation.reset();
         self.model.reset();
         self.item_rects.clear();
+        self.hovered = None;
         self.visible_indices.clear();
         self.has_scrollbar = false;
         self.preedit_panel_text.clear();
@@ -879,21 +906,47 @@ impl Host {
         {
             return true;
         }
-        let visual_outputs_empty = self.arena.built_outputs().is_empty();
         // SAFETY: window is a valid HWND.
         let dc = unsafe { GetDC(window) };
         if dc.is_null() {
             return true;
         }
-        let ok = if visual_outputs_empty {
-            self.clear_dc(dc, &client);
-            true
-        } else {
-            self.paint_once_to_dc(dc, &client)
-        };
+        let ok = self.paint_client(dc, &client);
         // SAFETY: dc came from GetDC for this window.
         unsafe { ReleaseDC(window, dc) };
         ok
+    }
+
+    /// Paints into the DC that BeginPaint returned for WM_PAINT.
+    fn paint_dc(&mut self, dc: *mut c_void) {
+        let mut client = Rect::default();
+        // SAFETY: client is a valid writable RECT.
+        if dc.is_null()
+            || unsafe { GetClientRect(self.window, &mut client) } == 0
+            // SAFETY: client was initialized by GetClientRect above.
+            || unsafe { IsRectEmpty(&client) } != 0
+        {
+            return;
+        }
+        let _ = self.paint_client(dc, &client);
+    }
+
+    fn paint_client(&mut self, dc: *mut c_void, client: &Rect) -> bool {
+        if self.arena.built_outputs().is_empty() {
+            self.clear_dc(dc, client);
+            true
+        } else {
+            self.paint_once_to_dc(dc, client)
+        }
+    }
+
+    fn set_hovered(&mut self, hovered: Option<usize>) {
+        if self.hovered == hovered {
+            return;
+        }
+        self.hovered = hovered;
+        // SAFETY: window is the live candidate HWND.
+        unsafe { InvalidateRect(self.window, ptr::null(), 0) };
     }
 
     fn clear_dc(&self, dc: *mut c_void, client: &Rect) {
@@ -909,7 +962,7 @@ impl Host {
 
     fn paint_once_to_dc(&mut self, dc: *mut c_void, client: &Rect) -> bool {
         let scale = self.font_dpi_scale;
-        let high_contrast = system_high_contrast();
+        let high_contrast = self.high_contrast;
         let colors = &self.visual_config.colors;
         let resolved: Fcitx5CandidateResolvedColors = resolve_paint_colors(
             PaintColors::to_config_color(colors.background),
@@ -1021,6 +1074,7 @@ impl Host {
             font_family: self.measure.family(),
             high_contrast,
             selected,
+            hovered: self.hovered.filter(|index| Some(*index) != selected),
         };
         // SAFETY: dc is a live window DC for this call.
         unsafe { render_frame_to_dc(&frame, dc, client.right, client.bottom) };
@@ -1143,10 +1197,8 @@ fn host_message_callback(
                 rgb_reserved: [0; 32],
             };
             // SAFETY: window is valid and paint is a writable PAINTSTRUCT.
-            unsafe {
-                BeginPaint(window, &mut paint);
-            }
-            host.paint_once();
+            let dc = unsafe { BeginPaint(window, &mut paint) };
+            host.paint_dc(dc);
             // SAFETY: pairs with BeginPaint above.
             unsafe {
                 EndPaint(window, &paint);
@@ -1224,6 +1276,27 @@ fn host_message_callback(
             host.pointer.clear();
             0
         }
+        WM_MOUSEMOVE => {
+            let x = ((lparam as usize) & 0xFFFF) as u16 as i16 as f32;
+            let y = ((lparam >> 16) & 0xFFFF) as u16 as i16 as f32;
+            if !host.tracking_mouse_leave {
+                let mut track = TrackMouseEventInfo {
+                    cb_size: std::mem::size_of::<TrackMouseEventInfo>() as u32,
+                    flags: TME_LEAVE,
+                    hwnd_track: window,
+                    hover_time: 0,
+                };
+                // SAFETY: track is a valid TRACKMOUSEEVENT for this window.
+                host.tracking_mouse_leave = unsafe { TrackMouseEvent(&mut track) } != 0;
+            }
+            host.set_hovered(hit_test_candidate(&host.item_rects, x, y));
+            0
+        }
+        WM_MOUSELEAVE => {
+            host.tracking_mouse_leave = false;
+            host.set_hovered(None);
+            0
+        }
         WM_MOUSEWHEEL => {
             let delta = ((wparam as isize) >> 16) as i16 as i32;
             if host.visual_config.scroll_mode {
@@ -1261,6 +1334,7 @@ fn reload_visual_config(host: &mut Host) {
     if let Some(config) = load_visual_config(host.safe_mode) {
         host.visual_config = config;
     }
+    host.high_contrast = system_high_contrast();
     if !host.interaction_test {
         let window = host.window;
         let opacity = host.visual_config.opacity.clamp(0.2, 1.0);
