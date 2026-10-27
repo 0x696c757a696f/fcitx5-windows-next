@@ -278,4 +278,7 @@
   ,"settings.shortcuts.toggle_input_method": "切换键盘与默认输入法"
   ,"settings.shortcuts.next_input_method": "切换到下一个输入法"
   ,"settings.shortcuts.same": "两个快捷键不能相同。"
+  ,"settings.startup.section": "启动"
+  ,"settings.startup.sign_in": "登录时自动启动"
+  ,"settings.startup.sign_in_hint": "让商店 (UWP) 应用在登录后立即可以输入。"
 }

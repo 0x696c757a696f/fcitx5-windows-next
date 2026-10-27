@@ -278,4 +278,7 @@
   ,"settings.shortcuts.toggle_input_method": "Switch between keyboard and default input method"
   ,"settings.shortcuts.next_input_method": "Next input method"
   ,"settings.shortcuts.same": "The two hotkeys must be different."
+  ,"settings.startup.section": "Startup"
+  ,"settings.startup.sign_in": "Start at sign-in"
+  ,"settings.startup.sign_in_hint": "Lets Store (UWP) apps type right after you sign in."
 }

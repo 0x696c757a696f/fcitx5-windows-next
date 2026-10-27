@@ -196,6 +196,15 @@ try {
   if (-not (Test-Path -LiteralPath $installedConfig -PathType Leaf)) {
     throw 'Installer did not create the expected Config artifact.'
   }
+  $expectedStartup = '"' + [IO.Path]::GetFullPath((Join-Path $installRoot 'bin\fcitx5-launcher.exe')) +
+    '" --background'
+  $installedStartup = $null
+  if (Test-Path -LiteralPath $runKey) {
+    $installedStartup = (Get-Item -LiteralPath $runKey).GetValue($runValueName, $null)
+  }
+  if ($installedStartup -ne $expectedStartup) {
+    throw "Installer did not enable sign-in startup (found '$installedStartup')."
+  }
   Invoke-Checked (Join-Path $installRoot 'bin/fcitx5-register.exe') `
     @('--status', '--dll', (Join-Path $installRoot 'tsf/x64/fcitx5-tsf.dll'))
   Invoke-Checked (Join-Path $installRoot 'bin/fcitx5-register-x86.exe') `

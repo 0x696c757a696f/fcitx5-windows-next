@@ -112,6 +112,7 @@ fn run(args: Vec<OsString>) -> i32 {
                 "--shutdown",
                 60_000,
             );
+            set_sign_in_startup(&root, false);
             let result = elevate_registration(&executable, true);
             if result != 0 {
                 error_box("Administrator approval is required to unregister the TSF components.");
@@ -129,7 +130,8 @@ fn run(args: Vec<OsString>) -> i32 {
                 error_box("The stale current-user TSF registration could not be removed.");
                 return 13;
             }
-            if !registration_healthy(&root) {
+            let first_registration = !registration_healthy(&root);
+            if first_registration {
                 let registration = elevate_registration(&executable, false);
                 if registration != 0 {
                     error_box(
@@ -146,6 +148,11 @@ fn run(args: Vec<OsString>) -> i32 {
                 error_box("The input method service could not be started.");
                 return 5;
             }
+            // Turn sign-in startup on when this copy is first registered; after
+            // that the Settings switch decides.
+            if first_registration {
+                set_sign_in_startup(&root, true);
+            }
             win32::message_box_w(
                 "Fcitx5 is running. Select it from the Windows input indicator (Win+Space).\n\nUse 'Fcitx5 Settings.exe' in this folder to configure it.",
                 "Fcitx5 for Windows Next",
@@ -154,6 +161,18 @@ fn run(args: Vec<OsString>) -> i32 {
             0
         }
     }
+}
+
+/// Adds or removes this copy's per-user sign-in entry. Packaged (UWP) apps
+/// cannot start the launcher themselves, so it has to be running already.
+/// Best-effort: input still works in desktop apps without it.
+fn set_sign_in_startup(root: &Path, enabled: bool) {
+    let state = if enabled { "enabled" } else { "disabled" };
+    let _ = win32::launch_and_wait(
+        &root.join("bin").join("fcitx5-control.exe"),
+        &format!("--set-startup {state}"),
+        60_000,
+    );
 }
 
 fn clear_user_registration_shadows(root: &Path) -> bool {

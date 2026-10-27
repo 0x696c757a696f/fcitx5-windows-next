@@ -91,6 +91,7 @@ Filename: "{app}\bin\fcitx5-register.exe"; Parameters: "--unregister --dll ""{ap
 [Code]
 var
   RestartFcitxAfterInstall: Boolean;
+  UpgradingExistingInstall: Boolean;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
@@ -102,6 +103,7 @@ begin
     run. Stop them first: applications that keep the old TSF DLL loaded then
     follow the new generation instead of talking to a second engine. }
   Control := ExpandConstant('{app}\bin\fcitx5-control.exe');
+  UpgradingExistingInstall := FileExists(Control);
   if FileExists(Control) and
      ExecAsOriginalUser(Control, '--shutdown', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and
      (ResultCode = 0) then
@@ -127,8 +129,24 @@ begin
     SaveStringToFile(ExpandConstant('{app}\install-ownership.json'),
       '{"format_version":1,"machine_artifacts":"installer","system_registration":"register-helper","per_user_startup":"user-plane","per_user_session":"user-plane","per_user_config":"user-plane"}' + #10,
       False);
+    { Start the launcher at sign-in so packaged (UWP) apps, which cannot
+      start it themselves, have an engine from the first keystroke. Only a
+      fresh install turns this on; an update keeps the user's choice. }
+    if not UpgradingExistingInstall then
+      ExecAsOriginalUser(ExpandConstant('{app}\bin\fcitx5-control.exe'),
+        '--set-startup enabled', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     if RestartFcitxAfterInstall then
       ExecAsOriginalUser(ExpandConstant('{app}\bin\fcitx5-launcher.exe'), '--background', '',
         SW_HIDE, ewNoWait, ResultCode);
   end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
+begin
+  { Remove the sign-in entry while fcitx5-control still exists. }
+  if CurUninstallStep = usUninstall then
+    Exec(ExpandConstant('{app}\bin\fcitx5-control.exe'), '--set-startup disabled', '',
+      SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
