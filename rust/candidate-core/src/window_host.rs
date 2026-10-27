@@ -31,7 +31,7 @@ const WS_POPUP: u32 = 0x8000_0000;
 type Hwnd = *mut c_void;
 type Hdc = *mut c_void;
 type WndProc = unsafe extern "system" fn(Hwnd, u32, usize, isize) -> isize;
-pub type CandidateWindowCallback =
+pub(crate) type CandidateWindowCallback =
     unsafe extern "system" fn(*mut c_void, Hwnd, u32, usize, isize) -> isize;
 
 const BI_RGB: u32 = 0;
@@ -155,9 +155,6 @@ unsafe extern "system" {
     fn DestroyWindow(window: Hwnd) -> i32;
     fn DispatchMessageW(message: *const Msg) -> isize;
     fn GetMessageW(message: *mut Msg, window: Hwnd, min: u32, max: u32) -> i32;
-    fn GetDC(window: Hwnd) -> Hdc;
-    fn ReleaseDC(window: Hwnd, dc: Hdc) -> i32;
-    fn GetClientRect(window: Hwnd, rect: *mut Rect) -> i32;
     #[cfg(target_pointer_width = "64")]
     fn GetWindowLongPtrW(window: Hwnd, index: i32) -> isize;
     #[cfg(target_pointer_width = "32")]
@@ -332,7 +329,6 @@ unsafe extern "system" fn candidate_window_procedure(
 /// `input` and `out_window` must point to writable C-compatible structures.
 /// `input.class_name` must identify `class_name_len` valid UTF-16 code units;
 /// the callback and owner must remain valid until the window is destroyed.
-#[no_mangle]
 pub unsafe extern "C" fn fcitx5_candidate_window_create(
     input: *const Fcitx5CandidateWindowCreateInput,
     out_window: *mut Hwnd,
@@ -429,7 +425,6 @@ pub unsafe extern "C" fn fcitx5_candidate_window_create(
 ///
 /// `window` must be null or an HWND returned by
 /// [`fcitx5_candidate_window_create`] that has not been destroyed yet.
-#[no_mangle]
 pub unsafe extern "C" fn fcitx5_candidate_window_destroy(window: Hwnd) {
     if !window.is_null() {
         // SAFETY: the caller supplies a live HWND created by this host; Windows
@@ -441,7 +436,6 @@ pub unsafe extern "C" fn fcitx5_candidate_window_destroy(window: Hwnd) {
 /// Runs the calling thread's Win32 message pump.
 ///
 /// Returns `WM_QUIT`'s exit code, or `1` when `GetMessageW` fails.
-#[no_mangle]
 pub extern "C" fn fcitx5_candidate_window_run_message_loop() -> i32 {
     let mut message = Msg::default();
     loop {
@@ -457,156 +451,6 @@ pub extern "C" fn fcitx5_candidate_window_run_message_loop() -> i32 {
             0 => return quit_exit_code(message.wparam),
             _ => return WM_QUIT_ERROR,
         }
-    }
-}
-
-/// Blits a top-down BGRA buffer onto a window DC (081C paint slice).
-///
-/// The C++ `paintOnce` DIB path moves here verbatim: allocate a top-down DIB
-/// from the buffer's stride/byte count, memcpy, and `StretchBlt` to the client
-/// rect. Any invalid descriptor is a silent no-op, exactly like the C++
-/// early-return.
-///
-/// # Safety
-///
-/// `window` must be a valid HWND, `pixels` must reference `pixel_byte_len`
-/// readable bytes, and `out_client` must point to writable storage for the
-/// client-rect query result when `query_client` is non-zero.
-#[no_mangle]
-pub unsafe extern "C" fn fcitx5_candidate_window_blit_bgra(
-    window: Hwnd,
-    pixels: *const u8,
-    pixel_byte_len: usize,
-    pixel_stride: usize,
-    out_client: *mut i32,
-) -> u8 {
-    if window.is_null() || pixels.is_null() || out_client.is_null() {
-        return 0;
-    }
-    if pixel_stride == 0
-        || pixel_byte_len == 0
-        || !pixel_stride.is_multiple_of(4)
-        || !pixel_byte_len.is_multiple_of(pixel_stride)
-    {
-        return 0;
-    }
-    // SAFETY: `window` is a valid HWND per the caller contract.
-    let mut client = Rect::default();
-    // SAFETY: `window` is a live HWND and `client` is writable RECT storage.
-    if unsafe { GetClientRect(window, &mut client) } == 0 {
-        return 0;
-    }
-    let pix_w = (pixel_stride / 4) as i32;
-    let pix_h = (pixel_byte_len / pixel_stride) as i32;
-    if pix_w <= 0 || pix_h <= 0 {
-        return 0;
-    }
-    // SAFETY: `window` is a valid HWND per the caller contract.
-    let dc = unsafe { GetDC(window) };
-    if dc.is_null() {
-        return 0;
-    }
-    let bmi = BitmapInfo {
-        bmi_header: BitmapInfoHeader {
-            bi_size: core::mem::size_of::<BitmapInfoHeader>() as u32,
-            bi_width: pix_w,
-            bi_height: -pix_h,
-            bi_planes: 1,
-            bi_bit_count: 32,
-            bi_compression: BI_RGB,
-            ..BitmapInfoHeader::default()
-        },
-        bmi_colors: [0; 1],
-    };
-    let mut bits: *mut c_void = core::ptr::null_mut();
-    // SAFETY: `dc` is valid and `bits` receives the DIB allocation pointer.
-    let bitmap = unsafe {
-        CreateDIBSection(
-            dc,
-            &bmi,
-            DIB_RGB_COLORS,
-            &mut bits,
-            core::ptr::null_mut(),
-            0,
-        )
-    };
-    let blitted = if !bitmap.is_null() && !bits.is_null() {
-        // SAFETY: `bits` covers pixel_byte_len bytes and pixels has that length.
-        unsafe {
-            core::ptr::copy_nonoverlapping(pixels.cast::<u8>(), bits.cast::<u8>(), pixel_byte_len);
-        }
-        // SAFETY: `dc` is a valid HDC.
-        let mem_dc = unsafe { CreateCompatibleDC(dc) };
-        if mem_dc.is_null() {
-            false
-        } else {
-            // SAFETY: both DC and bitmap are valid.
-            let old = unsafe { SelectObject(mem_dc, bitmap) };
-            // SAFETY: both DCs are valid with matching pixel formats.
-            let drawn = unsafe {
-                StretchBlt(
-                    dc,
-                    0,
-                    0,
-                    client.right,
-                    client.bottom,
-                    mem_dc,
-                    0,
-                    0,
-                    pix_w,
-                    pix_h,
-                    SRCCOPY,
-                )
-            };
-            // SAFETY: restore the original bitmap selection.
-            unsafe { SelectObject(mem_dc, old) };
-            drawn != 0
-        }
-    } else {
-        false
-    };
-    if !bitmap.is_null() {
-        // SAFETY: `bitmap` is owned by this call and not selected anywhere else.
-        unsafe { DeleteObject(bitmap) };
-    }
-    // SAFETY: `dc` came from GetDC above.
-    unsafe { ReleaseDC(window, dc) };
-    // SAFETY: non-null checked above; caller provides writable output storage.
-    unsafe {
-        *out_client = client.right;
-    }
-    u8::from(blitted)
-}
-
-/// Blits a top-down BGRA buffer onto a caller-supplied DC (WM_PRINT path).
-///
-/// Same DIB semantics as [`fcitx5_candidate_window_blit_bgra`] but the
-/// destination DC is provided by the caller (e.g. the WM_PRINT wparam).
-///
-/// # Safety
-///
-/// `dc` must be a valid HDC, `pixels` must reference `pixel_byte_len`
-/// readable bytes, and `client_width`/`client_height` must be the target
-/// client-rect extent.
-#[no_mangle]
-pub unsafe extern "C" fn fcitx5_candidate_window_blit_bgra_to_dc(
-    dc: Hdc,
-    pixels: *const u8,
-    pixel_byte_len: usize,
-    pixel_stride: usize,
-    client_width: i32,
-    client_height: i32,
-) -> u8 {
-    // SAFETY: callers uphold the documented pointer/DC contracts.
-    unsafe {
-        blit_bgra_to_dc(
-            dc,
-            pixels,
-            pixel_byte_len,
-            pixel_stride,
-            client_width,
-            client_height,
-        )
     }
 }
 

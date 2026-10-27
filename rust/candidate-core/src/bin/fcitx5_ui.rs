@@ -21,7 +21,7 @@ use fcitx5_candidate_core::frame_update::{
     frame_update, FrameCaret, FrameConfig, FrameOrientation, FrameOverflow, FrameState,
     FrameUpdateOutcome, FrameWriting,
 };
-use fcitx5_candidate_core::presentation_server::fcitx5_candidate_presentation_serve;
+use fcitx5_candidate_core::presentation_server::serve_presentation;
 use fcitx5_candidate_core::renderer::resolve_candidate_family;
 use fcitx5_candidate_core::window_host::{
     fcitx5_candidate_window_create, fcitx5_candidate_window_destroy,
@@ -1010,23 +1010,15 @@ impl Host {
             corner_radius: vc.corner_radius_dip,
         };
         let built: &[Fcitx5CandidateVisualBuildOutput] = self.arena.built_outputs();
-        let utf8 = |value: &fcitx5_candidate_core::Fcitx5CandidateUtf8| -> String {
-            if value.len == 0 {
-                return String::new();
-            }
-            // SAFETY: arena-owned strings stay valid until the next build.
-            String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(value.ptr, value.len) })
-                .into_owned()
-        };
         let candidates: Vec<CandidateRenderData> = self
             .visible_indices
             .iter()
             .filter_map(|index| built.get(*index))
             .map(|output| CandidateRenderData {
-                label: utf8(&output.label),
-                reserved_label: utf8(&output.reserved_label),
-                text: utf8(&output.text),
-                comment: utf8(&output.comment),
+                label: output.label.clone(),
+                reserved_label: output.reserved_label.clone(),
+                text: output.text.clone(),
+                comment: output.comment.clone(),
             })
             .collect();
         if candidates.len() != self.item_rects.len() {
@@ -1511,90 +1503,52 @@ fn create_host_window(host: &mut Host, instance: *mut c_void, visible: bool) -> 
 // Presentation pipe server (Rust serve loop; this thread only posts decoded
 // snapshots to the UI thread)
 // ---------------------------------------------------------------------------
-struct ServeContext {
-    window: *mut c_void,
-    test_once: bool,
-}
-
-unsafe extern "system" fn serve_on_frame(
-    user: *mut c_void,
-    response: *const fcitx5_candidate_core::frame_ffi::Fcitx5CandidateFrameResponse,
-) {
-    // SAFETY: the serve loop passes the context pointer it was given.
-    let context = unsafe { &*(user as *const ServeContext) };
-    // SAFETY: the serve loop guarantees a valid response for the callback.
-    let response = unsafe { &*response };
+/// The decoded response fields the UI thread consumes.
+fn presentation_snapshot(response: &KeyResponse) -> KeyResponse {
     let mut out = KeyResponse::default();
-    out.metadata.engine_epoch = response.engine_epoch;
-    out.metadata.context_id = response.context_id;
-    out.metadata.composition_id = response.composition_id;
-    out.metadata.revision = response.revision;
+    out.metadata.engine_epoch = response.metadata.engine_epoch;
+    out.metadata.context_id = response.metadata.context_id;
+    out.metadata.composition_id = response.metadata.composition_id;
+    out.metadata.revision = response.metadata.revision;
     out.status = Status::Ok;
     out.handled = true;
-    if response.preedit_len > 0 && !response.preedit.is_null() {
-        // SAFETY: preedit references serve-loop storage valid for the callback.
-        let bytes = unsafe { std::slice::from_raw_parts(response.preedit, response.preedit_len) };
-        out.preedit_utf8 = bytes.to_vec();
-    }
-    if response.content_locale_len > 0 && !response.content_locale.is_null() {
-        // SAFETY: content_locale references serve-loop storage valid for the callback.
-        let bytes = unsafe {
-            std::slice::from_raw_parts(response.content_locale, response.content_locale_len)
-        };
-        out.content_locale_utf8 = bytes.to_vec();
-    }
+    out.preedit_utf8 = response.preedit_utf8.clone();
+    out.content_locale_utf8 = response.content_locale_utf8.clone();
     out.selected_candidate = response.selected_candidate;
     out.candidate_page = response.candidate_page;
     out.candidate_page_size = response.candidate_page_size;
     out.candidate_total = response.candidate_total;
     out.candidate_visibility = response.candidate_visibility;
-    out.candidate_bulk = response.candidate_bulk != 0;
-    out.candidate_end = response.candidate_end != 0;
-    out.caret = CaretRect {
-        valid: response.caret_valid != 0,
-        left: response.caret_left,
-        top: response.caret_top,
-        right: response.caret_right,
-        bottom: response.caret_bottom,
-        dpi: response.caret_dpi,
-    };
-    out.popup_allowed = response.popup_allowed != 0;
-    if !response.candidates.is_null() && response.candidate_count > 0 {
-        // SAFETY: candidates references serve-loop storage valid for the callback.
-        let records =
-            // SAFETY: candidates is non-null and spans candidate_count records.
-            unsafe { std::slice::from_raw_parts(response.candidates, response.candidate_count) };
-        out.candidates = records
-            .iter()
-            .map(|record| {
-                let view = |data: *const u8, len: usize| -> Vec<u8> {
-                    if len == 0 || data.is_null() {
-                        return Vec::new();
-                    }
-                    // SAFETY: each record references serve-loop storage.
-                    unsafe { std::slice::from_raw_parts(data, len) }.to_vec()
-                };
-                CandidateRecord {
-                    id: record.id,
-                    label_utf8: view(record.label, record.label_len),
-                    text_utf8: view(record.text, record.text_len),
-                    comment_utf8: view(record.comment, record.comment_len),
-                }
-            })
-            .collect();
-    }
-    let boxed = Box::into_raw(Box::new(out));
+    out.candidate_bulk = response.candidate_bulk;
+    out.candidate_end = response.candidate_end;
+    out.caret = response.caret;
+    out.popup_allowed = response.popup_allowed;
+    out.candidates = response
+        .candidates
+        .iter()
+        .map(|record| CandidateRecord {
+            id: record.id,
+            label_utf8: record.label_utf8.clone(),
+            text_utf8: record.text_utf8.clone(),
+            comment_utf8: record.comment_utf8.clone(),
+        })
+        .collect();
+    out
+}
+
+fn post_snapshot(window: *mut c_void, response: &KeyResponse, test_once: bool) {
+    let boxed = Box::into_raw(Box::new(presentation_snapshot(response)));
     // SAFETY: window is the live host window for this serve thread.
-    let posted = unsafe { PostMessageW(context.window, K_SNAPSHOT_MESSAGE, 0, boxed as isize) };
+    let posted = unsafe { PostMessageW(window, K_SNAPSHOT_MESSAGE, 0, boxed as isize) };
     if posted == 0 {
         // SAFETY: ownership returns to this thread when the post fails.
         unsafe { drop(Box::from_raw(boxed)) };
         return;
     }
-    if context.test_once {
+    if test_once {
         // SAFETY: window is the live host window for this serve thread.
         unsafe {
-            PostMessageW(context.window, WM_CLOSE, 0, 0);
+            PostMessageW(window, WM_CLOSE, 0, 0);
         }
     }
 }
@@ -1621,25 +1575,9 @@ fn start_serve_thread(window: *mut c_void, test_once: bool) {
             return;
         };
         let generation = current_runtime_generation_for_current_process();
-        let generation_units = wide_nul(&generation);
-        let engine_units = wide_nul(&engine.to_string_lossy());
-        let mut context = ServeContext {
-            window: window.0,
-            test_once,
-        };
-        // SAFETY: both string buffers are NUL-terminated for the duration of
-        // the blocking serve call; context outlives it on this thread.
-        // SAFETY: all FFI arguments remain valid for the synchronous call.
-        unsafe {
-            fcitx5_candidate_presentation_serve(
-                generation_units.as_ptr(),
-                engine_units.as_ptr(),
-                ptr::null_mut(),
-                u8::from(test_once),
-                serve_on_frame,
-                (&mut context as *mut ServeContext).cast::<c_void>(),
-            );
-        }
+        serve_presentation(&generation, &engine, None, test_once, |response| {
+            post_snapshot(window.0, response, test_once);
+        });
     });
 }
 

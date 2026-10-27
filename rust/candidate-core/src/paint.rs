@@ -141,7 +141,7 @@ pub unsafe fn render_frame_to_dc(
 
 /// Renders `frame` to a window-sized BGRA bitmap.
 #[cfg(windows)]
-pub fn render_frame(frame: &FramePaint<'_>) -> RenderWindowOutput {
+pub(crate) fn render_frame(frame: &FramePaint<'_>) -> RenderWindowOutput {
     let preedit = frame.preedit.filter(|text| !text.is_empty());
     let candidate_top = if preedit.is_some() {
         frame.candidate_top

@@ -1655,8 +1655,9 @@ fn windui_settings_root(
         &locale,
     );
     let themes = candidate_adapter.with(WindUiConfigAdapter::theme_choices);
+    let fonts = candidate_font_choices(&locale, fcitx5_windows_common_core::system_font_families());
     let appearance = AppearanceControls::new();
-    appearance.sync(candidate_adapter, &themes);
+    appearance.sync(candidate_adapter, &themes, &fonts);
     let theme_names: Vec<String> = themes
         .iter()
         .map(|theme| {
@@ -1756,6 +1757,11 @@ fn windui_settings_root(
                         &locale.text("settings.candidate.text_section"),
                     ))
                     .child(WindUiElement::setting_row_desc(
+                        locale.text("settings.candidate.font"),
+                        locale.text("settings.candidate.font_hint"),
+                        WindUiElement::dropdown(fonts.clone(), appearance.font).width(220),
+                    ))
+                    .child(WindUiElement::setting_row_desc(
                         locale.text("settings.candidate.font_size"),
                         locale.text("settings.candidate.font_size_hint"),
                         WindUiElement::stepper(
@@ -1823,12 +1829,13 @@ fn windui_settings_root(
                 .on_click({
                     let locale = locale.clone();
                     let themes = themes.clone();
+                    let fonts = fonts.clone();
                     move |ctx| {
                         let mut result = Ok(());
                         candidate_adapter.update(|adapter| result = adapter.reload());
                         match result {
                             Ok(()) => {
-                                appearance.sync(candidate_adapter, &themes);
+                                appearance.sync(candidate_adapter, &themes, &fonts);
                                 sync_settings_shell_theme(candidate_adapter);
                                 candidate_status.set(locale.text("settings.reloaded"));
                             }
@@ -1844,10 +1851,20 @@ fn windui_settings_root(
                 .on_click({
                     let locale = locale.clone();
                     move |ctx| {
-                        let edits = candidate_adapter
+                        let mut edits = candidate_adapter
                             .with(|adapter| appearance.pending_edits(&adapter.preview(), &themes));
+                        let font_change = appearance.font_change(&fonts);
+                        if let CandidateFontChange::Use(font) = &font_change {
+                            edits.push(ConfigEdit::CandidateFontFamilies(vec![
+                                font.clone(),
+                                "system".to_owned(),
+                            ]));
+                        }
                         let mut result = Ok(());
                         candidate_adapter.update(|adapter| {
+                            if font_change == CandidateFontChange::FollowTheme {
+                                adapter.reset(ConfigField::CandidateFontFamilies);
+                            }
                             result = edits
                                 .into_iter()
                                 .try_for_each(|edit| adapter.set(edit))
@@ -1855,6 +1872,7 @@ fn windui_settings_root(
                         });
                         match result {
                             Ok(()) => {
+                                appearance.font_loaded.set(appearance.font.get());
                                 candidate_status.set(locale.text("settings.saved"));
                                 ctx.toast_ok(locale.text("settings.saved"));
                             }
@@ -2834,21 +2852,87 @@ fn slider_from_opacity(opacity: f32) -> f32 {
 #[derive(Clone, Copy)]
 struct AppearanceControls {
     theme: WindUiSignal<usize>,
+    /// Index into the font choices; 0 follows the theme's font.
+    font: WindUiSignal<usize>,
+    font_loaded: WindUiSignal<usize>,
     font_size: WindUiSignal<f64>,
     opacity: WindUiSignal<f32>,
+}
+
+/// What Save does with the candidate font choice.
+#[derive(Clone, Debug, PartialEq)]
+enum CandidateFontChange {
+    Keep,
+    FollowTheme,
+    Use(String),
+}
+
+/// Font dropdown entries: the follow-theme entry, then installed families.
+fn candidate_font_choices(locale: &LocaleCatalog, installed: Vec<String>) -> Vec<String> {
+    std::iter::once(locale.text("settings.candidate.font_theme"))
+        .chain(installed)
+        .collect()
+}
+
+/// The dropdown index of the font the snapshot draws candidates with.
+fn candidate_font_index(snapshot: &ConfigSnapshot, choices: &[String]) -> usize {
+    snapshot
+        .fonts()
+        .candidate()
+        .families()
+        .iter()
+        .filter(|family| {
+            !family.eq_ignore_ascii_case("system") && !family.eq_ignore_ascii_case("inherit")
+        })
+        .find_map(|family| {
+            choices
+                .iter()
+                .skip(1)
+                .position(|choice| choice.eq_ignore_ascii_case(family))
+                .map(|index| index + 1)
+        })
+        .unwrap_or(0)
+}
+
+fn candidate_font_change(
+    choices: &[String],
+    loaded: usize,
+    selected: usize,
+) -> CandidateFontChange {
+    if selected == loaded {
+        CandidateFontChange::Keep
+    } else if selected == 0 {
+        CandidateFontChange::FollowTheme
+    } else {
+        choices
+            .get(selected)
+            .map_or(CandidateFontChange::Keep, |font| {
+                CandidateFontChange::Use(font.clone())
+            })
+    }
 }
 
 impl AppearanceControls {
     fn new() -> Self {
         Self {
             theme: windui_signal(0usize),
+            font: windui_signal(0usize),
+            font_loaded: windui_signal(0usize),
             font_size: windui_signal(16.0f64),
             opacity: windui_signal(1.0f32),
         }
     }
 
-    fn sync(self, adapter: WindUiSignal<WindUiConfigAdapter>, themes: &[ThemeChoice]) {
+    fn sync(
+        self,
+        adapter: WindUiSignal<WindUiConfigAdapter>,
+        themes: &[ThemeChoice],
+        fonts: &[String],
+    ) {
         let snapshot = adapter.with(WindUiConfigAdapter::preview);
+        let font = candidate_font_index(&snapshot, fonts);
+        self.font.set(font);
+        self.font_loaded.set(font);
         self.theme.set(
             themes
                 .iter()
@@ -2869,6 +2953,10 @@ impl AppearanceControls {
             self.font_size.get(),
             self.opacity.get(),
         )
+    }
+
+    fn font_change(self, fonts: &[String]) -> CandidateFontChange {
+        candidate_font_change(fonts, self.font_loaded.get(), self.font.get())
     }
 }
 
@@ -3974,6 +4062,37 @@ mod tests {
         assert!(!shell_uses_dark("light", true));
         assert!(shell_uses_dark("system", true));
         assert!(!shell_uses_dark("system", false));
+    }
+
+    #[test]
+    fn candidate_font_choice_maps_to_config_changes() {
+        let snapshot = ConfigCore::compiled_defaults().preview();
+        let locale = LocaleCatalog::new("en-US", "en-US");
+        let configured = snapshot.fonts().candidate().families()[0].clone();
+        let fonts = candidate_font_choices(
+            &locale,
+            vec!["Segoe UI".to_owned(), configured.to_uppercase()],
+        );
+        assert_eq!(fonts[0], "Follow theme");
+        let loaded = candidate_font_index(&snapshot, &fonts);
+        assert_eq!(
+            loaded, 2,
+            "matches the configured family case-insensitively"
+        );
+        assert_eq!(
+            candidate_font_change(&fonts, loaded, loaded),
+            CandidateFontChange::Keep
+        );
+        assert_eq!(
+            candidate_font_change(&fonts, loaded, 1),
+            CandidateFontChange::Use("Segoe UI".to_owned())
+        );
+        assert_eq!(
+            candidate_font_change(&fonts, loaded, 0),
+            CandidateFontChange::FollowTheme
+        );
+        let unknown = candidate_font_choices(&locale, vec!["Segoe UI".to_owned()]);
+        assert_eq!(candidate_font_index(&snapshot, &unknown), 0);
     }
 
     #[test]
