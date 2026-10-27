@@ -94,5 +94,28 @@ int main() {
         return 1;
     }
 
+    const auto shiftedDigit =
+        engine::keyFromRequest(request('1', FCITX5_PROTOCOL_KEY_FLAG_SHIFT, 0x02));
+    if (!expect(shiftedDigit.sym() == FcitxKey_exclam,
+                "Shift+1 without logical text did not fall back to the US symbol")) {
+        return 1;
+    }
+
+    const auto slash = engine::keyFromRequest(request(VK_OEM_2, 0, 0x35));
+    const auto backslash = engine::keyFromRequest(request(VK_OEM_5, 0, 0x2b));
+    const auto grave = engine::keyFromRequest(request(VK_OEM_3, 0, 0x29));
+    if (!expect(slash.sym() == FcitxKey_slash && backslash.sym() == FcitxKey_backslash &&
+                    grave.sym() == FcitxKey_grave,
+                "punctuation key without logical text did not fall back to the US symbol")) {
+        return 1;
+    }
+
+    const auto tab = engine::keyFromRequest(request(VK_TAB, 0, 0x0f));
+    const auto del = engine::keyFromRequest(request(VK_DELETE, 0, 0x53));
+    if (!expect(tab.sym() == FcitxKey_Tab && del.sym() == FcitxKey_Delete,
+                "Tab or Delete did not reach Fcitx as an editing key")) {
+        return 1;
+    }
+
     return 0;
 }

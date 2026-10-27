@@ -4,7 +4,7 @@
 #![allow(linker_messages)]
 #![allow(non_snake_case)]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ffi::OsString;
@@ -50,10 +50,11 @@ use windows::Win32::System::Registry::{
 use windows::Win32::System::Variant::{VariantClear, VT_EMPTY, VT_UNKNOWN};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetFocus, GetKeyState, GetKeyboardLayout, MapVirtualKeyExW, HKL, MAPVK_VK_TO_VSC_EX, VK_BACK,
-    VK_CONTROL, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_LWIN, VK_MENU, VK_NEXT, VK_OEM_1, VK_OEM_4,
-    VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PRIOR,
-    VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_UP,
+    GetFocus, GetKeyState, GetKeyboardLayout, GetKeyboardState, MapVirtualKeyExW, ToUnicodeEx, HKL,
+    MAPVK_VK_TO_VSC_EX, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME,
+    VK_LEFT, VK_LWIN, VK_MENU, VK_NEXT, VK_OEM_1, VK_OEM_102, VK_OEM_2, VK_OEM_3, VK_OEM_4,
+    VK_OEM_5, VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PRIOR,
+    VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::TextServices::{
     CLSID_TF_CategoryMgr, CLSID_TF_InputProcessorProfiles, ITfActiveLanguageProfileNotifySink,
@@ -69,7 +70,7 @@ use windows::Win32::UI::TextServices::{
     GUID_PROP_INPUTSCOPE, GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT, GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
     GUID_TFCAT_TIPCAP_UIELEMENTENABLED, GUID_TFCAT_TIP_KEYBOARD, IS_ALPHANUMERIC_PIN,
     IS_ALPHANUMERIC_PIN_SET, IS_NUMERIC_PASSWORD, IS_NUMERIC_PIN, IS_PASSWORD, IS_PRIVATE,
-    TF_DEFAULT_SELECTION, TF_ES_READ, TF_ES_READWRITE, TF_ES_SYNC, TF_SELECTION,
+    TF_ANCHOR_END, TF_DEFAULT_SELECTION, TF_ES_READ, TF_ES_READWRITE, TF_ES_SYNC, TF_SELECTION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetGUIThreadInfo, GUITHREADINFO};
 use windows_core::{
@@ -359,7 +360,6 @@ fn register_profiles() -> Result<()> {
         (LANG_EN_US, &FCITX5_OBSOLETE_EN_US_PROFILE_GUID),
         (LANG_ZH_CN, &FCITX5_OBSOLETE_RIME_PROFILE_GUID),
         (LANG_JA_JP, &FCITX5_OBSOLETE_JA_PROFILE_GUID),
-        (LANG_ZH_CN, &FCITX5_LANGUAGE_PROFILE_GUID),
     ] {
         let result = unregister_profile_if_present(&profiles, language, profile);
         if result.is_err() {
@@ -1975,7 +1975,13 @@ impl EngineClient {
             extended_key,
             popup_allowed,
             keyboard_layout,
-            logical_text_utf8: logical_text_for_key(virtual_key, key_flags).into_bytes(),
+            logical_text_utf8: logical_text_for_key(
+                virtual_key,
+                scan_code,
+                key_flags,
+                keyboard_layout,
+            )
+            .into_bytes(),
             input_method_utf8: Vec::new(),
             surrounding_text_valid: surrounding.valid,
             surrounding_text_utf8: surrounding.text.into_bytes(),
@@ -2305,47 +2311,123 @@ fn expected_launcher_path_for_module(
     )
 }
 
-fn logical_text_for_key(virtual_key: u32, key_flags: u32) -> String {
-    if (b'A' as u32..=b'Z' as u32).contains(&virtual_key)
-        && key_flags
-            & (protocol::KEY_FLAG_CONTROL | protocol::KEY_FLAG_ALT | protocol::KEY_FLAG_SUPER)
-            == 0
-    {
-        let base = if key_flags & protocol::KEY_FLAG_SHIFT != 0 {
-            b'A'
-        } else {
-            b'a'
-        };
-        return char::from(base + (virtual_key as u8 - b'A')).to_string();
+/// Letter, digit and punctuation keys, whose meaning depends on the keyboard
+/// layout and the Shift state.
+fn is_character_key(virtual_key: u16) -> bool {
+    (b'A' as u16..=b'Z' as u16).contains(&virtual_key)
+        || (b'0' as u16..=b'9' as u16).contains(&virtual_key)
+        || [
+            VK_OEM_PLUS,
+            VK_OEM_MINUS,
+            VK_OEM_COMMA,
+            VK_OEM_PERIOD,
+            VK_OEM_1,
+            VK_OEM_2,
+            VK_OEM_3,
+            VK_OEM_4,
+            VK_OEM_5,
+            VK_OEM_6,
+            VK_OEM_7,
+            VK_OEM_102,
+        ]
+        .iter()
+        .any(|key| key.0 == virtual_key)
+}
+
+fn ascii_letter_text(virtual_key: u32, key_flags: u32) -> String {
+    if !(b'A' as u32..=b'Z' as u32).contains(&virtual_key) {
+        return String::new();
     }
-    String::new()
+    let base = if key_flags & protocol::KEY_FLAG_SHIFT != 0 {
+        b'A'
+    } else {
+        b'a'
+    };
+    char::from(base + (virtual_key as u8 - b'A')).to_string()
+}
+
+/// The character the active keyboard layout produces for this key, so that
+/// Shift+1 reaches Fcitx as `!` and punctuation follows non-US layouts.
+fn layout_text_for_key(virtual_key: u32, scan_code: u32, keyboard_layout: u64) -> Option<char> {
+    // Leave the kernel keyboard state (dead keys) untouched; Windows 10 1607+.
+    const TO_UNICODE_KEEP_KEYBOARD_STATE: u32 = 0x4;
+    let mut state = [0_u8; 256];
+    // SAFETY: `state` is a valid 256-byte buffer for the calling thread's
+    // keyboard state.
+    unsafe { GetKeyboardState(&mut state) }.ok()?;
+    let mut buffer = [0_u16; 8];
+    // SAFETY: Both buffers are valid for the call and the layout handle came
+    // from GetKeyboardLayout on this thread.
+    let written = unsafe {
+        ToUnicodeEx(
+            virtual_key,
+            scan_code,
+            &state,
+            &mut buffer,
+            TO_UNICODE_KEEP_KEYBOARD_STATE,
+            Some(HKL(keyboard_layout as usize as *mut c_void)),
+        )
+    };
+    if written != 1 {
+        return None;
+    }
+    char::from_u32(u32::from(buffer[0])).filter(|ch| !ch.is_control())
+}
+
+fn logical_text_for_key(
+    virtual_key: u32,
+    scan_code: u32,
+    key_flags: u32,
+    keyboard_layout: u64,
+) -> String {
+    if key_flags & (protocol::KEY_FLAG_CONTROL | protocol::KEY_FLAG_ALT | protocol::KEY_FLAG_SUPER)
+        != 0
+        || key_flags & protocol::KEY_FLAG_RELEASE != 0
+        || !is_character_key(virtual_key as u16)
+    {
+        return String::new();
+    }
+    match layout_text_for_key(virtual_key, scan_code, keyboard_layout) {
+        Some(ch) => ch.to_string(),
+        None => ascii_letter_text(virtual_key, key_flags),
+    }
 }
 
 fn is_text_or_candidate_key(virtual_key: u16) -> bool {
-    (b'A' as u16..=b'Z' as u16).contains(&virtual_key)
-        || (b'0' as u16..=b'9' as u16).contains(&virtual_key)
-        || matches!(
-            virtual_key,
-            key if key == VK_BACK.0
-                || key == VK_SPACE.0
-                || key == VK_RETURN.0
-                || key == VK_LEFT.0
-                || key == VK_RIGHT.0
-                || key == VK_UP.0
-                || key == VK_DOWN.0
-                || key == VK_PRIOR.0
-                || key == VK_NEXT.0
-                || key == VK_HOME.0
-                || key == VK_END.0
-                || key == VK_OEM_PLUS.0
-                || key == VK_OEM_MINUS.0
-                || key == VK_OEM_COMMA.0
-                || key == VK_OEM_PERIOD.0
-                || key == VK_OEM_1.0
-                || key == VK_OEM_4.0
-                || key == VK_OEM_6.0
-                || key == VK_OEM_7.0
-        )
+    is_character_key(virtual_key)
+        || [
+            VK_BACK, VK_SPACE, VK_RETURN, VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_PRIOR, VK_NEXT,
+            VK_HOME, VK_END,
+        ]
+        .iter()
+        .any(|key| key.0 == virtual_key)
+}
+
+/// Keys that only mean something to the engine while a composition is open:
+/// Escape cancels it, Tab and Delete edit it in some input methods.
+fn is_composition_only_key(virtual_key: u16) -> bool {
+    [VK_ESCAPE, VK_TAB, VK_DELETE]
+        .iter()
+        .any(|key| key.0 == virtual_key)
+}
+
+fn is_modifier_key(virtual_key: u16) -> bool {
+    [VK_SHIFT, VK_CONTROL, VK_MENU]
+        .iter()
+        .any(|key| key.0 == virtual_key)
+}
+
+/// The modifier-only switch hotkey being held, as the flags the engine
+/// matches it with ("Ctrl+Shift" or "Alt+Shift" on Shift_L).
+fn modifier_chord_flags(key_flags: u32) -> Option<u32> {
+    let held = key_flags
+        & (protocol::KEY_FLAG_CONTROL
+            | protocol::KEY_FLAG_SHIFT
+            | protocol::KEY_FLAG_ALT
+            | protocol::KEY_FLAG_SUPER);
+    let ctrl_shift = protocol::KEY_FLAG_CONTROL | protocol::KEY_FLAG_SHIFT;
+    let alt_shift = protocol::KEY_FLAG_ALT | protocol::KEY_FLAG_SHIFT;
+    (held == ctrl_shift || held == alt_shift).then_some(held)
 }
 
 #[derive(Default)]
@@ -2362,6 +2444,8 @@ struct TsfRuntimeState {
     candidate_ui_element_id: u32,
     candidate_ui_element: Option<ITfCandidateListUIElement>,
     composition: Option<ITfComposition>,
+    composition_context: Option<ITfContext>,
+    modifier_chord: Option<u32>,
     engine_client: Option<EngineClient>,
     pending_key: Option<CachedKeyResult>,
     candidate_context_id: Option<u64>,
@@ -2389,6 +2473,8 @@ impl TsfRuntimeState {
         self.candidate_ui_element_id = TF_INVALID_UIELEMENTID;
         self.candidate_ui_element = None;
         self.composition = None;
+        self.composition_context = None;
+        self.modifier_chord = None;
         self.engine_client = None;
         self.pending_key = None;
         self.candidate_context_id = None;
@@ -2406,13 +2492,24 @@ impl TsfRuntimeState {
 // TSF keeps the composition sink and the candidate UI element after the
 // service is gone, so each holds a module reference: the DLL must not unload
 // while TSF can still call into them.
+fn composition_identity(composition: &ITfComposition) -> usize {
+    composition
+        .cast::<IUnknown>()
+        .map(|unknown| unknown.as_raw() as usize)
+        .unwrap_or_default()
+}
+
 #[implement(ITfCompositionSink)]
-struct Fcitx5CompositionSink;
+struct Fcitx5CompositionSink {
+    // The raw pointer of the composition the host ended last, 0 for none.
+    // The service picks it up before it next touches its composition.
+    terminated: Rc<Cell<usize>>,
+}
 
 impl Fcitx5CompositionSink {
-    fn new() -> Self {
+    fn new(terminated: Rc<Cell<usize>>) -> Self {
         module_add_ref();
-        Self
+        Self { terminated }
     }
 }
 
@@ -2426,8 +2523,11 @@ impl ITfCompositionSink_Impl for Fcitx5CompositionSink_Impl {
     fn OnCompositionTerminated(
         &self,
         _edit_cookie: u32,
-        _composition: Ref<ITfComposition>,
+        composition: Ref<ITfComposition>,
     ) -> Result<()> {
+        if let Some(composition) = composition.as_ref() {
+            self.terminated.set(composition_identity(composition));
+        }
         Ok(())
     }
 }
@@ -2712,10 +2812,18 @@ impl ITfEditSession_Impl for Fcitx5ReadSurroundingSession_Impl {
                 before_range.GetText(edit_cookie, 0, &mut buffer, &mut fetched)?;
             }
             buffer.truncate(fetched as usize);
+            // The fixed-size window can start in the middle of a surrogate pair.
+            if buffer
+                .first()
+                .is_some_and(|unit| (0xdc00..=0xdfff).contains(unit))
+            {
+                buffer.remove(0);
+            }
             let Ok(text) = String::from_utf16(&buffer) else {
                 return Err(E_FAIL.into());
             };
-            let cursor = text.encode_utf16().count() as u32;
+            // Fcitx counts the cursor in characters, not UTF-16 units.
+            let cursor = text.chars().count() as u32;
             *self.snapshot.borrow_mut() = SurroundingSnapshot {
                 valid: true,
                 text,
@@ -2796,6 +2904,10 @@ impl Fcitx5TextEditSession {
         if let Some(composition) = &self.current_composition {
             return Ok(composition.clone());
         }
+        self.start_composition(edit_cookie, range)
+    }
+
+    fn start_composition(&self, edit_cookie: u32, range: &ITfRange) -> Result<ITfComposition> {
         let context_composition: ITfContextComposition = self.context.cast()?;
         // SAFETY: The mock and real TSF contract require StartComposition to be
         // called inside a write edit session with a live selection range and sink.
@@ -2830,7 +2942,7 @@ impl ITfEditSession_Impl for Fcitx5TextEditSession_Impl {
                     }
 
                     if !result.commit.is_empty() {
-                        if let Some(composition) = &self.current_composition {
+                        let commit_range = if let Some(composition) = &self.current_composition {
                             // SAFETY: The composition belongs to this active edit
                             // session and its range remains valid until it is ended.
                             let composition_range = unsafe { composition.GetRange()? };
@@ -2842,14 +2954,34 @@ impl ITfEditSession_Impl for Fcitx5TextEditSession_Impl {
                             // SAFETY: Ending the current composition is required
                             // after committing its text.
                             unsafe { composition.EndComposition(edit_cookie)? };
+                            composition_range
                         } else {
                             Fcitx5TextEditSession::set_range_text(
                                 &selection_range,
                                 edit_cookie,
                                 &result.commit,
                             )?;
-                        }
+                            selection_range.clone()
+                        };
                         *self.resulting_composition.borrow_mut() = None;
+                        // A table or Rime auto-commit hands back the next
+                        // preedit with the commit; it starts right after it.
+                        if !result.preedit.is_empty() {
+                            // SAFETY: The committed range is valid during this
+                            // edit session; the clone is released by the wrapper.
+                            let next_range = unsafe { commit_range.Clone()? };
+                            // SAFETY: Collapsing a live range needs no other state.
+                            unsafe { next_range.Collapse(edit_cookie, TF_ANCHOR_END)? };
+                            let composition = self.start_composition(edit_cookie, &next_range)?;
+                            // SAFETY: The composition belongs to this active edit session.
+                            let composition_range = unsafe { composition.GetRange()? };
+                            Fcitx5TextEditSession::set_range_text(
+                                &composition_range,
+                                edit_cookie,
+                                &result.preedit,
+                            )?;
+                            *self.resulting_composition.borrow_mut() = Some(composition);
+                        }
                     } else if !result.preedit.is_empty() {
                         let composition =
                             self.start_or_get_composition(edit_cookie, &selection_range)?;
@@ -2934,12 +3066,14 @@ struct Fcitx5TsfService {
     state: RefCell<TsfBehaviorState>,
     runtime: RefCell<TsfRuntimeState>,
     composition_sink: ITfCompositionSink,
+    terminated_composition: Rc<Cell<usize>>,
 }
 
 impl Fcitx5TsfService {
     fn new() -> Self {
         module_add_ref();
-        let sink = ComObject::new(Fcitx5CompositionSink::new());
+        let terminated_composition = Rc::new(Cell::new(0));
+        let sink = ComObject::new(Fcitx5CompositionSink::new(terminated_composition.clone()));
         Self {
             state: RefCell::default(),
             runtime: RefCell::new(TsfRuntimeState {
@@ -2948,6 +3082,7 @@ impl Fcitx5TsfService {
                 ..TsfRuntimeState::default()
             }),
             composition_sink: sink.to_interface::<ITfCompositionSink>(),
+            terminated_composition,
         }
     }
 
@@ -3254,10 +3389,13 @@ impl Fcitx5TsfService {
         // composition exists, let the host handle ordinary text deletion;
         // forwarding that no-op to the engine would create a context before
         // the first text key and reduce the first-key cold-start deadline.
-        if wparam.0 as u16 == VK_BACK.0 && runtime.composition.is_none() {
+        let virtual_key = wparam.0 as u16;
+        if (virtual_key == VK_BACK.0 || is_composition_only_key(virtual_key))
+            && runtime.composition.is_none()
+        {
             return false;
         }
-        is_text_or_candidate_key(wparam.0 as u16)
+        is_text_or_candidate_key(virtual_key) || is_composition_only_key(virtual_key)
     }
 
     fn context_id(context: &ITfContext) -> u64 {
@@ -3524,7 +3662,10 @@ impl Fcitx5TsfService {
         if session_result.is_err() || !*applied.borrow() {
             return Ok(false);
         }
-        self.runtime.borrow_mut().composition = resulting_composition.borrow().clone();
+        let composition = resulting_composition.borrow().clone();
+        let mut runtime = self.runtime.borrow_mut();
+        runtime.composition_context = composition.as_ref().map(|_| context.clone());
+        runtime.composition = composition;
         Ok(true)
     }
 
@@ -3582,13 +3723,109 @@ impl Fcitx5TsfService {
         runtime.candidate_context = None;
     }
 
-    fn clear_context_composition(&self, context: &ITfContext) -> Result<()> {
-        let had_composition = self.runtime.borrow().composition.is_some();
-        if had_composition {
-            let _ = self.request_edit(context, TextEditAction::ClearComposition)?;
+    /// Makes the engine drop the preedit it keeps for a context whose
+    /// composition is gone, so typing there starts fresh and the candidate
+    /// window closes.
+    fn reset_engine_composition(&self, context: &ITfContext) {
+        const ESCAPE_SCAN_CODE: u32 = 0x01;
+        let context_id = Self::context_id(context);
+        // SAFETY: GetKeyboardLayout has no pointer preconditions; zero selects
+        // the current thread.
+        let layout = unsafe { GetKeyboardLayout(0) };
+        let mut runtime = self.runtime.borrow_mut();
+        let popup_allowed = runtime.popup_allowed;
+        if let Some(client) = runtime.engine_client.as_mut() {
+            let _ = client.process_key(
+                context_id,
+                u32::from(VK_ESCAPE.0),
+                0,
+                layout.0 as u64,
+                ESCAPE_SCAN_CODE,
+                false,
+                popup_allowed,
+                SurroundingSnapshot::default(),
+            );
+        }
+    }
+
+    /// Forgets a composition the host ended itself, for example after a click
+    /// elsewhere in the text or when the app committed it.
+    fn reconcile_terminated_composition(&self) {
+        let terminated = self.terminated_composition.replace(0);
+        if terminated == 0 {
+            return;
+        }
+        let context = {
+            let mut runtime = self.runtime.borrow_mut();
+            if runtime.composition.as_ref().map(composition_identity) != Some(terminated) {
+                return;
+            }
+            trace_event("composition_terminated_by_host");
+            runtime.composition = None;
+            runtime.composition_context.take()
+        };
+        if let Some(context) = context {
+            self.reset_engine_composition(&context);
         }
         self.end_candidate_ui();
-        Ok(())
+    }
+
+    /// Ends a composition left in a context other than `focused`, removing
+    /// its preedit from the document and from the engine.
+    fn abandon_composition(&self, focused: Option<u64>) {
+        let context = self.runtime.borrow().composition_context.clone();
+        let Some(context) = context else {
+            return;
+        };
+        if focused == Some(Self::context_id(&context)) {
+            return;
+        }
+        trace_event("composition_abandoned_on_focus_change");
+        let _ = self.request_edit(&context, TextEditAction::ClearComposition);
+        {
+            let mut runtime = self.runtime.borrow_mut();
+            runtime.composition = None;
+            runtime.composition_context = None;
+        }
+        self.reset_engine_composition(&context);
+        self.end_candidate_ui();
+    }
+
+    /// Sends a held "Ctrl+Shift" or "Alt+Shift" switch hotkey to the engine
+    /// when its modifier is released with no other key pressed in between,
+    /// so Ctrl+Shift+T and similar shortcuts keep working.
+    fn finish_modifier_chord(&self, context: &ITfContext) {
+        let Some(flags) = self.runtime.borrow_mut().modifier_chord.take() else {
+            return;
+        };
+        if Fcitx5TsfService::context_has_sensitive_input_scope(context) {
+            return;
+        }
+        let context_id = Self::context_id(context);
+        let (virtual_key, scan_code, extended_key, keyboard_layout) =
+            Self::physical_key_fields(WPARAM(usize::from(VK_SHIFT.0)), LPARAM(0));
+        let surrounding = self.read_surrounding_snapshot(context);
+        let result = {
+            let mut runtime = self.runtime.borrow_mut();
+            let popup_allowed = runtime.popup_allowed;
+            runtime.engine_client.as_mut().and_then(|client| {
+                client.process_key(
+                    context_id,
+                    virtual_key,
+                    flags,
+                    keyboard_layout,
+                    scan_code,
+                    extended_key,
+                    popup_allowed,
+                    surrounding,
+                )
+            })
+        };
+        if let Some(result) = result.filter(|result| result.handled) {
+            trace_event("modifier_chord_switched_input_method");
+            let _ = self.apply_engine_result(context, result);
+            self.refresh_input_mode(context_id);
+        }
     }
 }
 
@@ -3649,24 +3886,22 @@ impl ITfThreadMgrEventSink_Impl for Fcitx5TsfService_Impl {
     fn OnSetFocus(
         &self,
         focused_document_manager: Ref<ITfDocumentMgr>,
-        previous_focused_document_manager: Ref<ITfDocumentMgr>,
+        _previous_focused_document_manager: Ref<ITfDocumentMgr>,
     ) -> Result<()> {
         com_guard(Err(E_UNEXPECTED.into()), || {
-            if let Some(focused) = focused_document_manager.as_ref() {
+            let focused = focused_document_manager.as_ref().and_then(|focused| {
                 // SAFETY: TSF supplies the focused document manager for this
                 // callback; GetTop returns its live top context when present.
-                if let Ok(context) = unsafe { focused.GetTop() } {
-                    self.refresh_input_mode(Fcitx5TsfService::context_id(&context));
-                }
-            }
-            if focused_document_manager.is_null() {
-                if let Some(previous) = previous_focused_document_manager.as_ref() {
-                    // SAFETY: The document manager is supplied by TSF for this
-                    // callback; GetTop returns a live context when one exists.
-                    if let Ok(context) = unsafe { previous.GetTop() } {
-                        self.clear_context_composition(&context)?;
-                    }
-                }
+                unsafe { focused.GetTop() }.ok()
+            });
+            let focused_id = focused.as_ref().map(Fcitx5TsfService::context_id);
+            // A preedit belongs to the field it was typed in: moving to
+            // another field, or to none, cancels it there.
+            self.reconcile_terminated_composition();
+            self.abandon_composition(focused_id);
+            self.runtime.borrow_mut().modifier_chord = None;
+            if let Some(context_id) = focused_id {
+                self.refresh_input_mode(context_id);
             }
             Ok(())
         })
@@ -3709,6 +3944,15 @@ impl ITfKeyEventSink_Impl for Fcitx5TsfService_Impl {
                 return Ok(BOOL(0));
             }
             let context = context.ok()?;
+            if is_modifier_key(wparam.0 as u16) {
+                // Modifiers go to the host; a switch chord is sent on release.
+                self.runtime.borrow_mut().modifier_chord =
+                    modifier_chord_flags(Fcitx5TsfService::keyboard_state_flags(false));
+                return Ok(BOOL(0));
+            }
+            self.runtime.borrow_mut().modifier_chord = None;
+            self.reconcile_terminated_composition();
+            self.abandon_composition(Some(Fcitx5TsfService::context_id(context)));
             if self.runtime.borrow().guard_fail_open
                 || Fcitx5TsfService::context_has_sensitive_input_scope(context)
                 || !self.should_test_eat_key(wparam)
@@ -3736,7 +3980,14 @@ impl ITfKeyEventSink_Impl for Fcitx5TsfService_Impl {
                 return Ok(BOOL(0));
             };
             let handled = result.handled || wparam.0 as u16 == VK_OEM_COMMA.0;
-            self.store_pending_key(context, wparam, result);
+            // TSF calls OnKeyDown only for a key the test ate. A kept result
+            // for any other key would answer a later press of the same key
+            // without asking the engine, after a mouse mode switch, say.
+            if handled {
+                self.store_pending_key(context, wparam, result);
+            } else {
+                self.runtime.borrow_mut().pending_key = None;
+            }
             trace_event(if handled {
                 "on_test_key_down_handled"
             } else {
@@ -3748,11 +3999,24 @@ impl ITfKeyEventSink_Impl for Fcitx5TsfService_Impl {
 
     fn OnTestKeyUp(
         &self,
-        _context: Ref<ITfContext>,
-        _wparam: WPARAM,
+        context: Ref<ITfContext>,
+        wparam: WPARAM,
         _lparam: LPARAM,
     ) -> Result<BOOL> {
-        Ok(BOOL(0))
+        com_guard(Ok(BOOL(0)), || {
+            if !is_modifier_key(wparam.0 as u16) {
+                return Ok(BOOL(0));
+            }
+            let usable = {
+                let runtime = self.runtime.borrow();
+                runtime.active && !runtime.guard_fail_open
+            };
+            match context.as_ref() {
+                Some(context) if usable => self.finish_modifier_chord(context),
+                _ => self.runtime.borrow_mut().modifier_chord = None,
+            }
+            Ok(BOOL(0))
+        })
     }
 
     fn OnKeyDown(&self, context: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
@@ -3763,6 +4027,7 @@ impl ITfKeyEventSink_Impl for Fcitx5TsfService_Impl {
                 return Ok(BOOL(0));
             }
             let context = context.ok()?;
+            self.reconcile_terminated_composition();
             if Fcitx5TsfService::context_has_sensitive_input_scope(context)
                 || !self.should_test_eat_key(wparam)
             {
@@ -4310,11 +4575,64 @@ mod tests {
             VK_OEM_4.0,
             VK_OEM_6.0,
             VK_OEM_7.0,
+            VK_OEM_2.0,
+            VK_OEM_3.0,
+            VK_OEM_5.0,
+            VK_OEM_102.0,
         ] {
             assert!(is_text_or_candidate_key(key));
         }
         assert!(!is_text_or_candidate_key(VK_CONTROL.0));
         assert!(!is_text_or_candidate_key(VK_MENU.0));
+        assert!(!is_text_or_candidate_key(VK_ESCAPE.0));
+    }
+
+    #[test]
+    fn escape_tab_and_delete_reach_the_engine_only_during_a_composition() {
+        for key in [VK_ESCAPE.0, VK_TAB.0, VK_DELETE.0] {
+            assert!(is_composition_only_key(key));
+            assert!(!is_text_or_candidate_key(key));
+        }
+        assert!(!is_composition_only_key(b'A' as u16));
+    }
+
+    #[test]
+    fn only_switch_chords_are_held_for_release() {
+        let ctrl = protocol::KEY_FLAG_CONTROL;
+        let shift = protocol::KEY_FLAG_SHIFT;
+        let alt = protocol::KEY_FLAG_ALT;
+        assert_eq!(modifier_chord_flags(ctrl | shift), Some(ctrl | shift));
+        assert_eq!(modifier_chord_flags(alt | shift), Some(alt | shift));
+        assert_eq!(
+            modifier_chord_flags(ctrl | shift | protocol::KEY_FLAG_RELEASE),
+            Some(ctrl | shift)
+        );
+        assert_eq!(modifier_chord_flags(shift), None);
+        assert_eq!(modifier_chord_flags(ctrl), None);
+        assert_eq!(modifier_chord_flags(ctrl | alt | shift), None);
+        assert_eq!(
+            modifier_chord_flags(ctrl | shift | protocol::KEY_FLAG_SUPER),
+            None
+        );
+        for key in [VK_SHIFT.0, VK_CONTROL.0, VK_MENU.0] {
+            assert!(is_modifier_key(key));
+        }
+    }
+
+    #[test]
+    fn logical_text_is_empty_for_shortcuts_and_non_character_keys() {
+        let layout = 0x0409_0409;
+        assert!(
+            logical_text_for_key(b'C' as u32, 0x2e, protocol::KEY_FLAG_CONTROL, layout).is_empty()
+        );
+        assert!(logical_text_for_key(u32::from(VK_RETURN.0), 0x1c, 0, layout).is_empty());
+        assert!(logical_text_for_key(u32::from(VK_ESCAPE.0), 0x01, 0, layout).is_empty());
+        assert_eq!(ascii_letter_text(b'N' as u32, 0), "n");
+        assert_eq!(
+            ascii_letter_text(b'N' as u32, protocol::KEY_FLAG_SHIFT),
+            "N"
+        );
+        assert!(ascii_letter_text(b'1' as u32, 0).is_empty());
     }
 
     #[test]
@@ -4842,7 +5160,7 @@ mod tests {
     fn objects_tsf_keeps_after_the_service_hold_the_module() {
         let _module_state = lock_module_state();
         let before = module_reference_count();
-        let sink = ComObject::new(Fcitx5CompositionSink::new());
+        let sink = ComObject::new(Fcitx5CompositionSink::new(Rc::default()));
         let element = ComObject::new(Fcitx5CandidateListUiElement::new(Vec::new(), 0, 0));
         assert_eq!(module_reference_count(), before + 2);
         drop(sink);
