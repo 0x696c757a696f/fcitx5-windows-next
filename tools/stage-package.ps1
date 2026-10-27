@@ -158,7 +158,7 @@ Copy-Item -LiteralPath (Join-Path $x86 'fcitx5-tsf.dll') -Destination (Join-Path
 [IO.File]::WriteAllText((Join-Path $root 'tsf/x86/fcitx5-tsf.generation'),
   "$Generation`n", [Text.UTF8Encoding]::new($false))
 Copy-Item -Path (Join-Path $repoRoot 'locales/*') -Destination (Join-Path $bin 'locales')
-Copy-Item -LiteralPath (Join-Path $repoRoot 'resources/themes/default') `
+Copy-Item -Path (Join-Path $repoRoot 'resources/themes/*') `
   -Destination (Join-Path $root 'themes') -Recurse
 Copy-Item -LiteralPath (Join-Path $repoRoot 'security/trusted-keys.template.json') `
   -Destination (Join-Path $root 'security/trusted-keys.json')

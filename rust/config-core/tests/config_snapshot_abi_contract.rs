@@ -35,10 +35,7 @@ fn native_adapters_can_load_resolved_visual_snapshot_and_access_label_sequence()
     let directory = TestDirectory::new();
     let install_root = directory.0.join("install");
     let data_root = directory.0.join("data");
-    let builtin_theme = install_root
-        .join("resources")
-        .join("themes")
-        .join("default");
+    let builtin_theme = install_root.join("themes").join("default");
     fs::create_dir_all(&builtin_theme).expect("builtin theme directory should be created");
     fs::write(
         builtin_theme.join("theme.toml"),

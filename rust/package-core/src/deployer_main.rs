@@ -160,7 +160,10 @@ mod win32 {
 
     use super::{internal_error, package_error, DeployError, MAXIMUM_ARTIFACT_BYTES};
     use std::ffi::c_void;
+    use std::fs::OpenOptions;
+    use std::io::{Read, Write};
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
     use std::path::{Path, PathBuf};
 
     type Handle = *mut c_void;
@@ -168,15 +171,9 @@ mod win32 {
     const INVALID_HANDLE_VALUE: Handle = -1isize as Handle;
     const TOKEN_QUERY: u32 = 0x0008;
     const TOKEN_ELEVATION_CLASS: u32 = 20;
-    const GENERIC_READ: u32 = 0x8000_0000;
-    const GENERIC_WRITE: u32 = 0x4000_0000;
-    const OPEN_EXISTING: u32 = 3;
-    const CREATE_NEW: u32 = 1;
-    const FILE_ATTRIBUTE_NORMAL: u32 = 0x80;
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     const FILE_FLAG_WRITE_THROUGH: u32 = 0x8000_0000;
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    const FILE_ATTRIBUTE_TAG_INFO_CLASS: u32 = 9;
     const CSIDL_PROGRAM_FILES: i32 = 0x0026;
     const SHGFP_TYPE_CURRENT: u32 = 0;
     const CSTR_EQUAL: i32 = 2;
@@ -184,17 +181,6 @@ mod win32 {
     #[repr(C)]
     struct TokenElevation {
         token_is_elevated: u32,
-    }
-
-    #[repr(C)]
-    struct FileAttributeTagInfo {
-        file_attributes: u32,
-        reparse_tag: u32,
-    }
-
-    #[repr(C)]
-    struct LargeInteger {
-        quad_part: i64,
     }
 
     #[link(name = "shell32")]
@@ -210,7 +196,6 @@ mod win32 {
             token_information_length: u32,
             return_length: *mut u32,
         ) -> i32;
-        fn GetModuleFileNameW(module: Handle, filename: *mut u16, size: u32) -> u32;
         fn SHGetFolderPathW(
             hwnd: Handle,
             csidl: i32,
@@ -225,37 +210,6 @@ mod win32 {
             count2: i32,
             ignore_case: i32,
         ) -> i32;
-        fn CreateFileW(
-            file_name: *const u16,
-            desired_access: u32,
-            share_mode: u32,
-            security_attributes: Handle,
-            creation_disposition: u32,
-            flags_and_attributes: u32,
-            template_file: Handle,
-        ) -> Handle;
-        fn GetFileInformationByHandleEx(
-            file: Handle,
-            file_information_class: u32,
-            file_information: *mut c_void,
-            buffer_size: u32,
-        ) -> i32;
-        fn GetFileSizeEx(file: Handle, file_size: *mut LargeInteger) -> i32;
-        fn ReadFile(
-            file: Handle,
-            buffer: *mut c_void,
-            bytes_to_read: u32,
-            bytes_read: *mut u32,
-            overlapped: Handle,
-        ) -> i32;
-        fn WriteFile(
-            file: Handle,
-            buffer: *const c_void,
-            bytes_to_write: u32,
-            bytes_written: *mut u32,
-            overlapped: Handle,
-        ) -> i32;
-        fn FlushFileBuffers(file: Handle) -> i32;
     }
 
     struct OwnedHandle(Handle);
@@ -316,23 +270,8 @@ mod win32 {
     }
 
     pub fn module_path() -> Result<PathBuf, DeployError> {
-        let mut buffer = vec![0u16; 32768];
-        // SAFETY: buffer is writable for its stated u16 length and remains live for the call; null module selects this executable.
-        let length = unsafe {
-            GetModuleFileNameW(
-                std::ptr::null_mut(),
-                buffer.as_mut_ptr(),
-                buffer.len() as u32,
-            )
-        };
-        if length == 0 || length as usize >= buffer.len() {
-            return Err(package_error(
-                "privilege_boundary",
-                "module path is unavailable",
-            ));
-        }
-        buffer.truncate(length as usize);
-        Ok(PathBuf::from(std::ffi::OsString::from_wide(&buffer)))
+        std::env::current_exe()
+            .map_err(|_| package_error("privilege_boundary", "module path is unavailable"))
     }
 
     pub fn program_files_path() -> Result<PathBuf, DeployError> {
@@ -388,39 +327,21 @@ mod win32 {
     }
 
     pub fn copy_exclusive_artifact(source: &Path, destination: &Path) -> Result<(), DeployError> {
-        // SAFETY: source conversion creates a live NUL-terminated UTF-16 buffer; null security/template handles are permitted by CreateFileW.
-        let input = OwnedHandle::new(unsafe {
-            CreateFileW(
-                wide_nul(source).as_ptr(),
-                GENERIC_READ,
-                0,
-                std::ptr::null_mut(),
-                OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
-                std::ptr::null_mut(),
-            )
+        let mut input = OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(source)
+            .map_err(|_| {
+                package_error("artifact_changed", "artifact cannot be opened exclusively")
+            })?;
+        let metadata = input.metadata().map_err(|_| {
+            package_error("artifact_changed", "artifact identity or size is unsafe")
         })?;
-        let mut tag = FileAttributeTagInfo {
-            file_attributes: 0,
-            reparse_tag: 0,
-        };
-        let mut size = LargeInteger { quad_part: 0 };
-        // SAFETY: input owns a valid file handle and tag is aligned writable storage with the exact FileAttributeTagInfo byte length.
-        let tag_ok = unsafe {
-            GetFileInformationByHandleEx(
-                input.raw(),
-                FILE_ATTRIBUTE_TAG_INFO_CLASS,
-                &mut tag as *mut _ as *mut c_void,
-                std::mem::size_of::<FileAttributeTagInfo>() as u32,
-            )
-        };
-        // SAFETY: input owns a valid file handle and size is aligned writable LargeInteger storage for the duration of the call.
-        let size_ok = unsafe { GetFileSizeEx(input.raw(), &mut size) };
-        if tag_ok == 0
-            || size_ok == 0
-            || (tag.file_attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0
-            || size.quad_part <= 0
-            || size.quad_part as u64 > MAXIMUM_ARTIFACT_BYTES
+        if (metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0
+            || !metadata.is_file()
+            || metadata.len() == 0
+            || metadata.len() > MAXIMUM_ARTIFACT_BYTES
         {
             return Err(package_error(
                 "artifact_changed",
@@ -432,68 +353,32 @@ mod win32 {
                 internal_error(format!("destination directory creation failed: {error}"))
             })?;
         }
-        // SAFETY: destination conversion creates a live NUL-terminated UTF-16 buffer; null security/template handles are permitted by CreateFileW.
-        let output = OwnedHandle::new(unsafe {
-            CreateFileW(
-                wide_nul(destination).as_ptr(),
-                GENERIC_WRITE,
-                0,
-                std::ptr::null_mut(),
-                CREATE_NEW,
-                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH,
-                std::ptr::null_mut(),
-            )
-        })
-        .map_err(|_| package_error("io_error", "protected artifact copy cannot be created"))?;
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .share_mode(0)
+            .custom_flags(FILE_FLAG_WRITE_THROUGH)
+            .open(destination)
+            .map_err(|_| package_error("io_error", "protected artifact copy cannot be created"))?;
         let mut buffer = vec![0u8; 64 * 1024];
         loop {
-            let mut read = 0;
-            // SAFETY: input owns a valid synchronous file handle; buffer is writable for its stated length and read is aligned writable storage.
-            let read_ok = unsafe {
-                ReadFile(
-                    input.raw(),
-                    buffer.as_mut_ptr() as *mut c_void,
-                    buffer.len() as u32,
-                    &mut read,
-                    std::ptr::null_mut(),
-                )
-            };
-            if read_ok == 0 {
-                return Err(package_error("io_error", "artifact read failed"));
-            }
+            let read = input
+                .read(&mut buffer)
+                .map_err(|_| package_error("io_error", "artifact read failed"))?;
             if read == 0 {
                 break;
             }
-            let mut written = 0;
-            // SAFETY: output owns a valid synchronous file handle; buffer remains initialized and live for exactly read bytes, and written is writable storage.
-            let write_ok = unsafe {
-                WriteFile(
-                    output.raw(),
-                    buffer.as_ptr() as *const c_void,
-                    read,
-                    &mut written,
-                    std::ptr::null_mut(),
-                )
-            };
-            if write_ok == 0 || written != read {
-                return Err(package_error("io_error", "protected artifact copy failed"));
-            }
+            output
+                .write_all(&buffer[..read])
+                .map_err(|_| package_error("io_error", "protected artifact copy failed"))?;
         }
-        // SAFETY: output owns a valid file handle and retains exclusive ownership through the flush.
-        let flushed = unsafe { FlushFileBuffers(output.raw()) };
-        if flushed == 0 {
-            return Err(package_error("io_error", "protected artifact flush failed"));
-        }
+        output
+            .sync_all()
+            .map_err(|_| package_error("io_error", "protected artifact flush failed"))?;
         Ok(())
     }
 
     fn wide_path(path: &Path) -> Vec<u16> {
         path.as_os_str().encode_wide().collect()
-    }
-
-    fn wide_nul(path: &Path) -> Vec<u16> {
-        let mut value = wide_path(path);
-        value.push(0);
-        value
     }
 }
