@@ -52,18 +52,26 @@ if ($parseErrors.Count -ne 0) {
   throw "Release plugin generator has PowerShell syntax errors: $($parseErrors[0])"
 }
 $generator = Get-Content -LiteralPath $generatorPath -Raw
-foreach ($required in @('4032-byte ML-DSA-65 key', 'official-2026-mldsa65',
+foreach ($required in @('official-2026-mldsa65', 'Ed25519SigningKey', 'sign-release-metadata.ps1',
     'releases/download/v$Version', 'manifest.sig.json', 'index.sig.json', 'release-tools',
-    '--write-signature-envelope-v2', 'foreach ($plugin in @($inventory.packages))',
+    'foreach ($plugin in @($inventory.packages))',
     '--verify-repository-v2', '--install')) {
   if ($generator.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
     throw "Release plugin generator is missing required production contract: $required"
   }
 }
+$metadataSigner = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'sign-release-metadata.ps1') -Raw
+foreach ($required in @('4032-byte ML-DSA-65 key', '32-byte seed', 'official-2026-mldsa65',
+    'official-2026-ed25519', '--sign-ed25519', '--write-signature-envelope-v2')) {
+  if ($metadataSigner.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
+    throw "Release metadata signer is missing required dual-signature contract: $required"
+  }
+}
 $releaseSigner = Get-Content -LiteralPath (Join-Path $repoRoot 'rust/release-pqc-signer/src/main.rs') -Raw
-foreach ($required in @('--sign INPUT SIGNATURE_RAW SECRET_KEY', 'signature=mldsa65')) {
+foreach ($required in @('--sign INPUT SIGNATURE_RAW SECRET_KEY', 'signature=mldsa65',
+    '--sign-ed25519 INPUT SIGNATURE_RAW SEED', 'signature=ed25519')) {
   if ($releaseSigner.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
-    throw "Release signer is missing raw ML-DSA signature contract: $required"
+    throw "Release signer is missing raw signature contract: $required"
   }
 }
 foreach ($forbidden in @('"format_version"', '"signed_object"', '"signature_base64"')) {
@@ -81,7 +89,7 @@ if ($packageCli.IndexOf('--write-signature-envelope-v2', [StringComparison]::Ord
   throw 'Rust Package Core CLI must own v2 signature-envelope formatting.'
 }
 $workflow = Get-Content -LiteralPath (Join-Path $repoRoot '.github/workflows/release.yml') -Raw
-foreach ($required in @('PQC_SIGNING_SECRET_KEY_BASE64', 'RUNNER_TEMP',
+foreach ($required in @('PQC_SIGNING_SECRET_KEY_BASE64', 'ED25519_SIGNING_SEED_BASE64', 'RUNNER_TEMP',
     'FCITX_RELEASE_PLUGIN_SEQUENCE', 'Enforce monotonic official plugin sequence',
     'gh release download')) {
   if ($workflow.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
@@ -96,7 +104,7 @@ foreach ($required in @('environment: release', 'PQC_SIGNING_SECRET_KEY_BASE64',
   }
 }
 $refreshScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'refresh-plugin-index.ps1') -Raw
-foreach ($required in @('--sign', '--write-signature-envelope-v2', '--verify-repository-v2')) {
+foreach ($required in @('sign-release-metadata.ps1', 'Ed25519SigningKey', '--verify-repository-v2')) {
   if ($refreshScript.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
     throw "Plugin index refresh is missing signing step: $required"
   }

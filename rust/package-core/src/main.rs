@@ -91,35 +91,71 @@ fn run() -> Result<(), Box<dyn Error>> {
                 {
                     "repository-index" => SignedObject::RepositoryIndex,
                     "package-manifest" => SignedObject::PackageManifest,
+                    "release-manifest" => SignedObject::ReleaseManifest,
                     _ => return Err("signature envelope object is invalid".into()),
                 };
-                let key_id = args
-                    .next()
-                    .ok_or("--write-signature-envelope-v2 requires KEY_ID")?;
-                let algorithm = match args
-                    .next()
-                    .as_deref()
-                    .ok_or("--write-signature-envelope-v2 requires ALGORITHM")?
-                {
-                    "mldsa65" => TrustAlgorithm::Mldsa65,
-                    _ => return Err("signature envelope algorithm is invalid".into()),
-                };
-                let raw_signature = read_bounded_bytes(
-                    args.next()
-                        .ok_or("--write-signature-envelope-v2 requires RAW_SIGNATURE")?,
-                    16 * 1024,
-                )?;
-                let output = args
-                    .next()
+                let mut rest = args.by_ref().collect::<Vec<_>>();
+                let output = rest
+                    .pop()
                     .ok_or("--write-signature-envelope-v2 requires OUTPUT")?;
-                let envelope = format_signature_envelope_v2(
-                    signed_object,
-                    &key_id,
-                    algorithm,
-                    &raw_signature,
-                )?;
+                if rest.is_empty() || !rest.len().is_multiple_of(3) {
+                    return Err(
+                        "--write-signature-envelope-v2 requires KEY_ID ALGORITHM RAW_SIGNATURE groups"
+                            .into(),
+                    );
+                }
+                let mut entries = Vec::new();
+                for group in rest.chunks(3) {
+                    let algorithm = match group[1].as_str() {
+                        "mldsa65" => TrustAlgorithm::Mldsa65,
+                        "ed25519" => TrustAlgorithm::Ed25519,
+                        _ => return Err("signature envelope algorithm is invalid".into()),
+                    };
+                    entries.push((
+                        group[0].as_str(),
+                        algorithm,
+                        read_bounded_bytes(&group[2], 16 * 1024)?,
+                    ));
+                }
+                let borrowed = entries
+                    .iter()
+                    .map(|(key_id, algorithm, signature)| {
+                        (*key_id, algorithm.clone(), signature.as_slice())
+                    })
+                    .collect::<Vec<_>>();
+                let envelope = format_signature_envelope_v2(signed_object, &borrowed)?;
                 std::fs::write(output, envelope)?;
                 println!("signature_envelope=written");
+                return Ok(());
+            }
+            "--verify-release-manifest" => {
+                let manifest_path = args
+                    .next()
+                    .ok_or("--verify-release-manifest requires MANIFEST")?;
+                let signature_path = args
+                    .next()
+                    .ok_or("--verify-release-manifest requires SIG_JSON")?;
+                let keyring_path = args
+                    .next()
+                    .ok_or("--verify-release-manifest requires KEYRING")?;
+                let manifest_bytes = read_bounded_bytes(manifest_path, 1024 * 1024)?;
+                let signature = read_bounded_text(signature_path, 1024 * 1024)?;
+                let envelope = parse_signature_envelope(&signature, SignedObject::ReleaseManifest)?;
+                let keys = read_trusted_keys(keyring_path)?;
+                let key_id = envelope
+                    .signatures()
+                    .iter()
+                    .find(|entry| entry.algorithm() == &TrustAlgorithm::Mldsa65)
+                    .map(|entry| entry.key_id().clone())
+                    .ok_or("release manifest envelope has no ML-DSA-65 signature")?;
+                verify_signature_envelope(
+                    &manifest_bytes,
+                    &envelope,
+                    &keys,
+                    SignedObject::ReleaseManifest,
+                    &key_id,
+                )?;
+                println!("release_manifest_signature=verified");
                 return Ok(());
             }
             "--install" => {

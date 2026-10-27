@@ -12,6 +12,7 @@ use std::sync::atomic::{compiler_fence, Ordering};
 const MLDSA65_PUBLIC_KEY_BYTES: usize = 1952;
 const MLDSA65_SECRET_KEY_BYTES: usize = 4032;
 const MLDSA65_SIGNATURE_BYTES: usize = 3309;
+const ED25519_SEED_BYTES: usize = 32;
 const MAXIMUM_METADATA_BYTES: u64 = 1024 * 1024;
 const MAXIMUM_PAYLOAD_BYTES: u64 = 64 * 1024 * 1024;
 const BCRYPT_USE_SYSTEM_PREFERRED_RNG: u32 = 0x0000_0002;
@@ -143,12 +144,37 @@ fn run() -> Result<(), Box<dyn Error>> {
             println!("signature=mldsa65");
             Ok(())
         }
+        [command, input, signature_path, seed_path, expected_public]
+            if command == "--sign-ed25519" =>
+        {
+            let metadata = read_bounded(input, MAXIMUM_METADATA_BYTES)?;
+            let seed = SecretBytes(read_bounded(seed_path, ED25519_SEED_BYTES as u64)?);
+            let seed_bytes: [u8; ED25519_SEED_BYTES] = seed
+                .0
+                .as_slice()
+                .try_into()
+                .map_err(|_| "Ed25519 seed must be exactly 32 bytes")?;
+            let key_pair =
+                ed25519_compact::KeyPair::try_from_seed(ed25519_compact::Seed::new(seed_bytes))
+                    .map_err(|_| "Ed25519 seed is invalid")?;
+            if key_pair.pk.as_slice() != decode_base64(expected_public)?.as_slice() {
+                return Err("seed does not match the official trusted Ed25519 public key".into());
+            }
+            let signature = key_pair.sk.sign(&metadata, None);
+            key_pair
+                .pk
+                .verify(&metadata, &signature)
+                .map_err(|_| "Ed25519 signature self-check failed")?;
+            fs::write(signature_path, signature.as_slice())?;
+            println!("signature=ed25519");
+            Ok(())
+        }
         _ => Err(usage().into()),
     }
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  fcitx5-release-pqc-signer --sign INPUT SIGNATURE_RAW SECRET_KEY EXPECTED_PUBLIC_KEY_BASE64\n  fcitx5-release-pqc-signer --blake3 INPUT"
+    "Usage:\n  fcitx5-release-pqc-signer --sign INPUT SIGNATURE_RAW SECRET_KEY EXPECTED_PUBLIC_KEY_BASE64\n  fcitx5-release-pqc-signer --sign-ed25519 INPUT SIGNATURE_RAW SEED EXPECTED_PUBLIC_KEY_BASE64\n  fcitx5-release-pqc-signer --blake3 INPUT"
 }
 
 fn read_bounded(path: impl AsRef<Path>, maximum: u64) -> Result<Vec<u8>, Box<dyn Error>> {

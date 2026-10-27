@@ -4,10 +4,11 @@ param(
   [ValidateSet('stable', 'beta', 'nightly')] [string] $Channel = 'stable',
   [string] $CertificateThumbprint = '',
   # Publish without Authenticode signatures while no code signing certificate is available.
-  # Packages, the plugin index and updates are still ML-DSA signed.
+  # Packages, the plugin index and the release manifest are still ML-DSA-65 + Ed25519 signed.
   [switch] $WithoutAuthenticode,
   [Parameter(Mandatory)] [string] $TrustedKeyring,
   [Parameter(Mandatory)] [string] $PluginSigningKey,
+  [Parameter(Mandatory)] [string] $Ed25519SigningKey,
   [Parameter(Mandatory)] [ValidateRange(1, [UInt64]::MaxValue)] [UInt64] $PluginReleaseSequence,
   [string] $TimestampUrl = 'http://timestamp.digicert.com'
 )
@@ -79,7 +80,8 @@ if ($authenticode -and $forkPluginPe.Count -gt 0) {
 }
 & (Join-Path $PSScriptRoot 'release-plugin-artifacts.ps1') `
   -Version $Version -Channel $Channel -ReleaseSequence $PluginReleaseSequence -StageRoot $stage `
-  -TrustedKeyring $TrustedKeyring -SigningKey $PluginSigningKey -ForkPayloadRoot $forkPluginRoot
+  -TrustedKeyring $TrustedKeyring -SigningKey $PluginSigningKey -Ed25519SigningKey $Ed25519SigningKey `
+  -ForkPayloadRoot $forkPluginRoot
 
 $runtimeParent = Join-Path $stage 'runtime'
 $files = @(Get-ChildItem -LiteralPath $stage -File -Recurse |
@@ -148,6 +150,13 @@ $releaseManifest = [ordered]@{ format_version = 1; product = 'fcitx5-windows-nex
 $releaseManifestPath = Join-Path $artifacts "release-manifest-$Version$suffix.json"
 [IO.File]::WriteAllText($releaseManifestPath, (($releaseManifest | ConvertTo-Json -Depth 8) + "`n"),
   [Text.UTF8Encoding]::new($false))
+# The release manifest pins the SHA-256 of the installer, the portable archive
+# and every plugin asset, so its dual signature covers all of them.
+$packageCli = Join-Path $stage 'bin/fcitx5-package.exe'
+& (Join-Path $PSScriptRoot 'sign-release-metadata.ps1') -Path $releaseManifestPath `
+  -SignedObject 'release-manifest' -SignaturePath ($releaseManifestPath -replace '\.json$', '.sig.json') `
+  -TrustedKeyring $TrustedKeyring -SigningKey $PluginSigningKey -Ed25519SigningKey $Ed25519SigningKey `
+  -Signer (Join-Path $outRoot 'release-tools/fcitx5-release-pqc-signer.exe') -PackageCli $packageCli
 if ($authenticode) {
   Add-Type -AssemblyName System.Security.Cryptography.Pkcs
   $cert = Get-Item "Cert:\CurrentUser\My\$($CertificateThumbprint.Replace(' ',''))" -ErrorAction Stop
@@ -170,5 +179,6 @@ $provenance = [ordered]@{ _type = 'https://in-toto.io/Statement/v1';
   (($provenance | ConvertTo-Json -Depth 12) + "`n"), [Text.UTF8Encoding]::new($false))
 & (Join-Path $PSScriptRoot 'test-release-artifacts.ps1') `
   -ArtifactDirectory $artifacts -ReleaseManifest $releaseManifestPath `
+  -PackageCli $packageCli -TrustedKeyring $TrustedKeyring `
   -WithoutAuthenticode:$WithoutAuthenticode
 Write-Host "Signed release gate passed without rebuilding source: $artifacts"
