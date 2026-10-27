@@ -1003,6 +1003,8 @@ const COLD_LAUNCH_DEADLINE_MILLISECONDS: u32 = 20000;
 const INPUT_DEADLINE_MILLISECONDS: u32 = 250;
 const ENGINE_RETRY_BASE_MILLISECONDS: u64 = 1000;
 const ENGINE_RETRY_MAX_MILLISECONDS: u64 = 30000;
+// The engine drops a connection after 60 seconds without a request.
+const ENGINE_IDLE_RECONNECT_MILLISECONDS: u64 = 45000;
 const SURROUNDING_LIMIT_UTF16: i32 = 128;
 const PEER_POLICY_EXACT_EXECUTABLE: u32 = 0;
 const PEER_POLICY_DEVELOPMENT_SAME_USER_SESSION: u32 = 1;
@@ -1361,6 +1363,7 @@ struct EngineClient {
     module_path: Vec<u16>,
     failure_streak: u32,
     retry_at: u64,
+    last_used: u64,
 }
 
 impl EngineClient {
@@ -1447,6 +1450,7 @@ impl EngineClient {
         {
             return None;
         }
+        self.drop_stale_connection(common::fcitx5_windows_common_tick_milliseconds());
         if self.pipe.is_none() {
             self.follow_current_generation();
         }
@@ -1463,6 +1467,23 @@ impl EngineClient {
         self.disconnect();
         self.record_failure();
         None
+    }
+
+    /// A connection the engine has closed (idle timeout or restart) only fails
+    /// on the next write, which would lose that key and start a back-off.
+    /// Reconnect before the engine's idle timeout and whenever the server end
+    /// is already gone.
+    fn drop_stale_connection(&mut self, now: u64) {
+        let Some(pipe) = &self.pipe else {
+            return;
+        };
+        if now.saturating_sub(self.last_used) < ENGINE_IDLE_RECONNECT_MILLISECONDS
+            && common::fcitx5_windows_common_pipe_client_connected(pipe.0) != 0
+        {
+            return;
+        }
+        trace_event("engine_client_stale_connection");
+        self.disconnect();
     }
 
     fn record_failure(&mut self) {
@@ -1587,6 +1608,7 @@ impl EngineClient {
             return false;
         }
         self.pipe = Some(PipeHandle(pipe));
+        self.last_used = common::fcitx5_windows_common_tick_milliseconds();
         trace_event("engine_client_connect_success");
         true
     }
@@ -1802,6 +1824,7 @@ impl EngineClient {
             return None;
         }
         response.truncate(transferred.response_len);
+        self.last_used = common::fcitx5_windows_common_tick_milliseconds();
         Some(response)
     }
 
@@ -4594,6 +4617,58 @@ mod tests {
         let started = common::fcitx5_windows_common_tick_milliseconds();
         assert!(client.begin_request(true).is_none());
         assert!(common::fcitx5_windows_common_tick_milliseconds() - started < 100);
+    }
+
+    #[test]
+    fn engine_client_drops_closed_or_idle_connections_before_the_next_key() {
+        let identity = common::CurrentUserRuntimeIdentity::current().expect("identity");
+        let security = identity.security_attributes().expect("security");
+        let name = format!(
+            r"\\.\pipe\Fcitx5WindowsNext.TsfStale.{}",
+            std::process::id()
+        );
+        let wide = name.encode_utf16().collect::<Vec<_>>();
+        let connected_client = |server: &common::NamedPipeServer| {
+            let _ = server;
+            // SAFETY: `wide` is a live UTF-16 pipe name; the handle is owned by
+            // the returned client.
+            let pipe = unsafe {
+                common::fcitx5_windows_common_open_pipe_client_utf16(
+                    wide.as_ptr(),
+                    wide.len(),
+                    common::fcitx5_windows_common_deadline_after_milliseconds(1000),
+                    1,
+                )
+            };
+            assert!(PipeHandle::is_valid(pipe));
+            let mut client = EngineClient {
+                pipe: Some(PipeHandle(pipe)),
+                handshake_complete: true,
+                last_used: common::fcitx5_windows_common_tick_milliseconds(),
+                ..EngineClient::default()
+            };
+            client.contexts.insert(1, EngineContextState::default());
+            client
+        };
+
+        let server = common::NamedPipeServer::create(std::ffi::OsStr::new(&name), &security, 4096)
+            .expect("server");
+        let mut client = connected_client(&server);
+        client.drop_stale_connection(client.last_used);
+        assert!(client.pipe.is_some());
+        client.drop_stale_connection(client.last_used + ENGINE_IDLE_RECONNECT_MILLISECONDS);
+        assert!(client.pipe.is_none());
+        assert!(!client.handshake_complete);
+        assert!(client.contexts.is_empty());
+        drop(server);
+
+        let server = common::NamedPipeServer::create(std::ffi::OsStr::new(&name), &security, 4096)
+            .expect("server");
+        let mut client = connected_client(&server);
+        drop(server);
+        client.drop_stale_connection(client.last_used);
+        assert!(client.pipe.is_none());
+        assert!(client.contexts.is_empty());
     }
 
     #[test]
