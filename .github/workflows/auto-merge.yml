@@ -92,6 +92,14 @@ jobs:
                 upstream/*) generator=sync-upstream.yml ;;
                 *) generator= ;;
               esac
+              # A generator still running may have built this branch from an
+              # older main a moment ago; let it finish its own dispatches first.
+              if [ -n "$generator" ] && [ -n "$(gh run list --workflow "$generator" --limit 5 \
+                    --json status --jq '.[] | select(.status != "completed") | .status')" ]; then
+                echo "Behind main by $behind commits, but $generator is still running."
+                echo "::endgroup::"
+                continue
+              fi
               if [ -n "$generator" ]; then
                 echo "Behind main by $behind commits; reopening it from $generator."
                 gh pr close "$pr" --delete-branch \
