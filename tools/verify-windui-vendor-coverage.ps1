@@ -40,18 +40,12 @@ foreach ($path in @($vendorDir, $patchDir, $depsFile, $syncScript)) {
   if (-not (Test-Path -LiteralPath $path)) { Fail "missing required path: $path" }
 }
 
-# The pin is owned by two independent records; require them to agree.
+# The pin lives in dependencies.json.
 $deps = Get-Content -LiteralPath $depsFile -Raw | ConvertFrom-Json
 $windUi = $deps.packages | Where-Object { $_.name -eq 'wind-ui-rust' }
 if (-not $windUi) { Fail 'third_party/dependencies.json has no wind-ui-rust entry' }
 $depCommit = ($windUi.source -split '/')[-1]
-$constMatch = Select-String -LiteralPath (Join-Path $repoRoot 'rust/config-app/src/main.rs') `
-  -Pattern 'WIND_UI_RUST_REFERENCE_COMMIT: &str = "([0-9a-f]+)"'
-if (-not $constMatch) { Fail 'WIND_UI_RUST_REFERENCE_COMMIT not found in rust/config-app/src/main.rs' }
-$constCommit = $constMatch.Matches[0].Groups[1].Value
-if ($depCommit -ne $constCommit) {
-  Fail "pin mismatch: dependencies.json=$depCommit config-app=$constCommit"
-}
+if ($depCommit -notmatch '^[0-9a-f]{40}$') { Fail "wind-ui-rust source does not end in a commit: $($windUi.source)" }
 Write-Output "pin: $depCommit"
 
 # Registered patch list, in the order the sync script applies them.

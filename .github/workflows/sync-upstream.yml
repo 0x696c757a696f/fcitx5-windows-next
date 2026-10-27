@@ -56,9 +56,9 @@ jobs:
           title: 'chore(vendor): sync wind-ui-rust to upstream HEAD'
           body: |
             Automated upstream sync of the vendored `huanfeng/wind-ui-rust`
-            path dependency. Re-applies the two repo-local Windows portability
-            patches (fail-closed) and updates the pin in `dependencies.json`
-            and the config-app reference-commit constant.
+            path dependency. Re-applies the local patch queue in
+            `third_party/patches/wind-ui-rust` (3-way, fail-closed on a real
+            conflict) and updates the pin in `dependencies.json`.
 
             Merged automatically once Core passes on this commit.
 

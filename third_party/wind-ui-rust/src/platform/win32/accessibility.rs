@@ -663,7 +663,7 @@ mod tests {
         assert_eq!(read(1), id.index() as i32);
         assert_eq!(read(2), id.generation() as i32);
         // SAFETY: UIA never received this array, so ownership is still ours to release.
-        unsafe { SafeArrayDestroy(array) };
+        let _ = unsafe { SafeArrayDestroy(array) };
     }
 
     #[test]

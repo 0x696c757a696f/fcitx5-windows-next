@@ -83,18 +83,16 @@ fn run_host() -> Result<(), String> {
 
 #[cfg(windows)]
 fn run_client() -> Result<(), String> {
-    use std::time::{Duration, Instant};
-    use windows::core::w;
-    use windows::Win32::Foundation::HWND;
+    use std::time::Duration;
+
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
     };
     use windows::Win32::UI::Accessibility::{
         CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
-        TreeScope_Descendants, UIA_ButtonControlTypeId, UIA_InvokePatternId, UIA_TextControlTypeId,
+        UIA_ButtonControlTypeId, UIA_InvokePatternId, UIA_TextControlTypeId,
         UIA_WindowControlTypeId,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowThreadProcessId};
 
     // SAFETY: the COM apartment is initialized for this thread before any UIA object is created;
     // RPC_E_CHANGED_MODE only means another apartment mode is already active, which is harmless.
@@ -105,7 +103,6 @@ fn run_client() -> Result<(), String> {
         .arg("--host")
         .spawn()
         .map_err(|error| format!("host spawn failed: {error}"))?;
-    let host_pid = host.id();
 
     let outcome = (|| -> Result<(), String> {
         let hwnd = wait_for_host_window(&mut host)?;

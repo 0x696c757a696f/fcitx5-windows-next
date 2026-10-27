@@ -19,8 +19,13 @@ param(
 #                build.rs/assets only embed an icon into upstream example exes;
 #                the path dependency builds the library, which needs neither.
 #
-# The pin is recorded in third_party/dependencies.json and in the constant
-# WIND_UI_RUST_REFERENCE_COMMIT in rust/config-app/src/main.rs.
+# The pin is recorded in third_party/dependencies.json.
+#
+# Local changes live in third_party/patches/wind-ui-rust as a short queue of
+# single-purpose patches, applied in order. They are applied with --3way, so an
+# upstream edit that only moves the surrounding context (the 2026-10-26 break was
+# one changed import line in src/lib.rs) merges on its own; a real conflict still
+# fails the sync.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -31,7 +36,6 @@ $repoRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $vendorDir = Join-Path $repoRoot 'third_party/wind-ui-rust'
 $patchDir = Join-Path $repoRoot 'third_party/patches/wind-ui-rust'
 $depsFile = Join-Path $repoRoot 'third_party/dependencies.json'
-$configAppMain = Join-Path $repoRoot 'rust/config-app/src/main.rs'
 $tempParent = Join-Path $repoRoot 'out/tmp'
 New-Item -ItemType Directory -Force -Path $tempParent | Out-Null
 $stamp = [System.Guid]::NewGuid().ToString('N')
@@ -121,12 +125,18 @@ try {
     throw "Resolved HEAD $($actual.Trim()) does not match requested commit $Commit"
   }
 
-  # Upstream now contains both Windows fixes previously carried for issue #17.
-  # Only this repository's product-specific accessibility delta remains local.
-  # Check it against the clean upstream checkout before copying anything into
-  # the repository.
+  # Check the local patch queue against the clean upstream checkout before
+  # copying anything into the repository. Keep this list in apply order; the
+  # coverage guard (tools/verify-windui-vendor-coverage.ps1) reads it.
   $patches = @(
-    (Join-Path $patchDir 'windui-local-product-delta.patch')
+    # Declares cfg(gpu_backend), normally declared by the build.rs we do not vendor.
+    (Join-Path $patchDir 'windui-vendor-check-cfg.patch'),
+    # Copies packed NOTIFYICONDATAW fields before asserting (unaligned refs on x86).
+    (Join-Path $patchDir 'windui-tray-packed-field-tests.patch'),
+    # UI Automation provider for screen readers (the product-specific delta).
+    (Join-Path $patchDir 'windui-uia-accessibility.patch'),
+    # Manual UIA smoke test binary for the provider above.
+    (Join-Path $patchDir 'windui-uia-smoke-example.patch')
   )
   foreach ($patch in $patches) {
     if (-not (Test-Path -LiteralPath $patch -PathType Leaf)) {
@@ -134,15 +144,18 @@ try {
     }
   }
   try {
+    # Later patches may depend on earlier ones, so check and apply each in turn.
+    # --3way falls back to a merge against the patch's recorded preimage blobs,
+    # which the full upstream clone has; it leaves conflict markers and exits
+    # non-zero on a real conflict.
     foreach ($patch in $patches) {
+      $patchName = [System.IO.Path]::GetFileName($patch)
       Invoke-Checked -FilePath 'git.exe' -Arguments @(
-        '-C', $cloneDir, 'apply', '--check', '--whitespace=nowarn', $patch
-      ) -Name "git apply --check $([System.IO.Path]::GetFileName($patch))"
-    }
-    foreach ($patch in $patches) {
+        '-C', $cloneDir, 'apply', '--check', '--3way', '--whitespace=nowarn', $patch
+      ) -Name "git apply --check $patchName"
       Invoke-Checked -FilePath 'git.exe' -Arguments @(
-        '-C', $cloneDir, 'apply', '--whitespace=nowarn', $patch
-      ) -Name "git apply $([System.IO.Path]::GetFileName($patch))"
+        '-C', $cloneDir, 'apply', '--3way', '--whitespace=nowarn', $patch
+      ) -Name "git apply $patchName"
     }
   } catch {
     throw "local WindUI product delta no longer applies to upstream. $($_.Exception.Message)"
@@ -245,26 +258,6 @@ try {
   $depsJson = $depsJson -replace "`r`n", "`n"
   if (-not $depsJson.EndsWith("`n")) { $depsJson += "`n" }
   [System.IO.File]::WriteAllText($depsFile, $depsJson,
-    [System.Text.UTF8Encoding]::new($false))
-
-  # Update the reference-commit constant (any prior pin) to the new commit,
-  # preserving the existing formatting.
-  $configText = [System.IO.File]::ReadAllText($configAppMain)
-  $configText = $configText -replace
-    'WIND_UI_RUST_REFERENCE_COMMIT: &str = "[0-9a-f]{40}"',
-    "WIND_UI_RUST_REFERENCE_COMMIT: &str = `"$Commit`""
-  # Multi-line assert_eq!(\n evidence.reference_commit,<newline>  "<hash>"). Replace the quoted
-  # hash on the indented line that follows `evidence.reference_commit,`.
-  $configText = $configText -replace
-    '(evidence\.reference_commit,\r?\n[ \t]*)"[0-9a-f]{40}"',
-    ('${1}"' + $Commit + '"')
-  # .contains("\"windui_reference_commit\":\"<hash>\"") - the Rust source
-  # stores the escaped quote pair (backslash-quote), so the regex must match
-  # \"...\" and keep that escaped form around the new commit.
-  $configText = $configText -replace
-    '("\\"windui_reference_commit\\":\\")[0-9a-f]{40}(\\")',
-    ('${1}' + $Commit + '${2}')
-  [System.IO.File]::WriteAllText($configAppMain, $configText,
     [System.Text.UTF8Encoding]::new($false))
 
   # Run the affected consumer tests.

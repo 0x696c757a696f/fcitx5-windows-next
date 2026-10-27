@@ -1,6 +1,6 @@
 [package]
 name = "windui"
-version = "0.30.0"
+version = "0.31.0"
 edition = "2021"
 description = "轻量跨平台桌面 GUI：tiny-skia 渲染 + 平台原生窗口/文字（Windows: Win32+DirectWrite；macOS: Cocoa+CoreText；Linux: X11/Wayland+fontconfig）"
 authors = ["huanfeng <huanfengf@gmail.com>"]
@@ -113,7 +113,6 @@ windows = { version = "0.62", features = [
     "Win32_System_Threading",
     "Win32_Security",
     "Win32_System_Ole",
-    "Win32_System_Variant",
     # 拖出（DoDragDrop）：IDropSource 的按键位在 SystemServices，IDataObject 的
     # STGMEDIUM 挂在 Com_StructuredStorage 下。
     "Win32_System_SystemServices",
