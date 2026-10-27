@@ -1651,9 +1651,16 @@ fn windui_settings_root(
         .iter()
         .map(|theme| {
             if theme.id == DEFAULT_THEME_ID {
-                locale.text("theme.default")
-            } else {
-                theme.name.clone()
+                return locale.text("theme.default");
+            }
+            let builtin = theme
+                .id
+                .strip_prefix("builtin:")
+                .map(|name| format!("theme.builtin.{name}"))
+                .map(|key| (locale.text(&key), key));
+            match builtin {
+                Some((text, key)) if text != key => text,
+                _ => theme.name.clone(),
             }
         })
         .collect();

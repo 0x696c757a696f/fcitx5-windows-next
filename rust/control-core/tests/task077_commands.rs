@@ -174,7 +174,7 @@ fn theme_mutations_are_validated_atomic_and_scoped() {
     let fixture = root();
     let install = fixture.join("install");
     let data = fixture.join("data");
-    let builtin = install.join("resources/themes/default/theme.toml");
+    let builtin = install.join("themes/default/theme.toml");
     fs::create_dir_all(builtin.parent().expect("builtin parent")).expect("builtin directory");
     let theme = "format_version = 1\n[theme]\nid = \"default\"\nname = \"Default\"\nversion = \"1\"\nlicense = \"MIT\"\ndescription = \"Built in\"\n[light.candidate.colors]\nbackground = \"#ffffff\"\n";
     fs::write(&builtin, theme).expect("builtin theme");
