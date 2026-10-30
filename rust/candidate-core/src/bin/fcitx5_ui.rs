@@ -1102,6 +1102,7 @@ impl Host {
                 scroll_mode: vc.scroll_mode,
                 max_width: self.measure_max_width,
                 window_padding_x: vc.padding_x_dip * scale,
+                window_padding_y: vc.padding_y_dip * scale,
                 anchor_stride: self.anchor_stride,
             },
             preedit: Some(preedit.as_ref()),

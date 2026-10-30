@@ -26,7 +26,7 @@ use windui::text::{DWriteEngine, TextEngine, TextStyle as WindTextStyle};
 
 use crate::axis_layout::{AxisLayoutItem, AxisLayoutResult, WritingMode};
 use crate::theme_tokens::{
-    WECHAT_GREEN_RGB, WECHAT_SELECTION_RADIUS_DIP, WECHAT_WINDOW_RADIUS_DIP, WHITE_RGB,
+    nested_corner_radius, WECHAT_GREEN_RGB, WECHAT_WINDOW_RADIUS_DIP, WHITE_RGB,
 };
 use crate::Rect;
 
@@ -125,6 +125,8 @@ pub struct RenderGeometry {
     pub max_width: f32,
     /// Outer horizontal padding already included in `max_width`.
     pub window_padding_x: f32,
+    /// Outer vertical padding between the window edge and the item rows.
+    pub window_padding_y: f32,
     /// Candidates this many positions apart share label/text/comment
     /// columns; see `horizontal_candidate_anchors`.
     pub anchor_stride: usize,
@@ -143,6 +145,7 @@ impl Default for RenderGeometry {
             scroll_mode: false,
             max_width: 0.0,
             window_padding_x: 0.0,
+            window_padding_y: 0.0,
             anchor_stride: 1,
         }
     }
@@ -940,7 +943,7 @@ fn draw_selection(
             y,
             w,
             h,
-            selection_corner_radius(input.theme.corner_radius, w, h),
+            selection_corner_radius(input, w, h),
             &WindPaint::fill(color.wind()),
         );
     }
@@ -950,10 +953,16 @@ fn draw_selection(
 /// as a second selection.
 const HOVER_ALPHA: u8 = 36;
 
-fn selection_corner_radius(window_radius: f32, width: f32, height: f32) -> f32 {
-    WECHAT_SELECTION_RADIUS_DIP
-        .min((window_radius - 2.0).max(0.0))
-        .min(width.min(height) / 2.0)
+/// The selection sits inside the rounded window, so its corners stay
+/// concentric with the window's: radius = window radius - the inset between
+/// the window edge and the selection. Every candidate uses the same inset, so
+/// all selections share one radius.
+fn selection_corner_radius(input: &RenderWindowInput<'_>, width: f32, height: f32) -> f32 {
+    let geometry = input.geometry;
+    let theme = input.theme;
+    let inset_x = geometry.window_padding_x + geometry.item_padding_x - theme.selection_inflate_x;
+    let inset_y = geometry.window_padding_y + geometry.item_padding_y - theme.selection_inflate_y;
+    nested_corner_radius(theme.corner_radius, inset_x.min(inset_y)).min(width.min(height) / 2.0)
 }
 
 fn draw_candidate_horizontal(
@@ -1618,6 +1627,7 @@ mod tests {
             scroll_mode: false,
             max_width: 0.0,
             window_padding_x: 0.0,
+            window_padding_y: 0.0,
             anchor_stride: 1,
         }
     }

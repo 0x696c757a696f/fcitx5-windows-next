@@ -1,9 +1,15 @@
 #![forbid(unsafe_code)]
 
+mod design;
 mod fcitx_config;
 mod fcitx_config_page;
 mod input_methods;
 mod settings_locale;
+use design::{
+    FORM_ROW_HEIGHT, NAV_ITEM_HEIGHT, RADIUS_LG, RADIUS_MD, RADIUS_XL, SPACE_2XS, SPACE_LG,
+    SPACE_MD, SPACE_SM, SPACE_XL, SPACE_XS, TEXT_2XL, TEXT_BASE, TEXT_SM, TEXT_XS, TITLEBAR_HEIGHT,
+    WEIGHT_SEMIBOLD,
+};
 use input_methods::{discover_input_methods, input_method_directories, InputMethodChoice};
 use settings_locale::{is_supported_locale, LocaleCatalog};
 
@@ -48,10 +54,10 @@ fn windui_settings_shell_theme(dark: bool) -> WindUiTheme {
         WindUiTheme::default()
     };
     apply_wechat_green_palette(&mut theme, dark);
-    theme.form.label_size = Some(15.0);
-    theme.form.label_weight = Some(600);
-    theme.form.desc_size = Some(12.5);
-    theme.form.row_height = Some(44);
+    theme.form.label_size = Some(TEXT_SM);
+    theme.form.label_weight = Some(WEIGHT_SEMIBOLD);
+    theme.form.desc_size = Some(TEXT_XS);
+    theme.form.row_height = Some(FORM_ROW_HEIGHT);
     theme.form.row_pad_y = Some(0);
     theme
 }
@@ -141,14 +147,12 @@ fn apply_wechat_green_palette(theme: &mut WindUiTheme, dark: bool) {
     if dark {
         theme.palette.bg = WindUiColor::hex(0x181818);
         theme.palette.surface = WindUiColor::hex(0x1F1F1F);
-        theme.palette.surface_alt = WindUiColor::hex(0x262626);
-        theme.palette.border = WindUiColor::hex(0x303030);
-        theme.palette.track = WindUiColor::hex(0x303030);
+        theme.palette.surface_alt = WindUiColor::hex(0x272727);
+        theme.palette.border = WindUiColor::hex(0x313131);
+        theme.palette.track = WindUiColor::hex(0x313131);
         theme.palette.divider = WindUiColor::hex(0x2A2A2A);
     }
 }
-
-const WINDUI_SETTINGS_TITLEBAR_HEIGHT: i32 = 44;
 
 const FCITX5_LOGO_PNG: &[u8] = include_bytes!("../../../resources/icons/fcitx5-256.png");
 
@@ -170,31 +174,31 @@ fn windui_brand_logo(size: i32) -> WindUiElement {
 fn windui_settings_shell_wrap(subtitle: &str, body: WindUiElement) -> WindUiElement {
     let titlebar = WindUiElement::row()
         .width_match()
-        .height(WINDUI_SETTINGS_TITLEBAR_HEIGHT)
+        .height(TITLEBAR_HEIGHT)
         .cross(WindUiAlign::Center)
-        .padding_xy(14, 0)
-        .spacing(10)
+        .padding_xy(SPACE_MD, 0)
+        .spacing(SPACE_SM)
         .bg_role(WindUiRole::SurfaceAlt)
         .window_drag()
-        .child(windui_brand_logo(22))
+        .child(windui_brand_logo(24))
         .child(
             WindUiElement::row()
                 .cross(WindUiAlign::Center)
-                .spacing(5)
+                .spacing(SPACE_XS)
                 .child(
                     WindUiElement::label("Fcitx5")
-                        .font_size(13.0)
-                        .font_weight(600)
+                        .font_size(TEXT_SM)
+                        .font_weight(WEIGHT_SEMIBOLD)
                         .fg_role(WindUiRole::Text),
                 )
                 .child(
                     WindUiElement::label("·")
-                        .font_size(13.0)
+                        .font_size(TEXT_SM)
                         .fg_role(WindUiRole::TextDisabled),
                 )
                 .child(
                     WindUiElement::label(subtitle)
-                        .font_size(13.0)
+                        .font_size(TEXT_SM)
                         .fg_role(WindUiRole::TextMuted),
                 ),
         )
@@ -220,31 +224,20 @@ fn windui_settings_shell_wrap(subtitle: &str, body: WindUiElement) -> WindUiElem
 }
 
 fn windui_settings_section_title(title: &str) -> WindUiElement {
-    WindUiElement::row()
-        .cross(WindUiAlign::Center)
-        .spacing(10)
-        .child(
-            WindUiElement::leaf()
-                .size(4, 18)
-                .corner(2.0)
-                .bg_role(WindUiRole::Accent),
-        )
-        .child(
-            WindUiElement::label(title)
-                .font_size(15.0)
-                .font_weight(700)
-                .fg_role(WindUiRole::Text),
-        )
+    WindUiElement::label(title)
+        .font_size(TEXT_BASE)
+        .font_weight(WEIGHT_SEMIBOLD)
+        .fg_role(WindUiRole::Text)
 }
 
 fn windui_settings_card(body: WindUiElement) -> WindUiElement {
     WindUiElement::col()
         .width_match()
         .bg_role(WindUiRole::Surface)
-        .corner(12.0)
+        .corner(RADIUS_XL)
         .border_role(WindUiRole::Border, 1)
-        .padding(20)
-        .spacing(14)
+        .padding(SPACE_LG)
+        .spacing(SPACE_MD)
         .child(body)
 }
 
@@ -257,8 +250,8 @@ fn windui_settings_nav_item(
 ) -> WindUiElement {
     let chip = |active: bool| {
         WindUiElement::stack()
-            .size(26, 26)
-            .corner(7.0)
+            .size(24, 24)
+            .corner(RADIUS_MD)
             .bg_role(if active {
                 WindUiRole::Accent
             } else {
@@ -266,7 +259,7 @@ fn windui_settings_nav_item(
             })
             .child(
                 WindUiElement::label(glyph)
-                    .font_size(14.0)
+                    .font_size(TEXT_SM)
                     .fg_role(if active {
                         WindUiRole::OnAccent
                     } else {
@@ -278,19 +271,19 @@ fn windui_settings_nav_item(
 
     let on = WindUiElement::row()
         .width_match()
-        .height(38)
-        .corner(9.0)
+        .height(NAV_ITEM_HEIGHT)
+        .corner(RADIUS_LG)
         .cross(WindUiAlign::Center)
-        .spacing(10)
-        .padding_xy(10, 0)
+        .spacing(SPACE_SM)
+        .padding_xy(SPACE_MD, 0)
         .bg_role_alpha(WindUiRole::Accent, 0.12)
         .clickable()
         .on_click(move |_| fcitx_pages.close())
         .child(chip(true))
         .child(
             WindUiElement::label(&name)
-                .font_size(13.0)
-                .font_weight(600)
+                .font_size(TEXT_SM)
+                .font_weight(WEIGHT_SEMIBOLD)
                 .fg_role(WindUiRole::Accent)
                 .weight(1.0)
                 .max_lines(1),
@@ -309,15 +302,15 @@ fn windui_settings_nav_item(
             selected.set(i);
         })
         .width_match()
-        .height(38)
-        .corner(9.0)
+        .height(NAV_ITEM_HEIGHT)
+        .corner(RADIUS_LG)
         .cross(WindUiAlign::Center)
-        .spacing(10)
-        .padding_xy(10, 0)
+        .spacing(SPACE_SM)
+        .padding_xy(SPACE_MD, 0)
         .child(chip(false))
         .child(
             WindUiElement::label(&name)
-                .font_size(13.0)
+                .font_size(TEXT_SM)
                 .font_weight(500)
                 .fg_role(WindUiRole::TextMuted)
                 .weight(1.0)
@@ -327,7 +320,7 @@ fn windui_settings_nav_item(
 
     let indicator = WindUiElement::row()
         .width_match()
-        .height(38)
+        .height(NAV_ITEM_HEIGHT)
         .cross(WindUiAlign::Center)
         .child(
             WindUiElement::leaf()
@@ -340,7 +333,7 @@ fn windui_settings_nav_item(
 
     WindUiElement::stack()
         .width_match()
-        .height(38)
+        .height(NAV_ITEM_HEIGHT)
         .child(on)
         .child(off)
         .child(indicator)
@@ -350,16 +343,16 @@ fn windui_settings_page_title(title: &str, subtitle: &str) -> WindUiElement {
     WindUiElement::row()
         .width_match()
         .cross(WindUiAlign::Center)
-        .spacing(10)
+        .spacing(SPACE_SM)
         .child(
             WindUiElement::label(title)
-                .font_size(24.0)
-                .font_weight(700)
+                .font_size(TEXT_2XL)
+                .font_weight(WEIGHT_SEMIBOLD)
                 .fg_role(WindUiRole::Text),
         )
         .child(
             WindUiElement::label(subtitle)
-                .font_size(13.0)
+                .font_size(TEXT_SM)
                 .fg_role(WindUiRole::TextMuted)
                 .weight(1.0),
         )
@@ -1125,24 +1118,24 @@ fn windui_plugin_row(
         .width_match()
         .height(58)
         .cross(WindUiAlign::Center)
-        .spacing(10)
-        .padding_xy(12, 4)
+        .spacing(SPACE_SM)
+        .padding_xy(SPACE_MD, SPACE_XS)
         .bg_role(WindUiRole::SurfaceAlt)
         .child(
             WindUiElement::col()
                 .weight(1.0)
-                .spacing(2)
+                .spacing(SPACE_2XS)
                 .child(
                     WindUiElement::label(title.clone())
-                        .font_size(13.5)
-                        .font_weight(600)
+                        .font_size(TEXT_SM)
+                        .font_weight(WEIGHT_SEMIBOLD)
                         .max_lines(1)
                         .truncate(WindUiTruncate::End)
                         .tooltip(title),
                 )
                 .child(
                     WindUiElement::label(summary)
-                        .font_size(12.0)
+                        .font_size(TEXT_XS)
                         .fg_role(WindUiRole::TextMuted)
                         .max_lines(1)
                         .truncate(WindUiTruncate::End),
@@ -1150,7 +1143,7 @@ fn windui_plugin_row(
         )
         .child(
             WindUiElement::label(category)
-                .font_size(12.0)
+                .font_size(TEXT_XS)
                 .fg_role(WindUiRole::TextMuted)
                 .width(72),
         )
@@ -1312,7 +1305,7 @@ fn windui_plugins_page(
     let catalog_panel = windui_settings_card(
         WindUiElement::col()
             .fill()
-            .spacing(8)
+            .spacing(SPACE_SM)
             .child(
                 WindUiElement::label_signal(rows.map({
                     let locale = locale.clone();
@@ -1323,8 +1316,8 @@ fn windui_plugins_page(
                         )
                     }
                 }))
-                .font_size(15.0)
-                .font_weight(700),
+                .font_size(TEXT_BASE)
+                .font_weight(WEIGHT_SEMIBOLD),
             )
             .child(WindUiElement::scroll().weight(1.0).child(list)),
     )
@@ -1334,22 +1327,22 @@ fn windui_plugins_page(
         WindUiElement::scroll().fill().child(
             WindUiElement::col()
                 .width_match()
-                .spacing(12)
+                .spacing(SPACE_MD)
                 .child(
                     WindUiElement::label_signal(detail)
-                        .font_size(13.0)
-                        .font_weight(700),
+                        .font_size(TEXT_SM)
+                        .font_weight(WEIGHT_SEMIBOLD),
                 )
                 .child(
                     WindUiElement::label_signal(summary)
-                        .font_size(12.5)
+                        .font_size(TEXT_XS)
                         .fg_role(WindUiRole::TextMuted),
                 )
                 .child(WindUiElement::divider())
                 .child(WindUiElement::grid(1, 6, actions).width_match())
                 .child(
                     WindUiElement::label_signal(operation_status)
-                        .font_size(12.5)
+                        .font_size(TEXT_XS)
                         .fg_role(WindUiRole::TextMuted)
                         .width_match(),
                 )
@@ -1358,7 +1351,7 @@ fn windui_plugins_page(
                         "settings.plugins.reference_note",
                         &[("commit", FCITX5_PLUGINS_REFERENCE_COMMIT)],
                     ))
-                    .font_size(11.5)
+                    .font_size(TEXT_XS)
                     .fg_role(WindUiRole::TextMuted)
                     .width_match(),
                 ),
@@ -1368,8 +1361,8 @@ fn windui_plugins_page(
     .height_match();
     WindUiElement::col()
         .fill()
-        .padding(24)
-        .spacing(14)
+        .padding(SPACE_XL)
+        .spacing(SPACE_MD)
         .child(windui_settings_page_title(
             &locale.text("nav.packages"),
             &locale.text("settings.plugins.subtitle"),
@@ -1378,10 +1371,10 @@ fn windui_plugins_page(
             WindUiElement::row()
                 .width_match()
                 .cross(WindUiAlign::Center)
-                .spacing(10)
+                .spacing(SPACE_SM)
                 .child(
                     WindUiElement::label_signal(repository)
-                        .font_size(12.5)
+                        .font_size(TEXT_XS)
                         .fg_role(WindUiRole::TextMuted)
                         .weight(1.0),
                 )
@@ -1405,7 +1398,7 @@ fn windui_plugins_page(
             WindUiElement::row()
                 .width_match()
                 .weight(1.0)
-                .spacing(12)
+                .spacing(SPACE_MD)
                 .child(catalog_panel)
                 .child(detail_panel),
         )
@@ -1563,23 +1556,23 @@ fn windui_input_method_row(
         .width_match()
         .height(48)
         .cross(WindUiAlign::Center)
-        .spacing(8)
-        .padding_xy(12, 4)
+        .spacing(SPACE_SM)
+        .padding_xy(SPACE_MD, SPACE_XS)
         .bg_role(WindUiRole::SurfaceAlt)
         .child(
             WindUiElement::col()
                 .weight(1.0)
-                .spacing(2)
+                .spacing(SPACE_2XS)
                 .child(
                     WindUiElement::label(row.name)
-                        .font_size(13.5)
-                        .font_weight(600)
+                        .font_size(TEXT_SM)
+                        .font_weight(WEIGHT_SEMIBOLD)
                         .max_lines(1)
                         .truncate(WindUiTruncate::End),
                 )
                 .child(
                     WindUiElement::label(row.id)
-                        .font_size(12.0)
+                        .font_size(TEXT_XS)
                         .fg_role(WindUiRole::TextMuted)
                         .max_lines(1),
                 ),
@@ -1647,7 +1640,7 @@ fn windui_input_method_settings(
     let add_row = WindUiElement::row()
         .width_match()
         .cross(WindUiAlign::Center)
-        .spacing(10)
+        .spacing(SPACE_SM)
         .child(
             WindUiElement::dropdown_signal(addable_names, add_selection)
                 .weight(1.0)
@@ -1748,17 +1741,17 @@ fn windui_input_method_settings(
 
     WindUiElement::col()
         .width_match()
-        .spacing(20)
+        .spacing(SPACE_XL)
         .child(windui_settings_card(
             WindUiElement::col()
                 .width_match()
-                .spacing(12)
+                .spacing(SPACE_MD)
                 .child(windui_settings_section_title(
                     &locale.text("settings.input.section"),
                 ))
                 .child(
                     WindUiElement::label(locale.text("settings.input.list_hint"))
-                        .font_size(12.5)
+                        .font_size(TEXT_XS)
                         .fg_role(WindUiRole::TextMuted)
                         .width_match(),
                 )
@@ -1766,7 +1759,7 @@ fn windui_input_method_settings(
                 .child(add_row)
                 .child(
                     WindUiElement::label(locale.text("settings.input.add_hint"))
-                        .font_size(12.0)
+                        .font_size(TEXT_XS)
                         .fg_role(WindUiRole::TextMuted)
                         .width_match(),
                 ),
@@ -1774,7 +1767,7 @@ fn windui_input_method_settings(
         .child(windui_settings_card(
             WindUiElement::col()
                 .width_match()
-                .spacing(14)
+                .spacing(SPACE_MD)
                 .child(windui_settings_section_title(
                     &locale.text("settings.shortcuts.section"),
                 ))
@@ -1796,7 +1789,7 @@ fn windui_sign_in_startup_settings(locale: &LocaleCatalog) -> WindUiElement {
     windui_settings_card(
         WindUiElement::col()
             .width_match()
-            .spacing(14)
+            .spacing(SPACE_MD)
             .child(windui_settings_section_title(
                 &locale.text("settings.startup.section"),
             ))
@@ -1874,7 +1867,7 @@ fn windui_settings_root(
     let plugin_locale = locale.clone();
 
     const NAV_GLYPHS: [&str; 4] = ["\u{270E}", "\u{25D0}", "\u{25A4}", "\u{2699}"];
-    let mut nav_col = WindUiElement::col().width_match().spacing(3);
+    let mut nav_col = WindUiElement::col().width_match().spacing(SPACE_XS);
     for (i, (name, glyph)) in locale
         .navigation_labels()
         .into_iter()
@@ -1888,15 +1881,15 @@ fn windui_settings_root(
         .width(196)
         .height_match()
         .bg_role(WindUiRole::Bg)
-        .padding_xy(10, 12)
-        .spacing(12)
+        .padding_xy(SPACE_MD, SPACE_MD)
+        .spacing(SPACE_MD)
         .child(WindUiElement::scroll().weight(1.0).child(nav_col));
 
     let input_page = WindUiElement::scroll().fill().child(
         WindUiElement::col()
             .width_match()
-            .padding(24)
-            .spacing(20)
+            .padding(SPACE_XL)
+            .spacing(SPACE_XL)
             .child(windui_settings_page_title(
                 &locale.text("nav.general"),
                 &locale.text("settings.input.subtitle"),
@@ -1908,8 +1901,8 @@ fn windui_settings_root(
     let appearance_page = WindUiElement::scroll().fill().child(
         WindUiElement::col()
             .width_match()
-            .padding(24)
-            .spacing(20)
+            .padding(SPACE_XL)
+            .spacing(SPACE_XL)
             .child(windui_settings_page_title(
                 &locale.text("nav.appearance"),
                 &locale.text("settings.appearance.subtitle"),
@@ -1925,7 +1918,7 @@ fn windui_settings_root(
             .child(windui_settings_card(
                 WindUiElement::col()
                     .width_match()
-                    .spacing(16)
+                    .spacing(SPACE_LG)
                     .child(windui_settings_section_title(
                         &locale.text("settings.theme.section"),
                     ))
@@ -1947,7 +1940,7 @@ fn windui_settings_root(
             .child(windui_settings_card(
                 WindUiElement::col()
                     .width_match()
-                    .spacing(16)
+                    .spacing(SPACE_LG)
                     .child(windui_settings_section_title(
                         &locale.text("settings.candidate.text_section"),
                     ))
@@ -2002,8 +1995,8 @@ fn windui_settings_root(
         .width_match()
         .height(54)
         .cross(WindUiAlign::Center)
-        .padding_xy(16, 0)
-        .spacing(10)
+        .padding_xy(SPACE_LG, 0)
+        .spacing(SPACE_SM)
         .bg_role(WindUiRole::SurfaceAlt)
         .child(
             WindUiElement::stack()
@@ -2020,7 +2013,7 @@ fn windui_settings_root(
         )
         .child(
             WindUiElement::label_signal(candidate_status)
-                .font_size(12.5)
+                .font_size(TEXT_XS)
                 .fg_role(WindUiRole::TextMuted),
         );
 
@@ -2058,22 +2051,22 @@ fn windui_fcitx_addon_row(
         .width_match()
         .height(48)
         .cross(WindUiAlign::Center)
-        .spacing(8)
-        .padding_xy(12, 4)
+        .spacing(SPACE_SM)
+        .padding_xy(SPACE_MD, SPACE_XS)
         .child(
             WindUiElement::col()
                 .weight(1.0)
-                .spacing(2)
+                .spacing(SPACE_2XS)
                 .child(
                     WindUiElement::label(addon.name)
-                        .font_size(13.5)
-                        .font_weight(600)
+                        .font_size(TEXT_SM)
+                        .font_weight(WEIGHT_SEMIBOLD)
                         .max_lines(1)
                         .truncate(WindUiTruncate::End),
                 )
                 .child(
                     WindUiElement::label(addon.id)
-                        .font_size(12.0)
+                        .font_size(TEXT_XS)
                         .fg_role(WindUiRole::TextMuted)
                         .max_lines(1),
                 ),
@@ -2109,8 +2102,8 @@ fn windui_fcitx_page(fcitx_pages: FcitxConfigPages, locale: &LocaleCatalog) -> W
     let empty = fcitx_pages.lists_error_or_empty(locale.text("settings.fcitx.empty"));
     WindUiElement::col()
         .fill()
-        .padding(24)
-        .spacing(20)
+        .padding(SPACE_XL)
+        .spacing(SPACE_XL)
         .child(windui_settings_page_title(
             &locale.text("nav.fcitx"),
             &locale.text("settings.fcitx.subtitle"),
@@ -2128,25 +2121,25 @@ fn windui_fcitx_page(fcitx_pages: FcitxConfigPages, locale: &LocaleCatalog) -> W
                 .width_match()
                 .weight(1.0)
                 .bg_role(WindUiRole::Surface)
-                .corner(12.0)
+                .corner(RADIUS_XL)
                 .border_role(WindUiRole::Border, 1)
-                .padding(20)
-                .spacing(12)
+                .padding(SPACE_LG)
+                .spacing(SPACE_MD)
                 .child(
                     WindUiElement::row()
                         .width_match()
                         .cross(WindUiAlign::Center)
-                        .spacing(10)
+                        .spacing(SPACE_SM)
                         .child(
                             WindUiElement::col()
                                 .weight(1.0)
-                                .spacing(4)
+                                .spacing(SPACE_XS)
                                 .child(windui_settings_section_title(
                                     &locale.text("settings.fcitx.addons"),
                                 ))
                                 .child(
                                     WindUiElement::label(locale.text("settings.fcitx.addons_hint"))
-                                        .font_size(12.5)
+                                        .font_size(TEXT_XS)
                                         .fg_role(WindUiRole::TextMuted)
                                         .width_match(),
                                 ),
@@ -2161,7 +2154,7 @@ fn windui_fcitx_page(fcitx_pages: FcitxConfigPages, locale: &LocaleCatalog) -> W
                 )
                 .child(
                     WindUiElement::label_signal(empty)
-                        .font_size(12.5)
+                        .font_size(TEXT_XS)
                         .fg_role(WindUiRole::TextMuted)
                         .visible_when(move || configurable.with(Vec::is_empty)),
                 )
@@ -2210,7 +2203,7 @@ fn windui_settings_language_controls(
     );
     WindUiElement::col()
         .width_match()
-        .spacing(10)
+        .spacing(SPACE_SM)
         .child(WindUiElement::setting_row_desc(
             locale.text("language.selector"),
             &restart_message,
@@ -2474,7 +2467,7 @@ fn windui_appearance_mode_controls(
     locale: &LocaleCatalog,
 ) -> WindUiElement {
     let selected = adapter.map(|adapter| adapter.preview().appearance().mode().to_owned());
-    let mut controls = WindUiElement::row().spacing(6);
+    let mut controls = WindUiElement::row().spacing(SPACE_SM);
     for (key, mode) in [
         ("mode.system", "system"),
         ("mode.light", "light"),
@@ -2614,20 +2607,20 @@ fn candidate_layout_orientation_card(
         }
     };
     let active = WindUiElement::col()
-        .padding(10)
-        .corner(9.0)
+        .padding(SPACE_MD)
+        .corner(RADIUS_LG)
         .bg_role(WindUiRole::Accent)
-        .spacing(2)
+        .spacing(SPACE_2XS)
         .width(122)
         .child(
             WindUiElement::label(label.clone())
-                .font_size(13.5)
-                .font_weight(600)
+                .font_size(TEXT_SM)
+                .font_weight(WEIGHT_SEMIBOLD)
                 .fg_role(WindUiRole::OnAccent),
         )
         .child(
             WindUiElement::label(description.clone())
-                .font_size(11.0)
+                .font_size(TEXT_XS)
                 .fg_role(WindUiRole::OnAccent)
                 .width_match(),
         )
@@ -2657,21 +2650,21 @@ fn candidate_layout_orientation_card(
                 ctx.toast_err(error);
             }
         })
-        .padding(10)
-        .corner(9.0)
+        .padding(SPACE_MD)
+        .corner(RADIUS_LG)
         .border_role(WindUiRole::Border, 1)
         .bg_role(WindUiRole::SurfaceAlt)
-        .spacing(2)
+        .spacing(SPACE_2XS)
         .width(122)
         .child(
             WindUiElement::label(label)
-                .font_size(13.5)
-                .font_weight(600)
+                .font_size(TEXT_SM)
+                .font_weight(WEIGHT_SEMIBOLD)
                 .fg_role(WindUiRole::Text),
         )
         .child(
             WindUiElement::label(description)
-                .font_size(11.0)
+                .font_size(TEXT_XS)
                 .fg_role(WindUiRole::TextMuted)
                 .width_match(),
         )
@@ -2855,11 +2848,15 @@ fn windui_settings_control_group(
 ) -> WindUiElement {
     WindUiElement::col()
         .width_match()
-        .spacing(4)
-        .child(WindUiElement::label(label).font_size(14.0).font_weight(600))
+        .spacing(SPACE_XS)
+        .child(
+            WindUiElement::label(label)
+                .font_size(TEXT_SM)
+                .font_weight(WEIGHT_SEMIBOLD),
+        )
         .child(
             WindUiElement::label(description)
-                .font_size(12.5)
+                .font_size(TEXT_XS)
                 .fg_role(WindUiRole::TextMuted),
         )
         .child(controls)
@@ -2875,7 +2872,7 @@ fn windui_config_core_candidate_layout_controls(
         candidate_layout_mode(&adapter.preview()).unwrap_or(CandidateLayoutMode::Automatic)
     });
     let page_size = adapter.map(|adapter| adapter.preview().candidate().page_size());
-    let mut modes = WindUiElement::row().spacing(4);
+    let mut modes = WindUiElement::row().spacing(SPACE_XS);
     for layout_mode in [
         CandidateLayoutMode::Automatic,
         CandidateLayoutMode::Stacked,
@@ -2893,7 +2890,7 @@ fn windui_config_core_candidate_layout_controls(
     }
 
     let scroll_directions = WindUiElement::row()
-        .spacing(4)
+        .spacing(SPACE_XS)
         .child(candidate_scroll_direction_button(
             ScrollDirection::Horizontal,
             mode,
@@ -2912,7 +2909,7 @@ fn windui_config_core_candidate_layout_controls(
         ));
 
     let vertical_text_columns = WindUiElement::row()
-        .spacing(4)
+        .spacing(SPACE_XS)
         .child(candidate_vertical_text_column_button(
             VerticalTextColumnDirection::RightToLeft,
             mode,
@@ -2930,7 +2927,7 @@ fn windui_config_core_candidate_layout_controls(
             &locale,
         ));
 
-    let mut page_sizes = WindUiElement::row().spacing(4);
+    let mut page_sizes = WindUiElement::row().spacing(SPACE_XS);
     // Pinyin, shuangpin and the tables page 3 to 10 candidates.
     for value in 3..=9 {
         page_sizes = page_sizes.child(config_core_candidate_page_size_button(
@@ -2940,7 +2937,7 @@ fn windui_config_core_candidate_layout_controls(
 
     WindUiElement::col()
         .width_match()
-        .spacing(14)
+        .spacing(SPACE_MD)
         .child(windui_settings_section_title(
             &locale.text("settings.candidate.section"),
         ))
@@ -2973,7 +2970,7 @@ fn windui_config_core_candidate_layout_controls(
                 )),
         )
         .child(
-            WindUiElement::row().spacing(8).child(
+            WindUiElement::row().spacing(SPACE_SM).child(
                 WindUiElement::button(locale.text("settings.candidate.reset"))
                     .outline_soft()
                     .on_click({
@@ -2988,7 +2985,7 @@ fn windui_config_core_candidate_layout_controls(
         )
         .child(
             WindUiElement::label_signal(status)
-                .font_size(12.5)
+                .font_size(TEXT_XS)
                 .fg_role(WindUiRole::TextMuted),
         )
 }
