@@ -32,11 +32,11 @@ preedit_mode = "inline"
 
 [candidate.geometry]
 # 以下尺寸均为 DIP，会随显示器 DPI 自动缩放。
-padding_x_dip = 10.0
-padding_y_dip = 6.0
+padding_x_dip = 8.0
+padding_y_dip = 4.0
 item_padding_x_dip = 8.0
 item_padding_y_dip = 4.0
-row_gap_dip = 1.0
+row_gap_dip = 2.0
 column_gap_dip = 12.0
 border_width_dip = 1.0
 corner_radius_dip = 12.0

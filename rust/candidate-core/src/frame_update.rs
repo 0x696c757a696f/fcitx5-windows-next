@@ -585,8 +585,10 @@ pub fn frame_update(
             .take(assembly.item_count)
             .collect(),
         preedit_utf8,
-        selection_inflate_x: config.item_padding_x_dip * scale * 0.65,
-        selection_inflate_y: config.item_padding_y_dip * scale * 0.55,
+        // Half the item padding keeps the selection edge on the 4 DIP grid
+        // for the stock 8/4 item padding.
+        selection_inflate_x: config.item_padding_x_dip * scale * 0.5,
+        selection_inflate_y: config.item_padding_y_dip * scale * 0.5,
         horizontal,
         candidate_top: if preedit_panel_height > 0.0 {
             preedit_panel_height + config.row_gap_dip * scale

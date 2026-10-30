@@ -18,6 +18,7 @@ use windui::prelude::{
     Truncate as WindUiTruncate,
 };
 
+use super::design::{SPACE_MD, SPACE_SM, SPACE_XL, TEXT_2XL, TEXT_SM, TEXT_XS, WEIGHT_SEMIBOLD};
 use super::fcitx_config::{
     engine_get, engine_set, parse_addons, parse_config, parse_input_methods, AddonEntry,
     ConfigOption, InputMethodEntry, OptionKind, Tree, ADDONS_URI, INPUT_METHODS_URI,
@@ -613,7 +614,7 @@ impl FcitxConfigPages {
         let header = WindUiElement::row()
             .width_match()
             .cross(WindUiAlign::Center)
-            .spacing(10)
+            .spacing(SPACE_SM)
             .child(
                 WindUiElement::button(locale.text("settings.fcitx.back"))
                     .small()
@@ -623,8 +624,8 @@ impl FcitxConfigPages {
             )
             .child(
                 WindUiElement::label_signal(title)
-                    .font_size(22.0)
-                    .font_weight(700)
+                    .font_size(TEXT_2XL)
+                    .font_weight(WEIGHT_SEMIBOLD)
                     .fg_role(WindUiRole::Text)
                     .weight(1.0)
                     .max_lines(1)
@@ -650,16 +651,16 @@ impl FcitxConfigPages {
         let status = WindUiElement::row()
             .width_match()
             .cross(WindUiAlign::Center)
-            .spacing(10)
+            .spacing(SPACE_SM)
             .child(
                 WindUiElement::label(loading_text)
-                    .font_size(12.5)
+                    .font_size(TEXT_XS)
                     .fg_role(WindUiRole::TextMuted)
                     .visible_when(move || self.loading.get()),
             )
             .child(
                 WindUiElement::label_signal(self.status)
-                    .font_size(12.5)
+                    .font_size(TEXT_XS)
                     .fg_role(WindUiRole::TextMuted)
                     .weight(1.0)
                     .visible_when(move || !self.loading.get()),
@@ -682,8 +683,8 @@ impl FcitxConfigPages {
         .weight(1.0);
         WindUiElement::col()
             .fill()
-            .padding(24)
-            .spacing(12)
+            .padding(SPACE_XL)
+            .spacing(SPACE_MD)
             .child(header)
             .child(status)
             .child(list)
@@ -698,8 +699,8 @@ impl FcitxConfigPages {
                     .padding_edges(WindUiInsets::new(12 + indent / 2, 18, 12, 6))
                     .child(
                         WindUiElement::label(row.label.clone())
-                            .font_size(14.0)
-                            .font_weight(700)
+                            .font_size(TEXT_SM)
+                            .font_weight(WEIGHT_SEMIBOLD)
                             .fg_role(WindUiRole::Text),
                     );
             }
@@ -711,7 +712,7 @@ impl FcitxConfigPages {
                     .on_click(move |_| self.open_sub(uri.clone(), title.clone()))
             }
             RowKind::Unsupported => WindUiElement::label(locale.text("settings.fcitx.unsupported"))
-                .font_size(12.0)
+                .font_size(TEXT_XS)
                 .fg_role(WindUiRole::TextMuted),
             RowKind::Edit {
                 binding,
@@ -742,7 +743,7 @@ impl FcitxConfigPages {
                 let reset_row = row.clone();
                 WindUiElement::row()
                     .cross(WindUiAlign::Center)
-                    .spacing(6)
+                    .spacing(SPACE_SM)
                     .child(editor)
                     .child(
                         WindUiElement::button("\u{21BA}")
