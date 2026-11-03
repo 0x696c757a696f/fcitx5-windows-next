@@ -159,7 +159,7 @@
     },
     {
       "name": "rust-crate-encoding-rs",
-      "version": "0.8.42",
+      "version": "0.8.44",
       "source": "https://github.com/hsivonen/encoding_rs",
       "license": "(Apache-2.0 OR MIT) AND BSD-3-Clause"
     },
@@ -436,7 +436,7 @@
     },
     {
       "name": "rust-crate-crc32fast",
-      "version": "1.5.3",
+      "version": "1.5.4",
       "source": "https://github.com/srijs/rust-crc32fast",
       "license": "MIT OR Apache-2.0"
     },
@@ -484,7 +484,7 @@
     },
     {
       "name": "rust-crate-js-sys",
-      "version": "0.3.106",
+      "version": "0.3.107",
       "source": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys",
       "license": "MIT OR Apache-2.0"
     },
@@ -496,7 +496,7 @@
     },
     {
       "name": "rust-crate-log",
-      "version": "0.4.34",
+      "version": "0.4.35",
       "source": "https://github.com/rust-lang/log",
       "license": "MIT OR Apache-2.0"
     },
@@ -755,37 +755,37 @@
     },
     {
       "name": "rust-crate-wasm-bindgen",
-      "version": "0.2.129",
+      "version": "0.2.130",
       "source": "https://github.com/wasm-bindgen/wasm-bindgen",
       "license": "MIT OR Apache-2.0"
     },
     {
       "name": "rust-crate-wasm-bindgen-futures",
-      "version": "0.4.79",
+      "version": "0.4.80",
       "source": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/futures",
       "license": "MIT OR Apache-2.0"
     },
     {
       "name": "rust-crate-wasm-bindgen-macro",
-      "version": "0.2.129",
+      "version": "0.2.130",
       "source": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro",
       "license": "MIT OR Apache-2.0"
     },
     {
       "name": "rust-crate-wasm-bindgen-macro-support",
-      "version": "0.2.129",
+      "version": "0.2.130",
       "source": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro-support",
       "license": "MIT OR Apache-2.0"
     },
     {
       "name": "rust-crate-wasm-bindgen-shared",
-      "version": "0.2.129",
+      "version": "0.2.130",
       "source": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/shared",
       "license": "MIT OR Apache-2.0"
     },
     {
       "name": "rust-crate-web-sys",
-      "version": "0.3.106",
+      "version": "0.3.107",
       "source": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/web-sys",
       "license": "MIT OR Apache-2.0"
     },
@@ -1144,7 +1144,7 @@
     },
     {
       "name": "rust-crate-unicode-width",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "source": "https://github.com/unicode-rs/unicode-width",
       "license": "MIT OR Apache-2.0"
     },
