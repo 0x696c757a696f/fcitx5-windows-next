@@ -8089,6 +8089,26 @@ mod tests {
         assert_eq!(tree.get(sid).unwrap().measured.h, 40);
     }
 
+    /// `list_signal` 默认撑满；`height_wrap` + `max_height` 后行少时按内容取高，
+    /// 行多时封顶（行少的列表下方不留空白）。
+    #[test]
+    fn list_signal_height_wrap_follows_rows_up_to_max_height() {
+        let measure = |rows: usize| {
+            let data = crate::signal::signal((0..rows).collect::<Vec<usize>>());
+            let list =
+                Element::list_signal(data, |i| *i, |_| Element::leaf().width_match().height(48))
+                    .width(100)
+                    .height_wrap()
+                    .max_height(240);
+            let root = Element::col().width(200).height(600).child(list);
+            let tree = layout(root, 200, 600);
+            let id = tree.get(tree.root.unwrap()).unwrap().children[0];
+            tree.get(id).unwrap().measured.h
+        };
+        assert_eq!(measure(3), 144);
+        assert_eq!(measure(8), 240);
+    }
+
     /// 行高直接改变文字节点的占位高度（`NullTextEngine` 如实反映倍数）。
     #[test]
     fn line_height_scales_text_node_height() {

@@ -233,7 +233,7 @@ impl ToastHost {
     /// （过期条已由 `retain_live_toasts` 在建 canvas 前清除）。命中矩形逐帧重算，
     /// 写回每条自己的 `hit` 字段供点击测试使用。
     pub(super) fn paint(&mut self, canvas: &mut dyn Canvas, theme: &Theme, ws: Size, now_ms: u64) {
-        let mut y = TOAST_TOP_MARGIN;
+        let mut y = theme.toast.top_inset() + TOAST_TOP_MARGIN;
         for toast in &mut self.items {
             let alpha = toast.alpha(now_ms);
             let pal = &theme.palette;

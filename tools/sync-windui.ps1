@@ -134,7 +134,10 @@ try {
     # UI Automation provider for screen readers (the product-specific delta).
     (Join-Path $patchDir 'windui-uia-accessibility.patch'),
     # Manual UIA smoke test binary for the provider above.
-    (Join-Path $patchDir 'windui-uia-smoke-example.patch')
+    (Join-Path $patchDir 'windui-uia-smoke-example.patch'),
+    # Toast top inset below a custom title bar, and Element::height_wrap for
+    # lists that should be as tall as their rows (Settings layout fixes).
+    (Join-Path $patchDir 'windui-toast-inset-and-wrap-height.patch')
   )
   foreach ($patch in $patches) {
     if (-not (Test-Path -LiteralPath $patch -PathType Leaf)) {
