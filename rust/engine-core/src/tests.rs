@@ -1566,3 +1566,33 @@ fn scroll_label_offset_horizontal_uses_row_column() {
     // Same row: row_selection_column(4, 1, 5, 20) -> 1%5=1.
     assert_eq!(scroll_label_offset(false, 4, 1, 5, 20), Some(1));
 }
+
+#[test]
+fn shift_tap_toggles_only_when_configured() {
+    assert_eq!(
+        classify_input_method_switch(
+            false,
+            true,
+            false,
+            KEY_SYM_SHIFT_L,
+            Some("Shift"),
+            Some(NEXT)
+        ),
+        Some(ImSwitchAction::Toggle)
+    );
+    assert_eq!(
+        classify_input_method_switch(true, true, false, KEY_SYM_SHIFT_L, Some("Shift"), None),
+        None
+    );
+    assert_eq!(
+        classify_input_method_switch(
+            false,
+            true,
+            false,
+            KEY_SYM_SHIFT_L,
+            Some("Ctrl+Space"),
+            Some("Ctrl+Shift")
+        ),
+        None
+    );
+}

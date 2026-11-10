@@ -403,6 +403,7 @@ pub enum ImSwitchAction {
 ///     if (*hotkey == "Ctrl+Shift") return ctrl && shift && !alt && keySym == FcitxKey_Shift_L;
 ///     if (*hotkey == "Ctrl+Shift+Space") return ctrl && shift && !alt && keySym == FcitxKey_space;
 ///     if (*hotkey == "Alt+Shift") return alt && shift && !ctrl && keySym == FcitxKey_Shift_L;
+///     if (*hotkey == "Shift") return shift && !ctrl && !alt && keySym == FcitxKey_Shift_L;
 ///     return false;
 ///   };
 ///   if (matches(engineConfig.hotkeyToggle)) { toggle... }
@@ -433,6 +434,9 @@ pub fn classify_input_method_switch(
             "Ctrl+Shift" => ctrl && shift && !alt && key_sym == KEY_SYM_SHIFT_L,
             "Ctrl+Shift+Space" => ctrl && shift && !alt && key_sym == KEY_SYM_SPACE,
             "Alt+Shift" => alt && shift && !ctrl && key_sym == KEY_SYM_SHIFT_L,
+            // A Shift tap: the TSF sends Shift alone only when it was released with no other
+            // key pressed in between, so typing capitals never matches.
+            "Shift" => shift && !ctrl && !alt && key_sym == KEY_SYM_SHIFT_L,
             _ => false,
         }
     };

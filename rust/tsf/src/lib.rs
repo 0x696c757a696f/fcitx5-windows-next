@@ -2418,7 +2418,7 @@ fn is_modifier_key(virtual_key: u16) -> bool {
 }
 
 /// The modifier-only switch hotkey being held, as the flags the engine
-/// matches it with ("Ctrl+Shift" or "Alt+Shift" on Shift_L).
+/// matches it with ("Shift", "Ctrl+Shift" or "Alt+Shift" on Shift_L).
 fn modifier_chord_flags(key_flags: u32) -> Option<u32> {
     let held = key_flags
         & (protocol::KEY_FLAG_CONTROL
@@ -2427,7 +2427,55 @@ fn modifier_chord_flags(key_flags: u32) -> Option<u32> {
             | protocol::KEY_FLAG_SUPER);
     let ctrl_shift = protocol::KEY_FLAG_CONTROL | protocol::KEY_FLAG_SHIFT;
     let alt_shift = protocol::KEY_FLAG_ALT | protocol::KEY_FLAG_SHIFT;
-    (held == ctrl_shift || held == alt_shift).then_some(held)
+    (held == protocol::KEY_FLAG_SHIFT || held == ctrl_shift || held == alt_shift).then_some(held)
+}
+
+/// The flag of the modifier key `virtual_key` itself. The keyboard state read
+/// while its own key-down is being tested may not include it yet.
+fn modifier_key_flag(virtual_key: u16) -> u32 {
+    if virtual_key == VK_SHIFT.0 {
+        protocol::KEY_FLAG_SHIFT
+    } else if virtual_key == VK_CONTROL.0 {
+        protocol::KEY_FLAG_CONTROL
+    } else if virtual_key == VK_MENU.0 {
+        protocol::KEY_FLAG_ALT
+    } else {
+        0
+    }
+}
+
+/// A Shift held longer than this is not a tap: the user held it for a
+/// Shift+click or changed their mind, so releasing it switches nothing.
+const SHIFT_TAP_MAX_MILLISECONDS: u64 = 500;
+
+/// A held switch chord and when it began.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ModifierChord {
+    flags: u32,
+    started: u64,
+}
+
+impl ModifierChord {
+    /// The chord after a modifier key-down at `now`. Auto-repeat of the same
+    /// chord keeps its start time, so a long press is never mistaken for a tap.
+    fn pressed(previous: Option<Self>, key_flags: u32, now: u64) -> Option<Self> {
+        let flags = modifier_chord_flags(key_flags)?;
+        Some(match previous {
+            Some(chord) if chord.flags == flags => chord,
+            _ => Self {
+                flags,
+                started: now,
+            },
+        })
+    }
+
+    /// The flags to send on release at `now`, or `None` when a lone Shift
+    /// was held too long to count as a tap.
+    fn released(self, now: u64) -> Option<u32> {
+        (self.flags != protocol::KEY_FLAG_SHIFT
+            || now.saturating_sub(self.started) <= SHIFT_TAP_MAX_MILLISECONDS)
+            .then_some(self.flags)
+    }
 }
 
 #[derive(Default)]
@@ -2445,7 +2493,7 @@ struct TsfRuntimeState {
     candidate_ui_element: Option<ITfCandidateListUIElement>,
     composition: Option<ITfComposition>,
     composition_context: Option<ITfContext>,
-    modifier_chord: Option<u32>,
+    modifier_chord: Option<ModifierChord>,
     engine_client: Option<EngineClient>,
     pending_key: Option<CachedKeyResult>,
     candidate_context_id: Option<u64>,
@@ -3795,7 +3843,10 @@ impl Fcitx5TsfService {
     /// when its modifier is released with no other key pressed in between,
     /// so Ctrl+Shift+T and similar shortcuts keep working.
     fn finish_modifier_chord(&self, context: &ITfContext) {
-        let Some(flags) = self.runtime.borrow_mut().modifier_chord.take() else {
+        let Some(chord) = self.runtime.borrow_mut().modifier_chord.take() else {
+            return;
+        };
+        let Some(flags) = chord.released(common::engine_client::tick_milliseconds()) else {
             return;
         };
         if Fcitx5TsfService::context_has_sensitive_input_scope(context) {
@@ -3946,8 +3997,14 @@ impl ITfKeyEventSink_Impl for Fcitx5TsfService_Impl {
             let context = context.ok()?;
             if is_modifier_key(wparam.0 as u16) {
                 // Modifiers go to the host; a switch chord is sent on release.
-                self.runtime.borrow_mut().modifier_chord =
-                    modifier_chord_flags(Fcitx5TsfService::keyboard_state_flags(false));
+                let key_flags = Fcitx5TsfService::keyboard_state_flags(false)
+                    | modifier_key_flag(wparam.0 as u16);
+                let mut runtime = self.runtime.borrow_mut();
+                runtime.modifier_chord = ModifierChord::pressed(
+                    runtime.modifier_chord,
+                    key_flags,
+                    common::engine_client::tick_milliseconds(),
+                );
                 return Ok(BOOL(0));
             }
             self.runtime.borrow_mut().modifier_chord = None;
@@ -4607,7 +4664,7 @@ mod tests {
             modifier_chord_flags(ctrl | shift | protocol::KEY_FLAG_RELEASE),
             Some(ctrl | shift)
         );
-        assert_eq!(modifier_chord_flags(shift), None);
+        assert_eq!(modifier_chord_flags(shift), Some(shift));
         assert_eq!(modifier_chord_flags(ctrl), None);
         assert_eq!(modifier_chord_flags(ctrl | alt | shift), None);
         assert_eq!(
@@ -4616,7 +4673,33 @@ mod tests {
         );
         for key in [VK_SHIFT.0, VK_CONTROL.0, VK_MENU.0] {
             assert!(is_modifier_key(key));
+            assert_ne!(modifier_key_flag(key), 0);
         }
+        assert_eq!(modifier_key_flag(b'A' as u16), 0);
+    }
+
+    #[test]
+    fn shift_counts_as_a_tap_only_when_released_quickly() {
+        let shift = protocol::KEY_FLAG_SHIFT;
+        let ctrl_shift = protocol::KEY_FLAG_CONTROL | shift;
+        let tap = ModifierChord::pressed(None, shift, 1_000).expect("shift is a chord");
+        assert_eq!(
+            tap.released(1_000 + SHIFT_TAP_MAX_MILLISECONDS),
+            Some(shift)
+        );
+        assert_eq!(tap.released(1_001 + SHIFT_TAP_MAX_MILLISECONDS), None);
+        // Auto-repeat keeps the first press time.
+        let repeated = ModifierChord::pressed(Some(tap), shift, 1_400).expect("still held");
+        assert_eq!(repeated.started, 1_000);
+        assert_eq!(repeated.released(1_600), None);
+        // Adding Ctrl starts a new chord, which is not limited in time.
+        let chord = ModifierChord::pressed(Some(tap), ctrl_shift, 1_200).expect("ctrl+shift");
+        assert_eq!(chord.started, 1_200);
+        assert_eq!(chord.released(9_000), Some(ctrl_shift));
+        assert_eq!(
+            ModifierChord::pressed(Some(tap), protocol::KEY_FLAG_CONTROL, 1_200),
+            None
+        );
     }
 
     #[test]
