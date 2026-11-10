@@ -1,0 +1,105 @@
+diff --git a/src/app/toast.rs b/src/app/toast.rs
+index 4548924..1508a9f 100644
+--- a/src/app/toast.rs
++++ b/src/app/toast.rs
+@@ -233,7 +233,7 @@ impl ToastHost {
+     /// （过期条已由 `retain_live_toasts` 在建 canvas 前清除）。命中矩形逐帧重算，
+     /// 写回每条自己的 `hit` 字段供点击测试使用。
+     pub(super) fn paint(&mut self, canvas: &mut dyn Canvas, theme: &Theme, ws: Size, now_ms: u64) {
+-        let mut y = TOAST_TOP_MARGIN;
++        let mut y = theme.toast.top_inset() + TOAST_TOP_MARGIN;
+         for toast in &mut self.items {
+             let alpha = toast.alpha(now_ms);
+             let pal = &theme.palette;
+diff --git a/src/core.rs b/src/core.rs
+index b79c638..9f499f0 100644
+--- a/src/core.rs
++++ b/src/core.rs
+@@ -8089,6 +8089,26 @@ mod tests {
+         assert_eq!(tree.get(sid).unwrap().measured.h, 40);
+     }
+ 
++    /// `list_signal` 默认撑满；`height_wrap` + `max_height` 后行少时按内容取高，
++    /// 行多时封顶（行少的列表下方不留空白）。
++    #[test]
++    fn list_signal_height_wrap_follows_rows_up_to_max_height() {
++        let measure = |rows: usize| {
++            let data = crate::signal::signal((0..rows).collect::<Vec<usize>>());
++            let list =
++                Element::list_signal(data, |i| *i, |_| Element::leaf().width_match().height(48))
++                    .width(100)
++                    .height_wrap()
++                    .max_height(240);
++            let root = Element::col().width(200).height(600).child(list);
++            let tree = layout(root, 200, 600);
++            let id = tree.get(tree.root.unwrap()).unwrap().children[0];
++            tree.get(id).unwrap().measured.h
++        };
++        assert_eq!(measure(3), 144);
++        assert_eq!(measure(8), 240);
++    }
++
+     /// 行高直接改变文字节点的占位高度（`NullTextEngine` 如实反映倍数）。
+     #[test]
+     fn line_height_scales_text_node_height() {
+diff --git a/src/theme.rs b/src/theme.rs
+index 65813ec..d3819f9 100644
+--- a/src/theme.rs
++++ b/src/theme.rs
+@@ -1513,6 +1513,9 @@ pub struct ToastTheme {
+     pub shadow_dy: Option<f32>,
+     pub shadow_blur: Option<f32>,
+     pub shadow_color: Option<Color>,
++    /// 浮层顶部让出的高度（逻辑像素）。应用自绘标题栏时设为标题栏高度，
++    /// 提示就从标题栏下方开始堆叠，不会盖住标题和窗口按钮。`None` 为 0。
++    pub top_inset: Option<i32>,
+ }
+ 
+ impl ToastTheme {
+@@ -1555,6 +1558,10 @@ impl ToastTheme {
+     pub fn corner(&self, m: &Metrics) -> f32 {
+         self.corner.unwrap_or(m.corner_md)
+     }
++    /// 浮层顶部让出的高度（逻辑像素），负值按 0 处理。
++    pub fn top_inset(&self) -> i32 {
++        self.top_inset.unwrap_or(0).max(0)
++    }
+ }
+ 
+ /// 完整主题：base（palette/metrics）+ 各控件覆盖层。
+@@ -1634,6 +1641,17 @@ pub fn set_current(theme: Rc<Theme>) {
+ 
+ #[cfg(test)]
+ mod tests {
++
++    #[test]
++    fn toast_top_inset_defaults_to_zero_and_ignores_negative_values() {
++        let mut toast = super::ToastTheme::default();
++        assert_eq!(toast.top_inset(), 0);
++        toast.top_inset = Some(48);
++        assert_eq!(toast.top_inset(), 48);
++        toast.top_inset = Some(-5);
++        assert_eq!(toast.top_inset(), 0);
++    }
++
+     /// `font_family` 是 `Theme` 唯一的顶层标量：TOML 要求标量写在各 `[表]` 之前，字段若排在
+     /// 表后面，`to_toml` 会直接报错。往返一次钉住两头。
+     #[test]
+diff --git a/src/ui/mod.rs b/src/ui/mod.rs
+index cbc8ecd..9fbf9b9 100644
+--- a/src/ui/mod.rs
++++ b/src/ui/mod.rs
+@@ -4828,6 +4828,13 @@ impl Element {
+         self.height = Dimension::Match;
+         self
+     }
++    /// 高度按内容自适应（`Wrap`）。用来撤销构建器预设的撑满，例如
++    /// [`list_signal`](Self::list_signal) 默认 `fill()`：改成按内容取高再配
++    /// [`max_height`](Self::max_height)，行少时列表收拢，行多时封顶滚动。
++    pub fn height_wrap(mut self) -> Self {
++        self.height = Dimension::Wrap;
++        self
++    }
+     /// 宽高都撑满父容器。
+     pub fn fill(self) -> Self {
+         self.width_match().height_match()

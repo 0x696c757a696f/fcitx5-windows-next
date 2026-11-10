@@ -4828,6 +4828,13 @@ impl Element {
         self.height = Dimension::Match;
         self
     }
+    /// 高度按内容自适应（`Wrap`）。用来撤销构建器预设的撑满，例如
+    /// [`list_signal`](Self::list_signal) 默认 `fill()`：改成按内容取高再配
+    /// [`max_height`](Self::max_height)，行少时列表收拢，行多时封顶滚动。
+    pub fn height_wrap(mut self) -> Self {
+        self.height = Dimension::Wrap;
+        self
+    }
     /// 宽高都撑满父容器。
     pub fn fill(self) -> Self {
         self.width_match().height_match()

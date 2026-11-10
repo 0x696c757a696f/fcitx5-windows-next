@@ -1513,6 +1513,9 @@ pub struct ToastTheme {
     pub shadow_dy: Option<f32>,
     pub shadow_blur: Option<f32>,
     pub shadow_color: Option<Color>,
+    /// 浮层顶部让出的高度（逻辑像素）。应用自绘标题栏时设为标题栏高度，
+    /// 提示就从标题栏下方开始堆叠，不会盖住标题和窗口按钮。`None` 为 0。
+    pub top_inset: Option<i32>,
 }
 
 impl ToastTheme {
@@ -1554,6 +1557,10 @@ impl ToastTheme {
     }
     pub fn corner(&self, m: &Metrics) -> f32 {
         self.corner.unwrap_or(m.corner_md)
+    }
+    /// 浮层顶部让出的高度（逻辑像素），负值按 0 处理。
+    pub fn top_inset(&self) -> i32 {
+        self.top_inset.unwrap_or(0).max(0)
     }
 }
 
@@ -1634,6 +1641,17 @@ pub fn set_current(theme: Rc<Theme>) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn toast_top_inset_defaults_to_zero_and_ignores_negative_values() {
+        let mut toast = super::ToastTheme::default();
+        assert_eq!(toast.top_inset(), 0);
+        toast.top_inset = Some(48);
+        assert_eq!(toast.top_inset(), 48);
+        toast.top_inset = Some(-5);
+        assert_eq!(toast.top_inset(), 0);
+    }
+
     /// `font_family` 是 `Theme` 唯一的顶层标量：TOML 要求标量写在各 `[表]` 之前，字段若排在
     /// 表后面，`to_toml` 会直接报错。往返一次钉住两头。
     #[test]

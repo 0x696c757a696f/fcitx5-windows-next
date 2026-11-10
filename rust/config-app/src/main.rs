@@ -59,6 +59,9 @@ fn windui_settings_shell_theme(dark: bool) -> WindUiTheme {
     theme.form.desc_size = Some(TEXT_XS);
     theme.form.row_height = Some(FORM_ROW_HEIGHT);
     theme.form.row_pad_y = Some(0);
+    // Settings draws its own title bar, so toasts start below it instead of
+    // covering the title and the window buttons.
+    theme.toast.top_inset = Some(TITLEBAR_HEIGHT);
     theme
 }
 
@@ -1554,7 +1557,7 @@ fn windui_input_method_row(
     };
     WindUiElement::row()
         .width_match()
-        .height(48)
+        .height(INPUT_METHOD_ROW_HEIGHT)
         .cross(WindUiAlign::Center)
         .spacing(SPACE_SM)
         .padding_xy(SPACE_MD, SPACE_XS)
@@ -1597,6 +1600,11 @@ fn windui_input_method_row(
         )
 }
 
+/// Height of one row in the enabled input method list.
+const INPUT_METHOD_ROW_HEIGHT: i32 = 48;
+/// Rows the enabled input method list shows before it scrolls.
+const INPUT_METHOD_LIST_MAX_ROWS: i32 = 5;
+
 /// The input method list and switch hotkeys, written to config.toml through
 /// Config Core as soon as they change.
 fn windui_input_method_settings(
@@ -1626,7 +1634,10 @@ fn windui_input_method_settings(
         move |row| windui_input_method_row(row, draft, fcitx_pages, row_locale.clone()),
     )
     .width_match()
-    .height(208);
+    // As tall as its rows, so two or three input methods leave no empty
+    // band above the add row; past five rows the list scrolls.
+    .height_wrap()
+    .max_height(INPUT_METHOD_LIST_MAX_ROWS * INPUT_METHOD_ROW_HEIGHT);
 
     let addable_choices = choices.clone();
     let addable = draft.map(move |draft| addable_input_methods(draft, &addable_choices));
@@ -3697,6 +3708,16 @@ fn run_windui_settings_window(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn toasts_start_below_the_custom_title_bar() {
+        for dark in [false, true] {
+            assert_eq!(
+                windui_settings_shell_theme(dark).toast.top_inset(),
+                TITLEBAR_HEIGHT
+            );
+        }
+    }
 
     struct TestDirectory(std::path::PathBuf);
 
