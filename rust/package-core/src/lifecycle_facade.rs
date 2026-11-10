@@ -10,7 +10,7 @@ use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use crate::{
     activate_installed_version_for_rollback, activate_staged_payload_tree, parse_manifest,
@@ -174,17 +174,27 @@ impl RepositoryTransport for DownloaderRepositoryTransport {
                 "repository download destination already exists",
             ));
         }
-        let status = Command::new(&self.downloader_path)
+        let mut command = Command::new(&self.downloader_path);
+        command
             .arg("--download-signed-metadata")
             .arg(url)
             .arg(&destination)
-            .status()
-            .map_err(|error| {
-                PackageFacadeError::new(
-                    "network_error",
-                    format!("repository downloader could not start: {error}"),
-                )
-            })?;
+            .stdin(Stdio::null())
+            .stdout(Stdio::null());
+        // The downloader is a console program. Control runs without a console, so without
+        // this flag Windows would open a new console window for every repository refresh.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let status = command.status().map_err(|error| {
+            PackageFacadeError::new(
+                "network_error",
+                format!("repository downloader could not start: {error}"),
+            )
+        })?;
         if !status.success() {
             let _ = fs::remove_file(&destination);
             return Err(PackageFacadeError::new(

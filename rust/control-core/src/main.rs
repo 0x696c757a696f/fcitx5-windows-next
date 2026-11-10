@@ -350,6 +350,14 @@ fn launcher_command(command: LauncherCommand) -> Result<(), Failure> {
 /// The launcher's `LauncherState::UserStopped`: the user stopped the input service.
 const LAUNCHER_STATE_USER_STOPPED: u32 = 1;
 
+/// How long Control waits for the launcher to accept and answer one command. The launcher
+/// serves its pipe from a single loop that stops the engine synchronously: a stop waits up to
+/// two seconds for the engine to exit and one more second after killing it, and a status query
+/// asks the engine itself. A real engine (Rime saving its user data, for example) routinely
+/// needs more than one second to exit, so a shorter wait reports a busy launcher as missing.
+/// A launcher that is not running at all still fails at once, because its pipe does not exist.
+const LAUNCHER_TIMEOUT: Duration = Duration::from_secs(8);
+
 /// Whether the engine is running or may be started on demand, as opposed to unreachable or
 /// stopped by the user. Package and configuration changes restart only an engine in this state,
 /// so they never start an input service the user stopped.
@@ -371,7 +379,7 @@ fn launcher_transact(command: LauncherCommand) -> Result<LauncherResponse, Failu
             VerifiedPipeClient::connect_exact(
                 endpoint.as_os_str(),
                 expected_server,
-                Duration::from_secs(1),
+                LAUNCHER_TIMEOUT,
             )
         })
         .ok_or_else(|| Failure::launcher("launcher unavailable"))?;
@@ -388,8 +396,8 @@ fn launcher_transact(command: LauncherCommand) -> Result<LauncherResponse, Failu
         .ok_or_else(|| Failure::launcher("launcher request rejected"))?;
     let mut response = vec![0_u8; MAX_CONTROL_FRAME_SIZE];
     let response_len = client
-        .transact(&request, &mut response, Duration::from_secs(1))
-        .ok_or_else(|| Failure::launcher("launcher unavailable"))?;
+        .transact(&request, &mut response, LAUNCHER_TIMEOUT)
+        .ok_or_else(|| Failure::launcher("launcher did not respond"))?;
     let frame = decode_frame(&response[..response_len])
         .ok_or_else(|| Failure::launcher("launcher returned an invalid response"))?;
     let response = decode_launcher_response(&frame)
@@ -403,12 +411,34 @@ fn launcher_transact(command: LauncherCommand) -> Result<LauncherResponse, Failu
     Ok(response)
 }
 
+/// Stops the engine and starts it again. The launcher records the stop before it answers, so
+/// a stop that fails on the way back may still have taken effect: the engine is resumed and
+/// started regardless, and the first failure is reported only afterwards, so a failed restart
+/// never leaves the input service stopped.
+fn restart_engine() -> Result<(), Failure> {
+    restart_with(launcher_command)
+}
+
+fn restart_with(
+    mut send: impl FnMut(LauncherCommand) -> Result<(), Failure>,
+) -> Result<(), Failure> {
+    let stopped = send(LauncherCommand::UserStop);
+    let resumed = resume_with(send);
+    stopped.and(resumed)
+}
+
+/// Resumes and starts an engine stopped with `UserStop`. Both commands are sent even when
+/// the first fails; the first failure is returned.
+fn resume_with(
+    mut send: impl FnMut(LauncherCommand) -> Result<(), Failure>,
+) -> Result<(), Failure> {
+    let resumed = send(LauncherCommand::Resume);
+    let started = send(LauncherCommand::StartDemand);
+    resumed.and(started)
+}
+
 fn request_engine_reload() {
-    if engine_active()
-        && (launcher_command(LauncherCommand::UserStop).is_err()
-            || launcher_command(LauncherCommand::Resume).is_err()
-            || launcher_command(LauncherCommand::StartDemand).is_err())
-    {
+    if engine_active() && restart_engine().is_err() {
         eprintln!("warning: package change is saved; restart the input service to activate it");
     }
 }
@@ -419,13 +449,14 @@ fn request_engine_reload() {
 fn with_engine_stopped(change: impl FnOnce() -> Result<(), Failure>) -> Result<(), Failure> {
     let running = engine_active();
     if running {
-        launcher_command(LauncherCommand::UserStop)?;
+        if let Err(error) = launcher_command(LauncherCommand::UserStop) {
+            // The stop may have been applied before the answer was lost.
+            let _ = resume_with(launcher_command);
+            return Err(error);
+        }
     }
     let result = change();
-    if running
-        && (launcher_command(LauncherCommand::Resume).is_err()
-            || launcher_command(LauncherCommand::StartDemand).is_err())
-    {
+    if running && resume_with(launcher_command).is_err() {
         eprintln!("warning: restart the input service to finish the package change");
     }
     result
@@ -435,20 +466,16 @@ fn restart_engine_if_running() -> Result<(), Failure> {
     if !engine_active() {
         return Ok(());
     }
-    for command in [
-        LauncherCommand::UserStop,
-        LauncherCommand::Resume,
-        LauncherCommand::StartDemand,
-    ] {
-        launcher_command(command)?;
-    }
-    Ok(())
+    restart_engine()
 }
 
 fn run_engine_management(arguments: &[OsString]) -> Result<String, Failure> {
     let launcher_reachable = launcher_command(LauncherCommand::Status).is_ok();
     if launcher_reachable {
-        launcher_command(LauncherCommand::UserStop)?;
+        if let Err(error) = launcher_command(LauncherCommand::UserStop) {
+            let _ = resume_with(launcher_command);
+            return Err(error);
+        }
     }
     let executable = std::env::current_exe()
         .map_err(|_| Failure::launcher("engine unavailable"))?
@@ -652,15 +679,7 @@ fn run(data_root: PathBuf, command: Command) -> Result<(), Failure> {
                 .map_err(|error| error.to_string())?;
             restart_engine_if_running()?;
         }
-        Command::RestartEngine => {
-            for command in [
-                LauncherCommand::UserStop,
-                LauncherCommand::Resume,
-                LauncherCommand::StartDemand,
-            ] {
-                launcher_command(command)?;
-            }
-        }
+        Command::RestartEngine => restart_engine()?,
         Command::Shutdown => launcher_command(LauncherCommand::Shutdown)?,
         Command::PackagesRefresh(base_url) => refresh_packages(&data_root, base_url)?,
         Command::PackagesInstall(id) | Command::PackagesUpdate(id) => {
@@ -718,5 +737,69 @@ fn main() -> ExitCode {
             eprintln!("{}", error.message);
             ExitCode::from(error.code)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(
+        failing: LauncherCommand,
+        log: &mut Vec<LauncherCommand>,
+    ) -> impl FnMut(LauncherCommand) -> Result<(), Failure> + '_ {
+        move |command| {
+            log.push(command);
+            if command == failing {
+                Err(Failure::launcher(format!("{command:?} failed")))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn restart_sends_stop_resume_and_start() {
+        let mut log = Vec::new();
+        assert!(restart_with(record(LauncherCommand::Shutdown, &mut log)).is_ok());
+        assert_eq!(
+            log,
+            [
+                LauncherCommand::UserStop,
+                LauncherCommand::Resume,
+                LauncherCommand::StartDemand
+            ]
+        );
+    }
+
+    #[test]
+    fn restart_resumes_even_when_the_stop_answer_is_lost() {
+        let mut log = Vec::new();
+        let error = restart_with(record(LauncherCommand::UserStop, &mut log))
+            .expect_err("a failed stop is still reported");
+        assert_eq!(error.message, "UserStop failed");
+        assert_eq!(
+            log,
+            [
+                LauncherCommand::UserStop,
+                LauncherCommand::Resume,
+                LauncherCommand::StartDemand
+            ]
+        );
+    }
+
+    #[test]
+    fn resume_still_starts_when_resume_fails() {
+        let mut log = Vec::new();
+        let error = resume_with(record(LauncherCommand::Resume, &mut log))
+            .expect_err("a failed resume is reported");
+        assert_eq!(error.message, "Resume failed");
+        assert_eq!(log, [LauncherCommand::Resume, LauncherCommand::StartDemand]);
+    }
+
+    #[test]
+    fn launcher_wait_outlasts_a_synchronous_engine_stop() {
+        // The launcher waits 2 s for the engine to exit and 1 s more after killing it.
+        assert!(LAUNCHER_TIMEOUT > Duration::from_secs(3));
     }
 }
