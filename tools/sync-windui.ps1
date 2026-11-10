@@ -131,8 +131,6 @@ try {
   $patches = @(
     # Declares cfg(gpu_backend), normally declared by the build.rs we do not vendor.
     (Join-Path $patchDir 'windui-vendor-check-cfg.patch'),
-    # Copies packed NOTIFYICONDATAW fields before asserting (unaligned refs on x86).
-    (Join-Path $patchDir 'windui-tray-packed-field-tests.patch'),
     # UI Automation provider for screen readers (the product-specific delta).
     (Join-Path $patchDir 'windui-uia-accessibility.patch'),
     # Manual UIA smoke test binary for the provider above.
