@@ -1405,8 +1405,13 @@ fn windui_plugins_page(
 }
 
 /// Hotkeys the engine's switch classifier recognizes.
-const INPUT_METHOD_HOTKEYS: [&str; 4] =
-    ["Ctrl+Space", "Ctrl+Shift", "Ctrl+Shift+Space", "Alt+Shift"];
+const INPUT_METHOD_HOTKEYS: [&str; 5] = [
+    "Ctrl+Space",
+    "Ctrl+Shift",
+    "Ctrl+Shift+Space",
+    "Alt+Shift",
+    "Shift",
+];
 
 #[derive(Clone, Debug, PartialEq)]
 struct InputMethodDraft {
@@ -1720,11 +1725,13 @@ fn windui_input_method_settings(
             let result = apply_config_edits(adapter, |adapter| {
                 adapter
                     .set(ConfigEdit::HotkeyToggleInputMethod(
-                        INPUT_METHOD_HOTKEYS[hotkeys.0.min(3)].to_owned(),
+                        INPUT_METHOD_HOTKEYS[hotkeys.0.min(INPUT_METHOD_HOTKEYS.len() - 1)]
+                            .to_owned(),
                     ))
                     .and_then(|()| {
                         adapter.set(ConfigEdit::HotkeyNextInputMethod(
-                            INPUT_METHOD_HOTKEYS[hotkeys.1.min(3)].to_owned(),
+                            INPUT_METHOD_HOTKEYS[hotkeys.1.min(INPUT_METHOD_HOTKEYS.len() - 1)]
+                                .to_owned(),
                         ))
                     })
             });
